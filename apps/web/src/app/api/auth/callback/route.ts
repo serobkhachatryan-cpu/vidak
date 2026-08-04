@@ -37,8 +37,14 @@ export function resolveCallbackPublicOrigin(
 export async function POST(request: NextRequest) {
   try {
     const input = (await request.json()) as W3dsCallbackInput;
-    await getW3dsAuthService().completeOffer(input);
-    return NextResponse.json({ ok: true });
+    const service = getW3dsAuthService();
+    const offerId = await service.completeOffer(input);
+    const session = await service.getOfferSessionForCookie(offerId);
+
+    // The eID Wallet protocol consumes an authentication token from the
+    // callback response after it posts the signed session. Do not return the
+    // refresh credential: the wallet only needs the short-lived access token.
+    return NextResponse.json({ token: session.tokens.accessToken });
   } catch (error) {
     if (error instanceof W3dsAuthError) {
       return NextResponse.json(
