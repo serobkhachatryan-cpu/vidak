@@ -157,7 +157,8 @@ export class W3dsAuthService {
     };
   }
 
-  async completeOffer(input: W3dsCallbackInput): Promise<void> {
+  /** Completes an offer and returns its id for the callback route to establish cookies. */
+  async completeOffer(input: W3dsCallbackInput): Promise<string> {
     validateCallbackInput(input);
     const claimed = await this.store.claimOfferForVerification(input.session, this.now());
     if (!claimed) {
@@ -198,6 +199,7 @@ export class W3dsAuthService {
       const user = await this.findOrCreateUser(identity);
       const platformSession = await this.issueSession(user);
       await this.store.completeOffer(claimed.id, platformSession.id);
+      return claimed.id;
     } catch (error) {
       const errorCode = error instanceof W3dsAuthError ? error.code : 'verification_failed';
       await this.store.failOffer(claimed.id, errorCode);
