@@ -1,5 +1,6 @@
 'use client';
 
+import { useQueries } from '@tanstack/react-query';
 import type { VideoApiClient } from '@w3ds/api-client';
 import {
   useChannel,
@@ -34,8 +35,7 @@ import {
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
-import { useQueries } from '@tanstack/react-query';
-import { useMemo, useState, type ReactNode } from 'react';
+import { type ReactNode, useMemo, useState } from 'react';
 
 const cx = (...classes: Array<string | false | null | undefined>) =>
   classes.filter(Boolean).join(' ');
@@ -462,7 +462,10 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
   const commentReplies = useMemo(
     () =>
       Object.fromEntries(
-        expandedCommentIds.map((parentId, index) => [parentId, replyQueries[index]?.data?.items ?? []]),
+        expandedCommentIds.map((parentId, index) => [
+          parentId,
+          replyQueries[index]?.data?.items ?? [],
+        ]),
       ),
     [expandedCommentIds, replyQueries],
   );

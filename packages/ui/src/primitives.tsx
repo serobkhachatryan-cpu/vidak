@@ -363,7 +363,7 @@ export const Card = forwardRef<HTMLDivElement, CardProps>(
 Card.displayName = 'Card';
 
 export interface AvatarProps extends Omit<HTMLAttributes<HTMLDivElement>, 'children'> {
-  src?: string;
+  src?: string | undefined;
   alt?: string;
   name?: string;
   size?: Size;

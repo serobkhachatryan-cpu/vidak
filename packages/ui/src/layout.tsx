@@ -512,7 +512,7 @@ export function EmptyState({ icon, ...props }: EmptyStateProps) {
 }
 
 export interface ErrorStateProps extends StateProps {
-  retry?: () => void;
+  retry?: (() => void) | undefined;
   retryLabel?: string;
 }
 

@@ -8,24 +8,22 @@ import type {
   CommentSort,
   UserProfile,
 } from '@w3ds/types';
-import {
-  type FormEvent,
-  type KeyboardEvent,
-  type ReactNode,
-  useEffect,
-  useId,
-  useRef,
-  useState,
-} from 'react';
+import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 import { EmptyState, ErrorState } from './layout';
 import { Avatar, Button, Skeleton, Text } from './primitives';
 
 const cx = (...classes: Array<string | false | null | undefined>) =>
   classes.filter(Boolean).join(' ');
 
-const compactNumber = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+const compactNumber = new Intl.NumberFormat('en', {
+  notation: 'compact',
+  maximumFractionDigits: 1,
+});
 
-export type CommentAuthor = Pick<UserProfile, 'displayName' | 'handle' | 'avatarUrl' | 'isVerified'>;
+export type CommentAuthor = Pick<
+  UserProfile,
+  'displayName' | 'handle' | 'avatarUrl' | 'isVerified'
+>;
 
 function serializeRichText(root: HTMLElement): CommentRichText[] {
   const fragments: CommentRichText[] = [];
@@ -40,12 +38,18 @@ function serializeRichText(root: HTMLElement): CommentRichText[] {
       ...styles,
       ...(tag === 'strong' || tag === 'b' ? { bold: true } : {}),
       ...(tag === 'em' || tag === 'i' ? { italic: true } : {}),
-      ...(tag === 'a' && /^https?:\/\//.test(node.href) ? { link: node.href } : {}),
+      ...(tag === 'a' && /^https?:\/\//.test((node as HTMLAnchorElement).href)
+        ? { link: (node as HTMLAnchorElement).href }
+        : {}),
     };
     if (tag === 'div' || tag === 'br') fragments.push({ text: '\n', ...nextStyles });
-    node.childNodes.forEach((child) => visit(child, nextStyles));
+    node.childNodes.forEach((child) => {
+      visit(child, nextStyles);
+    });
   };
-  root.childNodes.forEach((child) => visit(child, {}));
+  root.childNodes.forEach((child) => {
+    visit(child, {});
+  });
   return fragments;
 }
 
@@ -76,7 +80,10 @@ export function CommentEditor({
     event.preventDefault();
     const body = value.trim();
     if (!body) return;
-    await onSubmit(body, editorRef.current ? serializeRichText(editorRef.current) : [{ text: body }]);
+    await onSubmit(
+      body,
+      editorRef.current ? serializeRichText(editorRef.current) : [{ text: body }],
+    );
     setValue('');
     if (editorRef.current) editorRef.current.textContent = '';
   };
@@ -113,9 +120,11 @@ export function CommentEditor({
             <em aria-hidden="true">I</em>
           </Button>
         </div>
+        {/* biome-ignore lint/a11y/useSemanticElements: contentEditable rich-text formatting (bold/italic) requires a div; role="textbox" follows the WAI-ARIA editable-content pattern and is asserted by tests. */}
         <div
           ref={editorRef}
           role="textbox"
+          tabIndex={0}
           aria-labelledby={labelId}
           aria-multiline="true"
           contentEditable={!isSubmitting}
@@ -149,15 +158,23 @@ export function CommentEditor({
 
 function RichCommentText({ comment }: { comment: Comment }) {
   const fragments = comment.richText?.length ? comment.richText : [{ text: comment.body }];
+  const seenKeys = new Map<string, number>();
+  const keyFor = (fragment: CommentRichText) => {
+    const base = `${fragment.text}|${fragment.bold ?? ''}|${fragment.italic ?? ''}|${fragment.link ?? ''}`;
+    const occurrence = seenKeys.get(base) ?? 0;
+    seenKeys.set(base, occurrence + 1);
+    return `${base}#${occurrence}`;
+  };
   return (
     <Text as="div" size="sm" className="whitespace-pre-wrap break-words">
-      {fragments.map((fragment, index) => {
-        const content = fragment.italic ? <em>{fragment.text}</em> : fragment.text;
-        const styled = fragment.bold ? <strong>{content}</strong> : content;
+      {fragments.map((fragment) => {
+        const key = keyFor(fragment);
+        const content = fragment.italic ? <em key={key}>{fragment.text}</em> : fragment.text;
+        const styled = fragment.bold ? <strong key={key}>{content}</strong> : content;
         const isSafeLink = fragment.link && /^https?:\/\//.test(fragment.link);
         return isSafeLink ? (
           <a
-            key={`${fragment.text}-${index}`}
+            key={key}
             href={fragment.link}
             className="text-primary underline underline-offset-2"
             target="_blank"
@@ -166,7 +183,7 @@ function RichCommentText({ comment }: { comment: Comment }) {
             {styled}
           </a>
         ) : (
-          <span key={`${fragment.text}-${index}`}>{styled}</span>
+          <span key={key}>{styled}</span>
         );
       })}
     </Text>
@@ -175,14 +192,20 @@ function RichCommentText({ comment }: { comment: Comment }) {
 
 export interface CommentItemProps {
   comment: Comment;
-  author?: CommentAuthor;
-  replies?: readonly Comment[];
-  repliesByParent?: Readonly<Record<CommentId, readonly Comment[] | undefined>>;
-  authors?: Readonly<Record<string, CommentAuthor | undefined>>;
+  author?: CommentAuthor | undefined;
+  replies?: readonly Comment[] | undefined;
+  repliesByParent?: Readonly<Record<CommentId, readonly Comment[] | undefined>> | undefined;
+  authors?: Readonly<Record<string, CommentAuthor | undefined>> | undefined;
   depth?: number;
-  onReply?: (comment: Comment, body: string, richText: readonly CommentRichText[]) => void | Promise<void>;
-  onReaction?: (comment: Comment, reaction: CommentReaction | undefined) => void;
-  onLoadReplies?: (comment: Comment) => void;
+  onReply?:
+    | ((
+        comment: Comment,
+        body: string,
+        richText: readonly CommentRichText[],
+      ) => void | Promise<void>)
+    | undefined;
+  onReaction?: ((comment: Comment, reaction: CommentReaction | undefined) => void) | undefined;
+  onLoadReplies?: ((comment: Comment) => void) | undefined;
 }
 
 export function CommentItem({
@@ -209,6 +232,7 @@ export function CommentItem({
 
   return (
     <article
+      // biome-ignore lint/a11y/noNoninteractiveTabindex: comments use a roving-tabindex pattern (Comments UI hint: "Use arrow keys to move between comments").
       tabIndex={0}
       aria-label={`Comment from ${authorName}`}
       className={cx(
@@ -221,8 +245,16 @@ export function CommentItem({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2">
             <span className="font-sans text-sm font-semibold text-foreground">{authorName}</span>
-            {author?.isVerified && <span aria-label="Verified creator" className="text-primary">✓</span>}
-            {author?.handle && <Text as="span" size="xs" tone="muted">@{author.handle}</Text>}
+            {author?.isVerified && (
+              <span role="img" aria-label="Verified creator" className="text-primary">
+                ✓
+              </span>
+            )}
+            {author?.handle && (
+              <Text as="span" size="xs" tone="muted">
+                @{author.handle}
+              </Text>
+            )}
           </div>
           <RichCommentText comment={comment} />
           <div className="mt-2 flex flex-wrap items-center gap-1">
@@ -233,7 +265,8 @@ export function CommentItem({
               aria-pressed={reaction === 'like'}
               onClick={() => changeReaction('like')}
             >
-              <span aria-hidden="true">👍</span> {compactNumber.format(comment.likeCount + (reaction === 'like' ? 1 : 0))}
+              <span aria-hidden="true">👍</span>{' '}
+              {compactNumber.format(comment.likeCount + (reaction === 'like' ? 1 : 0))}
             </Button>
             <Button
               variant="ghost"
@@ -304,9 +337,9 @@ export function CommentItem({
 
 export function CommentListSkeleton({ count = 3 }: { count?: number }) {
   return (
-    <div aria-label="Loading comments" className="space-y-5">
-      {Array.from({ length: count }, (_, index) => (
-        <div key={index} className="flex gap-3">
+    <div role="status" aria-label="Loading comments" className="space-y-5">
+      {Array.from({ length: count }, () => crypto.randomUUID()).map((key) => (
+        <div key={key} className="flex gap-3">
           <Skeleton circle className="h-8 w-8" />
           <div className="flex-1 space-y-2">
             <Skeleton className="h-3 w-32" />
@@ -321,11 +354,11 @@ export function CommentListSkeleton({ count = 3 }: { count?: number }) {
 
 export interface CommentListProps {
   comments: readonly Comment[];
-  authors?: Readonly<Record<string, CommentAuthor | undefined>>;
-  repliesByParent?: Readonly<Record<CommentId, readonly Comment[] | undefined>>;
-  hasNextPage?: boolean;
-  isFetchingNextPage?: boolean;
-  onLoadMore?: () => void;
+  authors?: Readonly<Record<string, CommentAuthor | undefined>> | undefined;
+  repliesByParent?: Readonly<Record<CommentId, readonly Comment[] | undefined>> | undefined;
+  hasNextPage?: boolean | undefined;
+  isFetchingNextPage?: boolean | undefined;
+  onLoadMore?: (() => void) | undefined;
   onReply?: CommentItemProps['onReply'];
   onReaction?: CommentItemProps['onReaction'];
   onLoadReplies?: CommentItemProps['onLoadReplies'];
@@ -342,7 +375,7 @@ export function CommentList({
   onReaction,
   onLoadReplies,
 }: CommentListProps) {
-  const sentinelRef = useRef<HTMLDivElement>(null);
+  const sentinelRef = useRef<HTMLLIElement>(null);
   useEffect(() => {
     if (!hasNextPage || isFetchingNextPage || !onLoadMore || !sentinelRef.current) return;
     if (!('IntersectionObserver' in window)) return;
@@ -352,13 +385,19 @@ export function CommentList({
     observer.observe(sentinelRef.current);
     return () => observer.disconnect();
   }, [hasNextPage, isFetchingNextPage, onLoadMore]);
-  const onListKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+  const onListKeyDown = (event: KeyboardEvent<HTMLUListElement>) => {
     if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    const items = Array.from(event.currentTarget.querySelectorAll<HTMLElement>('article[tabindex="0"]'));
+    const items = Array.from(
+      event.currentTarget.querySelectorAll<HTMLElement>('article[tabindex="0"]'),
+    );
     const current = items.indexOf(document.activeElement as HTMLElement);
     if (current < 0) return;
     const next =
-      event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : current + (event.key === 'ArrowDown' ? 1 : -1);
+      event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? items.length - 1
+          : current + (event.key === 'ArrowDown' ? 1 : -1);
     const target = items[Math.max(0, Math.min(next, items.length - 1))];
     if (target) {
       event.preventDefault();
@@ -367,9 +406,9 @@ export function CommentList({
   };
 
   return (
-    <div role="list" aria-label="Comment list" onKeyDown={onListKeyDown} className="space-y-3">
+    <ul aria-label="Comment list" onKeyDown={onListKeyDown} className="space-y-3">
       {comments.map((comment) => (
-        <div key={comment.id} role="listitem">
+        <li key={comment.id}>
           <CommentItem
             comment={comment}
             author={authors?.[comment.authorId]}
@@ -380,16 +419,16 @@ export function CommentList({
             onReaction={onReaction}
             onLoadReplies={onLoadReplies}
           />
-        </div>
+        </li>
       ))}
       {(hasNextPage || isFetchingNextPage) && (
-        <div ref={sentinelRef} className="flex justify-center py-2">
+        <li ref={sentinelRef} className="flex justify-center py-2">
           <Button variant="secondary" size="sm" onClick={onLoadMore} isLoading={isFetchingNextPage}>
             Load more comments
           </Button>
-        </div>
+        </li>
       )}
-    </div>
+    </ul>
   );
 }
 
@@ -399,9 +438,9 @@ export interface CommentsProps extends CommentListProps {
   state?: CommentsState;
   totalCount?: number;
   sort?: CommentSort;
-  onSortChange?: (sort: CommentSort) => void;
-  onSubmit?: CommentEditorProps['onSubmit'];
-  onRetry?: () => void;
+  onSortChange?: ((sort: CommentSort) => void) | undefined;
+  onSubmit?: CommentEditorProps['onSubmit'] | undefined;
+  onRetry?: (() => void) | undefined;
   className?: string;
 }
 
@@ -419,7 +458,10 @@ export function Comments({
     <section aria-labelledby="comments-heading" className={cx('space-y-5', className)}>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h2 id="comments-heading" className="font-sans text-xl font-bold tracking-tight text-foreground">
+          <h2
+            id="comments-heading"
+            className="font-sans text-xl font-bold tracking-tight text-foreground"
+          >
             Comments{totalCount === undefined ? '' : ` (${compactNumber.format(totalCount)})`}
           </h2>
           <Text size="xs" tone="muted" className="mt-1">
@@ -442,7 +484,11 @@ export function Comments({
       {state === 'loading' ? (
         <CommentListSkeleton />
       ) : state === 'error' ? (
-        <ErrorState title="Could not load comments" description="Please try again." retry={onRetry} />
+        <ErrorState
+          title="Could not load comments"
+          description="Please try again."
+          retry={onRetry}
+        />
       ) : state === 'empty' ? (
         <EmptyState icon="◌" title="No comments yet" description="Start the conversation." />
       ) : (

@@ -72,15 +72,27 @@ export function SearchSortControl({ value, onChange }: SearchSortControlProps) {
 export function ChannelSearchResult({ channel }: { channel: Channel }) {
   return (
     <Card className="flex items-center gap-4">
-      <Avatar {...(channel.avatarUrl ? { src: channel.avatarUrl } : {})} name={channel.name} size="lg" />
+      <Avatar
+        {...(channel.avatarUrl ? { src: channel.avatarUrl } : {})}
+        name={channel.name}
+        size="lg"
+      />
       <div className="min-w-0">
-        <a href={`/channel/${channel.id}`} className={cx('font-sans font-semibold hover:text-primary', focusRing)}>
+        <a
+          href={`/channel/${channel.id}`}
+          className={cx('font-sans font-semibold hover:text-primary', focusRing)}
+        >
           {channel.name}
         </a>
         <p className="mt-1 font-sans text-sm text-muted-foreground">
-          @{channel.handle} · {channel.subscriberCount.toLocaleString()} subscribers · {channel.videoCount} videos
+          @{channel.handle} · {channel.subscriberCount.toLocaleString()} subscribers ·{' '}
+          {channel.videoCount} videos
         </p>
-        {channel.description && <p className="mt-2 line-clamp-2 font-sans text-sm text-muted-foreground">{channel.description}</p>}
+        {channel.description && (
+          <p className="mt-2 line-clamp-2 font-sans text-sm text-muted-foreground">
+            {channel.description}
+          </p>
+        )}
       </div>
     </Card>
   );
@@ -90,14 +102,30 @@ export function PlaylistSearchResult({ playlist }: { playlist: Playlist }) {
   return (
     <Card className="flex gap-4">
       <div className="aspect-video w-36 shrink-0 overflow-hidden rounded bg-muted sm:w-48">
-        {playlist.thumbnailUrl && <img src={playlist.thumbnailUrl} alt="" className="h-full w-full object-cover" loading="lazy" />}
+        {playlist.thumbnailUrl && (
+          <img
+            src={playlist.thumbnailUrl}
+            alt=""
+            className="h-full w-full object-cover"
+            loading="lazy"
+          />
+        )}
       </div>
       <div className="min-w-0">
-        <a href={`/playlist/${playlist.id}`} className={cx('font-sans font-semibold hover:text-primary', focusRing)}>
+        <a
+          href={`/playlist/${playlist.id}`}
+          className={cx('font-sans font-semibold hover:text-primary', focusRing)}
+        >
           {playlist.title}
         </a>
-        <p className="mt-1 font-sans text-sm text-muted-foreground">{playlist.items.length} videos</p>
-        {playlist.description && <p className="mt-2 line-clamp-2 font-sans text-sm text-muted-foreground">{playlist.description}</p>}
+        <p className="mt-1 font-sans text-sm text-muted-foreground">
+          {playlist.items.length} videos
+        </p>
+        {playlist.description && (
+          <p className="mt-2 line-clamp-2 font-sans text-sm text-muted-foreground">
+            {playlist.description}
+          </p>
+        )}
       </div>
     </Card>
   );
@@ -113,7 +141,10 @@ export function SearchResultSkeleton({ type = 'videos' }: { type?: SearchResultT
   ) : (
     <Card className="flex gap-4" aria-label="Loading search result" role="status">
       <Skeleton circle className="h-14 w-14 shrink-0" />
-      <div className="flex-1 space-y-2"><Skeleton className="h-4 w-6/12" /><Skeleton className="h-3 w-8/12" /></div>
+      <div className="flex-1 space-y-2">
+        <Skeleton className="h-4 w-6/12" />
+        <Skeleton className="h-3 w-8/12" />
+      </div>
     </Card>
   );
 }

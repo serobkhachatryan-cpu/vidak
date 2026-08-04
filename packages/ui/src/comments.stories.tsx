@@ -73,4 +73,12 @@ export const Default: Story = {};
 export const Loading: Story = { args: { state: 'loading' } };
 export const Empty: Story = { args: { state: 'empty', comments: [] } };
 export const ErrorState: Story = { args: { state: 'error' } };
-export const Dark: Story = { decorators: [(Story) => <div className="dark bg-background p-6"><Story /></div>] };
+export const Dark: Story = {
+  decorators: [
+    (Story) => (
+      <div className="dark bg-background p-6">
+        <Story />
+      </div>
+    ),
+  ],
+};

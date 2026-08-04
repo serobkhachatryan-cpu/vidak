@@ -1,4 +1,13 @@
 export type {
+  CommentAuthor,
+  CommentEditorProps,
+  CommentItemProps,
+  CommentListProps,
+  CommentsProps,
+  CommentsState,
+} from './comments';
+export { CommentEditor, CommentItem, CommentList, CommentListSkeleton, Comments } from './comments';
+export type {
   AppShellProps,
   BreadcrumbItem,
   BreadcrumbsProps,
@@ -74,17 +83,6 @@ export {
   Text,
   Textarea,
 } from './primitives';
-export type { VideoCardProps, VideoCardSkeletonProps } from './video-card';
-export { VideoCard, VideoCardSkeleton } from './video-card';
-export type {
-  CommentAuthor,
-  CommentEditorProps,
-  CommentItemProps,
-  CommentListProps,
-  CommentsProps,
-  CommentsState,
-} from './comments';
-export { CommentEditor, CommentItem, CommentList, CommentListSkeleton, Comments } from './comments';
 export type { SearchFiltersProps, SearchSortControlProps } from './search-results';
 export {
   ChannelSearchResult,
@@ -94,3 +92,5 @@ export {
   SearchSortControl,
   searchResultLabels,
 } from './search-results';
+export type { VideoCardProps, VideoCardSkeletonProps } from './video-card';
+export { VideoCard, VideoCardSkeleton } from './video-card';

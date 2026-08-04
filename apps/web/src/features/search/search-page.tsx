@@ -1,6 +1,11 @@
 'use client';
 
-import { useChannel, useInfiniteChannels, useInfinitePlaylists, useInfiniteVideos } from '@w3ds/hooks';
+import {
+  useChannel,
+  useInfiniteChannels,
+  useInfinitePlaylists,
+  useInfiniteVideos,
+} from '@w3ds/hooks';
 import type { SearchResultType, SearchSort, Video } from '@w3ds/types';
 import {
   ChannelSearchResult,
@@ -40,10 +45,10 @@ function useRecentSearches() {
   }, []);
 
   const addRecentSearch = (query: string) => {
-    const next = [query, ...recentSearches.filter((item) => item.toLocaleLowerCase() !== query.toLocaleLowerCase())].slice(
-      0,
-      MAX_RECENT_SEARCHES,
-    );
+    const next = [
+      query,
+      ...recentSearches.filter((item) => item.toLocaleLowerCase() !== query.toLocaleLowerCase()),
+    ].slice(0, MAX_RECENT_SEARCHES);
     setRecentSearches(next);
     window.localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(next));
   };
@@ -89,7 +94,11 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
         if (type === 'channels' && channelSearch.hasNextPage && !channelSearch.isFetchingNextPage) {
           void channelSearch.fetchNextPage();
         }
-        if (type === 'playlists' && playlistSearch.hasNextPage && !playlistSearch.isFetchingNextPage) {
+        if (
+          type === 'playlists' &&
+          playlistSearch.hasNextPage &&
+          !playlistSearch.isFetchingNextPage
+        ) {
           void playlistSearch.fetchNextPage();
         }
       },
@@ -130,8 +139,10 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
   const videos = videoSearch.data?.pages.flatMap((page) => page.items) ?? [];
   const channels = channelSearch.data?.pages.flatMap((page) => page.items) ?? [];
   const playlists = playlistSearch.data?.pages.flatMap((page) => page.items) ?? [];
-  const currentSearch = type === 'videos' ? videoSearch : type === 'channels' ? channelSearch : playlistSearch;
-  const resultCount = type === 'videos' ? videos.length : type === 'channels' ? channels.length : playlists.length;
+  const currentSearch =
+    type === 'videos' ? videoSearch : type === 'channels' ? channelSearch : playlistSearch;
+  const resultCount =
+    type === 'videos' ? videos.length : type === 'channels' ? channels.length : playlists.length;
   const isLoadingMore = currentSearch.isFetchingNextPage;
 
   return (
@@ -170,30 +181,40 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
             placeholder="Search videos, channels, and playlists"
             aria-autocomplete="list"
             aria-controls="search-suggestions"
-            aria-activedescendant={activeSuggestion >= 0 ? `suggestion-${activeSuggestion}` : undefined}
+            aria-activedescendant={
+              activeSuggestion >= 0 ? `suggestion-${activeSuggestion}` : undefined
+            }
           />
           {suggestions.length > 0 && inputValue && (
-            <ul
+            <div
               id="search-suggestions"
               role="listbox"
               aria-label="Search suggestions"
               className="absolute z-10 mt-2 w-full overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
             >
               {suggestions.map((suggestion, index) => (
-                <li key={suggestion} id={`suggestion-${index}`} role="option" aria-selected={index === activeSuggestion}>
+                <div
+                  key={suggestion}
+                  id={`suggestion-${index}`}
+                  role="option"
+                  tabIndex={-1}
+                  aria-selected={index === activeSuggestion}
+                >
                   <button
                     type="button"
                     onMouseDown={(event) => event.preventDefault()}
                     onClick={() => selectSuggestion(suggestion)}
                     className={`w-full rounded px-3 py-2 text-left font-sans text-sm ${
-                      index === activeSuggestion ? 'bg-muted text-foreground' : 'text-muted-foreground hover:bg-muted'
+                      index === activeSuggestion
+                        ? 'bg-muted text-foreground'
+                        : 'text-muted-foreground hover:bg-muted'
                     }`}
                   >
                     {suggestion}
                   </button>
-                </li>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </form>
 
@@ -210,7 +231,9 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
               <SearchSortControl value={sort} onChange={setSort} />
             </div>
             <p className="font-sans text-sm text-muted-foreground" aria-live="polite">
-              {currentSearch.isPending ? 'Searching…' : `${resultCount} ${type} found for “${query}”`}
+              {currentSearch.isPending
+                ? 'Searching…'
+                : `${resultCount} ${type} found for “${query}”`}
             </p>
             {currentSearch.isPending ? (
               <Grid columns={type === 'videos' ? 3 : 1} gap={6} aria-label="Loading search results">
@@ -234,17 +257,36 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
               <>
                 {type === 'videos' && (
                   <Grid columns={3} gap={6}>
-                    {videos.map((video) => <SearchVideoCard key={video.id} video={video} />)}
+                    {videos.map((video) => (
+                      <SearchVideoCard key={video.id} video={video} />
+                    ))}
                   </Grid>
                 )}
                 {type === 'channels' && (
-                  <div className="space-y-4">{channels.map((channel) => <ChannelSearchResult key={channel.id} channel={channel} />)}</div>
+                  <div className="space-y-4">
+                    {channels.map((channel) => (
+                      <ChannelSearchResult key={channel.id} channel={channel} />
+                    ))}
+                  </div>
                 )}
                 {type === 'playlists' && (
-                  <div className="space-y-4">{playlists.map((playlist) => <PlaylistSearchResult key={playlist.id} playlist={playlist} />)}</div>
+                  <div className="space-y-4">
+                    {playlists.map((playlist) => (
+                      <PlaylistSearchResult key={playlist.id} playlist={playlist} />
+                    ))}
+                  </div>
                 )}
-                <div ref={loadMoreRef} className="flex min-h-20 items-center justify-center" aria-live="polite">
-                  {isLoadingMore && <span className="flex items-center gap-2 font-sans text-sm text-muted-foreground"><Spinner size="sm" aria-hidden="true" />Loading more results</span>}
+                <div
+                  ref={loadMoreRef}
+                  className="flex min-h-20 items-center justify-center"
+                  aria-live="polite"
+                >
+                  {isLoadingMore && (
+                    <span className="flex items-center gap-2 font-sans text-sm text-muted-foreground">
+                      <Spinner size="sm" aria-hidden="true" />
+                      Loading more results
+                    </span>
+                  )}
                 </div>
               </>
             )}

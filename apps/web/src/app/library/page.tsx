@@ -1,8 +1,13 @@
 'use client';
 
 import { Card, Heading, Page, Text } from '@w3ds/ui';
+import { Suspense } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
-import { AuthenticationGuard, useCurrentUser } from '../../features/auth/auth-provider';
+import {
+  AuthenticationGuard,
+  SessionLoadingSkeleton,
+  useCurrentUser,
+} from '../../features/auth/auth-provider';
 
 function LibraryContent() {
   const user = useCurrentUser();
@@ -24,8 +29,10 @@ function LibraryContent() {
 
 export default function LibraryPage() {
   return (
-    <AuthenticationGuard>
-      <LibraryContent />
-    </AuthenticationGuard>
+    <Suspense fallback={<SessionLoadingSkeleton />}>
+      <AuthenticationGuard>
+        <LibraryContent />
+      </AuthenticationGuard>
+    </Suspense>
   );
 }

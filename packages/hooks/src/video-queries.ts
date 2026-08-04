@@ -23,7 +23,8 @@ export const videoQueryKeys = {
   video: (id: VideoId) => [...videoQueryKeys.all, 'detail', id] as const,
   videos: (filters: VideoListFilters = {}) => [...videoQueryKeys.all, 'list', filters] as const,
   channels: (filters: SearchFilters = {}) => [...videoQueryKeys.all, 'channels', filters] as const,
-  playlists: (filters: SearchFilters = {}) => [...videoQueryKeys.all, 'playlists', filters] as const,
+  playlists: (filters: SearchFilters = {}) =>
+    [...videoQueryKeys.all, 'playlists', filters] as const,
   channel: (id: ChannelId) => [...videoQueryKeys.all, 'channel', id] as const,
   playlist: (id: PlaylistId) => [...videoQueryKeys.all, 'playlist', id] as const,
   userProfile: (id: UserProfileId) => [...videoQueryKeys.all, 'profile', id] as const,
@@ -153,11 +154,10 @@ export function useInfiniteVideoComments(
     queryKey: videoQueryKeys.comments(videoId, filters),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
-      client.listComments(
-        videoId,
-        filters,
-        { ...(pageParam ? { cursor: pageParam } : {}), limit: pageSize },
-      ),
+      client.listComments(videoId, filters, {
+        ...(pageParam ? { cursor: pageParam } : {}),
+        limit: pageSize,
+      }),
     getNextPageParam,
   });
 }
