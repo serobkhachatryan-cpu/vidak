@@ -1,6 +1,10 @@
+import { authProviderEnvVars, defaultAuthProvider } from '@w3ds/config';
 import type { NextConfig } from 'next';
 
-const authProvider = process.env.NEXT_PUBLIC_AUTH_PROVIDER ?? process.env.AUTH_PROVIDER ?? 'dev';
+const authProvider =
+  process.env[authProviderEnvVars.public] ??
+  process.env[authProviderEnvVars.shared] ??
+  defaultAuthProvider;
 
 const nextConfig: NextConfig = {
   output: 'standalone',
@@ -8,7 +12,7 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ['127.0.0.1'],
   env: {
     // Expose AUTH_PROVIDER to the client bundle as NEXT_PUBLIC_AUTH_PROVIDER.
-    NEXT_PUBLIC_AUTH_PROVIDER: authProvider,
+    [authProviderEnvVars.public]: authProvider,
   },
   transpilePackages: [
     '@w3ds/api-client',

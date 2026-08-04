@@ -8,17 +8,12 @@ export type {
   AuthUser,
   AuthUserPermissions,
   AuthUserProfile,
-  BeginLoginOptions,
-  LoginChallenge,
   LoginInput,
-  LoginOfferStatus,
-  LoginResult,
   RegisterInput,
   Role,
   StoredAuthSession,
   TokenStorage,
   UpdateAuthProfileInput,
-  W3dsAuthChallengeApi,
 } from './types';
 
 import type { AuthUser, Role, StoredAuthSession, TokenStorage } from './types';
@@ -112,8 +107,6 @@ export {
   createSyntheticEName,
   createSyntheticEVaultId,
   getAuthProviderCapabilities,
-  isDevAuthProvider,
-  isW3dsAuthProvider,
   parseAuthProviderId,
   permissionsFromRoles,
   readAuthProviderEnv,

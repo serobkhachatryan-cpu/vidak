@@ -145,11 +145,3 @@ export function createAuthUser(input: CreateAuthUserInput): AuthUser {
     permissions: input.permissions ?? permissionsFromRoles(input.roles),
   };
 }
-
-export function isW3dsAuthProvider(provider: AuthProviderId): provider is 'w3ds' {
-  return provider === 'w3ds';
-}
-
-export function isDevAuthProvider(provider: AuthProviderId): provider is 'dev' {
-  return provider === 'dev';
-}

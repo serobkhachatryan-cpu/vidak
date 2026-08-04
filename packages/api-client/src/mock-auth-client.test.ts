@@ -134,13 +134,24 @@ describe('W3dsAuthClient', () => {
       emailPasswordLogin: false,
       passwordRegistration: false,
       w3dsAuthChallenge: true,
+      changePassword: false,
+      changeEmail: false,
     });
 
     await expect(
       client.login({ email: 'a@b.c', password: 'password123', remember: false }),
     ).rejects.toMatchObject({ code: 'unsupported_capability' });
-    await expect(client.beginLogin({ remember: true })).rejects.toMatchObject({
+    await expect(
+      client.register({
+        email: 'a@b.c',
+        password: 'password123',
+        displayName: 'A',
+        remember: false,
+      }),
+    ).rejects.toMatchObject({ code: 'unsupported_capability' });
+    await expect(client.refresh('refresh.token')).rejects.toMatchObject({
       code: 'provider_unavailable',
     });
+    await expect(client.logout()).resolves.toBeUndefined();
   });
 });

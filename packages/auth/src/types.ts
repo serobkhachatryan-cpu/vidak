@@ -111,30 +111,6 @@ export interface UpdateAuthProfileInput {
 }
 
 /**
- * Product-shaped login challenge for W3DS (`w3ds://auth`) flows.
- * UI treats `signInUri` as an opaque sign-in link — not a protocol API.
- */
-export interface LoginChallenge {
-  offerId: string;
-  signInUri: string;
-  expiresAt: string;
-}
-
-export type LoginOfferStatus =
-  | { status: 'pending' }
-  | { status: 'completed'; session: AuthSession }
-  | { status: 'expired' }
-  | { status: 'failed'; error: { code: string; message: string } };
-
-export type LoginResult =
-  | { kind: 'session'; session: AuthSession }
-  | { kind: 'challenge'; challenge: LoginChallenge };
-
-export interface BeginLoginOptions {
-  remember: boolean;
-}
-
-/**
  * Capability matrix for the active authentication provider.
  * Feature UI should gate password vs challenge flows on these flags.
  */
@@ -171,15 +147,6 @@ export interface AuthApi {
 export interface AuthClient extends AuthApi {
   readonly provider: AuthProviderId;
   readonly capabilities: AuthProviderCapabilities;
-}
-
-/**
- * W3DS-provider extension for offer / challenge login.
- * Development provider does not implement this surface.
- */
-export interface W3dsAuthChallengeApi {
-  beginLogin(options: BeginLoginOptions): Promise<LoginChallenge>;
-  getOfferStatus(offerId: string): Promise<LoginOfferStatus>;
 }
 
 export interface TokenStorage {

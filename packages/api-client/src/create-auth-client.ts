@@ -1,6 +1,6 @@
 import { type AuthClient, resolveAuthProviderId } from '@w3ds/auth';
 import { MockAuthApiClient, type MockAuthApiClientOptions } from './mock-auth-client';
-import { W3dsAuthClient, type W3dsAuthClientOptions } from './w3ds-auth-client';
+import { W3dsAuthClient } from './w3ds-auth-client';
 
 export interface CreateAuthClientOptions {
   /**
@@ -10,8 +10,6 @@ export interface CreateAuthClientOptions {
   provider?: string;
   /** Options for the development provider. */
   dev?: MockAuthApiClientOptions;
-  /** Options for the W3DS provider. */
-  w3ds?: W3dsAuthClientOptions;
 }
 
 /**
@@ -25,6 +23,6 @@ export function createAuthClient(options: CreateAuthClientOptions = {}): AuthCli
     case 'dev':
       return new MockAuthApiClient(options.dev);
     case 'w3ds':
-      return new W3dsAuthClient(options.w3ds);
+      return new W3dsAuthClient();
   }
 }
