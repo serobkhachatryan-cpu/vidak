@@ -12,8 +12,10 @@ Authenticated owners can publish/unpublish over HTTP, and anonymous callers
 can read published `public` / `unlisted` videos by opaque `publicVideoId`
 (with discovery limited to `published` + `public`).
 
-There is still no queue worker, video-processing pipeline, eVault sync, ACL
-layer, search indexing, or creator/public UI for publishing.
+There is still no queue worker, video-processing pipeline, eVault sync, remote
+ACL mutations, search indexing, or creator/public UI for publishing. A
+server-only resource-authorization foundation exists for later W3DS delegation
+(see below) but is not yet wired into routes.
 
 ```mermaid
 flowchart LR
@@ -517,6 +519,29 @@ Package scripts:
    browser bundle.
 7. Monitor auth configuration failures (`configuration_error` / 503) separately
    from client credential failures (`invalid_session` / 401).
+
+## Resource authorization foundation (Phase 1)
+
+`apps/web/src/server/resource-authorization.ts` defines a provider-neutral,
+server-only authorization model for creator videos and media:
+
+- **Subject:** authenticated W3DS identity (`platformUserId`, `eName`, `eVaultId`)
+  — never email or browser-controlled identifiers
+- **Resource / owner / scopes:** opaque stable resource ids plus product scopes
+  (`video:owner`, `video:read`, `video:discover`, `media:owner`, `media:read`)
+- **Policy:** local ownership and public/unlisted/private visibility rules that
+  match current draft/publish/public behavior
+- **Providers:** explicit `local` (development) and `w3ds` boundaries with
+  capability detection; remote grant evaluation/mutation/sync remain unavailable
+  and fail closed
+- **Network:** no Registry/eVault ACL reads or writes in this phase
+
+Routes and UI continue to enforce access through existing services. Full design
+notes live in `docs/architecture/w3ds-resource-authorization.md`.
+
+Optional server-only override: `W3DS_AUTHZ_PROVIDER=local|w3ds` (defaults from
+`AUTH_PROVIDER`). Constructing the W3DS authorization provider still requires
+`W3DS_REGISTRY_BASE_URL`, `W3DS_AUTH_JWT_SECRET`, and `DATABASE_URL`.
 
 ## Other server-side behavior
 
