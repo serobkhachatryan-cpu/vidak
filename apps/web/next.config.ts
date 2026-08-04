@@ -15,8 +15,8 @@ const nextConfig: NextConfig = {
     // Expose only the provider id to the client bundle — never secrets or origins.
     [authProviderEnvVars.public]: authProvider,
   },
-  // No Access-Control-Allow-* headers: same-origin cookie clients only.
-  // Credentialed cross-origin browser access is intentionally unsupported.
+  // Cookie-authenticated APIs remain same-origin only. The W3DS eID callback
+  // handles its own narrow, token-only CORS response in its route handler.
   async headers() {
     return [
       {

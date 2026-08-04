@@ -1,10 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import {
-  loadServerSecurityConfig,
-  type ServerSecurityConfig,
-} from '../../../../server/server-config';
-import {
-  applyW3dsSessionCookies,
   getW3dsAuthService,
   W3dsAuthError,
   type W3dsCallbackInput,
@@ -13,25 +8,30 @@ import {
 export const runtime = 'nodejs';
 
 /**
- * The eID wallet returns to the redirect URL as a browser navigation. The
- * native W3DS payload uses `ename`; retain `w3id` support for server-to-server
- * clients that use the original field name.
+ * eID is a Tauri webview and posts from its own origin. This callback does
+ * not use cookies: it only accepts a unique signed session and returns the
+ * resulting short-lived token to the wallet. It is therefore intentionally
+ * separate from the same-origin cookie APIs.
  */
-export function callbackInputFromSearchParams(searchParams: URLSearchParams): W3dsCallbackInput {
-  const appVersion = searchParams.get('appVersion')?.trim();
-  return {
-    w3id: searchParams.get('w3id') ?? searchParams.get('ename') ?? '',
-    session: searchParams.get('session') ?? '',
-    signature: searchParams.get('signature') ?? '',
-    ...(appVersion ? { appVersion } : {}),
-  };
+const walletCorsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'POST, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Max-Age': '600',
+  Vary: 'Origin, Access-Control-Request-Method, Access-Control-Request-Headers',
+} as const;
+
+function walletJson(body: unknown, init?: ResponseInit): NextResponse {
+  const response = NextResponse.json(body, init);
+  for (const [name, value] of Object.entries(walletCorsHeaders)) {
+    response.headers.set(name, value);
+  }
+  return response;
 }
 
-export function resolveCallbackPublicOrigin(
-  request: NextRequest,
-  config: Pick<ServerSecurityConfig, 'trustedOrigins'> = loadServerSecurityConfig(),
-): string {
-  return config.trustedOrigins[0] ?? request.nextUrl.origin;
+/** Handles the eID webview's CORS preflight before the documented JSON POST. */
+export function OPTIONS(): NextResponse {
+  return new NextResponse(null, { status: 204, headers: walletCorsHeaders });
 }
 
 export async function POST(request: NextRequest) {
@@ -44,44 +44,15 @@ export async function POST(request: NextRequest) {
     // The eID Wallet protocol consumes an authentication token from the
     // callback response after it posts the signed session. Do not return the
     // refresh credential: the wallet only needs the short-lived access token.
-    return NextResponse.json({ token: session.tokens.accessToken });
+    return walletJson({ token: session.tokens.accessToken });
   } catch (error) {
     if (error instanceof W3dsAuthError) {
-      return NextResponse.json(
+      return walletJson(
         { error: { code: error.code, message: error.message } },
         { status: error.status },
       );
     }
-    return NextResponse.json(
-      { error: { code: 'validation_failed', message: 'Invalid authentication callback.' } },
-      { status: 400 },
-    );
-  }
-}
-
-/**
- * Handles the eID Wallet's browser redirect after it signs a W3DS offer. The
- * original login page may be on another device (after scanning the QR code),
- * so it can also observe the completed offer through its normal status poll.
- */
-export async function GET(request: NextRequest) {
-  try {
-    const service = getW3dsAuthService();
-    const offerId = await service.completeOffer(
-      callbackInputFromSearchParams(request.nextUrl.searchParams),
-    );
-    const session = await service.getOfferSessionForCookie(offerId);
-    const response = NextResponse.redirect(new URL('/', resolveCallbackPublicOrigin(request)));
-    applyW3dsSessionCookies(response.cookies, session);
-    return response;
-  } catch (error) {
-    if (error instanceof W3dsAuthError) {
-      return NextResponse.json(
-        { error: { code: error.code, message: error.message } },
-        { status: error.status },
-      );
-    }
-    return NextResponse.json(
+    return walletJson(
       { error: { code: 'validation_failed', message: 'Invalid authentication callback.' } },
       { status: 400 },
     );
