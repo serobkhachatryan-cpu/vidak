@@ -1,5 +1,9 @@
 import { NextResponse } from 'next/server';
 import {
+  loadServerSecurityConfig,
+  type ServerSecurityConfig,
+} from '../../../../../../server/server-config';
+import {
   applyW3dsSessionCookies,
   getW3dsAuthService,
   W3dsAuthError,
@@ -11,12 +15,19 @@ function safeReturnTo(value: string | null): string {
   return value?.startsWith('/') && !value.startsWith('//') ? value : '/';
 }
 
+export function resolveContinuePublicOrigin(
+  request: Request,
+  config: Pick<ServerSecurityConfig, 'trustedOrigins'> = loadServerSecurityConfig(),
+): string {
+  return config.trustedOrigins[0] ?? new URL(request.url).origin;
+}
+
 function loginRedirect(
   request: Request,
   offerId: string | undefined,
   returnTo: string,
 ): NextResponse {
-  const url = new URL('/login', request.url);
+  const url = new URL('/login', resolveContinuePublicOrigin(request));
   url.searchParams.set('returnTo', returnTo);
   if (offerId) url.searchParams.set('offer', offerId);
   return NextResponse.redirect(url);
@@ -39,7 +50,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ offe
     }
 
     const session = await service.getOfferSessionForCookie(offerId);
-    const response = NextResponse.redirect(new URL(returnTo, request.url));
+    const response = NextResponse.redirect(new URL(returnTo, resolveContinuePublicOrigin(request)));
     applyW3dsSessionCookies(response.cookies, session);
     return response;
   } catch (error) {
