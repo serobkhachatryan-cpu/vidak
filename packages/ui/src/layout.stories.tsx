@@ -109,3 +109,16 @@ export const States: Story = {
     </Container>
   ),
 };
+
+/** Home discovery when `GET /api/videos/public` returns no published public videos. */
+export const EmptyDiscovery: Story = {
+  render: () => (
+    <Page title="Home" description="Fresh videos from the W3DS community." containerSize="full">
+      <EmptyState
+        icon="◌"
+        title="No videos to show"
+        description="New public videos will appear here."
+      />
+    </Page>
+  ),
+};

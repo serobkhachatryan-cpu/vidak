@@ -1,6 +1,6 @@
 'use client';
 
-import { useChannel, useInfiniteVideos } from '@w3ds/hooks';
+import { useChannel, useInfinitePublicVideos } from '@w3ds/hooks';
 import type { Video } from '@w3ds/types';
 import {
   EmptyState,
@@ -33,7 +33,7 @@ function FeedGridSkeleton() {
 export function HomeFeed() {
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, isPending, refetch } =
-    useInfiniteVideos(videoApiClient, { status: 'published', visibility: 'public' }, 1);
+    useInfinitePublicVideos(videoApiClient, 1);
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -72,7 +72,7 @@ export function HomeFeed() {
           <>
             <Grid columns={5} gap={6}>
               {videos.map((video) => (
-                <FeedVideoCard key={video.id} video={video} />
+                <FeedVideoCard key={video.publicVideoId ?? video.id} video={video} />
               ))}
             </Grid>
             <div

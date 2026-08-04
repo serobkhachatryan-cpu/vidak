@@ -74,7 +74,10 @@ export interface VideoApiClient {
   uploadVideo(file: UploadVideoInput, options?: UploadVideoOptions): Promise<UploadVideoResult>;
   createVideo(input: CreateVideoInput): Promise<Video>;
   updateVideo(id: VideoId, input: UpdateVideoInput): Promise<Video>;
+  /** Publish an owned video (requires ready media). Returns the published Video. */
   publishVideo(id: VideoId): Promise<Video>;
+  /** Unpublish an owned video back to draft. Preserves publicVideoId. */
+  unpublishVideo(id: VideoId): Promise<Video>;
   /** Persist editable draft metadata for the authenticated creator. */
   createDraft(input: CreateVideoDraftInput): Promise<Video>;
   listDrafts(): Promise<readonly Video[]>;
@@ -99,4 +102,24 @@ export interface VideoApiClient {
    * Not a public media URL — requires the creator session cookie.
    */
   draftMediaContentPath(videoId: VideoId, assetId: string): string;
+  /**
+   * Anonymous paginated discovery: only `published` + `public` videos.
+   * Unlisted, private, and drafts are never included.
+   */
+  listPublicVideos(pagination?: PaginationParams): Promise<CursorPage<Video>>;
+  /**
+   * Anonymous published-video detail by opaque `publicVideoId`.
+   * Resolves `public` / `unlisted` published videos; drafts and private return undefined.
+   */
+  getPublicVideo(publicVideoId: string): Promise<Video | undefined>;
+  /**
+   * Same-origin anonymous content path for a published public/unlisted asset.
+   * Uses only opaque publicVideoId + asset id.
+   */
+  publicMediaContentPath(publicVideoId: string, assetId: string): string;
+  /**
+   * Resolve a playable public media content path when a ready asset id is known
+   * to the client (mock store or upload-session cache). Never invents storage keys.
+   */
+  resolvePublicMediaContentPath(publicVideoId: string): Promise<string | undefined>;
 }

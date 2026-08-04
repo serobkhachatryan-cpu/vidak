@@ -1,12 +1,12 @@
 'use client';
 
-import { useQueries } from '@tanstack/react-query';
-import type { VideoApiClient } from '@w3ds/api-client';
+import { useQueries, useQuery } from '@tanstack/react-query';
+import { isPublicVideoId, type VideoApiClient } from '@w3ds/api-client';
 import {
   useChannel,
   useInfiniteVideoComments,
+  usePublicVideo,
   useVideo,
-  useVideos,
   videoQueryKeys,
 } from '@w3ds/hooks';
 import type {
@@ -82,6 +82,8 @@ export interface WatchPageActions {
 export interface WatchPageProps {
   video?: Video;
   channel?: Channel;
+  /** Same-origin public or owner media content path for playable bytes. */
+  mediaSrc?: string;
   relatedVideos?: readonly Video[];
   relatedChannels?: Readonly<Record<string, Pick<Channel, 'name' | 'handle' | 'avatarUrl'>>>;
   state?: WatchPageState;
@@ -114,13 +116,33 @@ export interface WatchPageProps {
 export interface WatchPageDataProps
   extends Omit<
     WatchPageProps,
-    'channel' | 'relatedChannels' | 'relatedVideos' | 'state' | 'video'
+    'channel' | 'relatedChannels' | 'relatedVideos' | 'state' | 'video' | 'mediaSrc'
   > {
   client: VideoApiClient;
   videoId: VideoId;
 }
 
-function VideoPlayerPlaceholder({ title }: { title: string }) {
+function VideoPlayer({ title, mediaSrc }: { title: string; mediaSrc?: string }) {
+  if (mediaSrc) {
+    return (
+      <section
+        aria-label={`Video player for ${title}`}
+        className="relative aspect-video overflow-hidden rounded-xl bg-black text-white shadow-sm"
+      >
+        <video
+          className="h-full w-full"
+          controls
+          playsInline
+          preload="metadata"
+          src={mediaSrc}
+          data-testid="public-video-player"
+        >
+          <track kind="captions" />
+        </video>
+      </section>
+    );
+  }
+
   return (
     <section
       aria-label={`Video player for ${title}`}
@@ -212,6 +234,7 @@ function RelatedVideos({
 function WatchContent({
   video,
   channel,
+  mediaSrc,
   relatedVideos = [],
   relatedChannels,
   actions,
@@ -245,7 +268,7 @@ function WatchContent({
   return (
     <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_22rem]">
       <div className="min-w-0 space-y-5">
-        <VideoPlayerPlaceholder title={video.title} />
+        <VideoPlayer title={video.title} {...(mediaSrc !== undefined ? { mediaSrc } : {})} />
         <div>
           <Heading as="h1" size="xl">
             {video.title}
@@ -354,6 +377,7 @@ function WatchContent({
 export function WatchPage({
   video,
   channel,
+  mediaSrc,
   relatedVideos,
   relatedChannels,
   state = video ? 'ready' : 'empty',
@@ -390,12 +414,13 @@ export function WatchPage({
       <EmptyState
         icon="◌"
         title="Video unavailable"
-        description="This video may have been removed or is private."
+        description="This video is unpublished, private, or could not be found."
       />
     ) : (
       <WatchContent
         video={video}
         {...(channel ? { channel } : {})}
+        {...(mediaSrc !== undefined ? { mediaSrc } : {})}
         {...(relatedVideos ? { relatedVideos } : {})}
         {...(relatedChannels ? { relatedChannels } : {})}
         {...(actions ? { actions } : {})}
@@ -424,17 +449,38 @@ export function WatchPage({
 }
 
 export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps) {
-  const videoQuery = useVideo(client, videoId);
-  const video = videoQuery.data;
+  const looksPublic = isPublicVideoId(videoId);
+  const publicVideoQuery = usePublicVideo(client, videoId, { enabled: looksPublic });
+  const legacyVideoQuery = useVideo(client, videoId, { enabled: !looksPublic });
+  const rawVideo = looksPublic ? publicVideoQuery.data : legacyVideoQuery.data;
+  const videoQueryPending = looksPublic ? publicVideoQuery.isPending : legacyVideoQuery.isPending;
+  const videoQueryError = looksPublic ? publicVideoQuery.error : legacyVideoQuery.error;
+  const refetchVideo = looksPublic ? publicVideoQuery.refetch : legacyVideoQuery.refetch;
+
+  // Public UI paths never render drafts or private published videos.
+  const video =
+    rawVideo &&
+    rawVideo.status === 'published' &&
+    (rawVideo.visibility === 'public' || rawVideo.visibility === 'unlisted')
+      ? rawVideo
+      : undefined;
+
+  const mediaQuery = useQuery({
+    queryKey: [...videoQueryKeys.publicVideo(videoId), 'media-src'] as const,
+    queryFn: () => client.resolvePublicMediaContentPath(video?.publicVideoId ?? videoId),
+    enabled: Boolean(video?.publicVideoId),
+  });
+
   const channelQuery = useChannel(client, video?.channelId ?? '', { enabled: Boolean(video) });
   const [commentSort, setCommentSort] = useState<CommentSort>('top');
   const [expandedCommentIds, setExpandedCommentIds] = useState<readonly CommentId[]>([]);
-  const commentsQuery = useInfiniteVideoComments(client, videoId, { sort: commentSort }, 10);
+  const commentVideoId = video?.id ?? videoId;
+  const commentsQuery = useInfiniteVideoComments(client, commentVideoId, { sort: commentSort }, 10);
   const comments = commentsQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const replyQueries = useQueries({
     queries: expandedCommentIds.map((parentId) => ({
-      queryKey: videoQueryKeys.comments(videoId, { parentId }),
-      queryFn: () => client.listComments(videoId, { parentId }),
+      queryKey: videoQueryKeys.comments(commentVideoId, { parentId }),
+      queryFn: () => client.listComments(commentVideoId, { parentId }),
     })),
   });
   const replies = replyQueries.flatMap((query) => query.data?.items ?? []);
@@ -469,23 +515,20 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
       ),
     [expandedCommentIds, replyQueries],
   );
-  const relatedFilters = video
-    ? { channelId: video.channelId, status: 'published' as const, visibility: 'public' as const }
-    : { status: 'published' as const, visibility: 'public' as const };
-  const relatedVideosQuery = useVideos(
-    client,
-    relatedFilters,
-    { limit: 8 },
-    { enabled: Boolean(video) },
-  );
+  const relatedVideosQuery = useQuery({
+    queryKey: [...videoQueryKeys.publicVideos(), 'related', video?.channelId ?? 'all'] as const,
+    queryFn: () => client.listPublicVideos({ limit: 8 }),
+    enabled: Boolean(video),
+  });
   const relatedVideos = (relatedVideosQuery.data?.items ?? []).filter(
-    (item) => item.id !== videoId,
+    (item) => item.id !== video?.id && item.publicVideoId !== video?.publicVideoId,
   );
 
   return (
     <WatchPage
       {...props}
       {...(video ? { video } : {})}
+      {...(mediaQuery.data ? { mediaSrc: mediaQuery.data } : {})}
       {...(channelQuery.data ? { channel: channelQuery.data } : {})}
       relatedVideos={relatedVideos}
       relatedChannels={channelQuery.data ? { [channelQuery.data.id]: channelQuery.data } : {}}
@@ -504,12 +547,16 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
       actions={{
         ...props.actions,
         onComment: async (body, richText) => {
-          await client.createComment(videoId, { body, richText });
+          await client.createComment(commentVideoId, { body, richText });
           await commentsQuery.refetch();
           await props.actions?.onComment?.(body, richText);
         },
         onReply: async (comment, body, richText) => {
-          await client.createComment(videoId, { body, richText, parentId: comment.id });
+          await client.createComment(commentVideoId, {
+            body,
+            richText,
+            parentId: comment.id,
+          });
           await props.actions?.onReply?.(comment, body, richText);
         },
         onCommentReaction: (comment, reaction) => {
@@ -526,10 +573,8 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
               ? 'ready'
               : 'empty'
       }
-      state={
-        videoQuery.isPending ? 'loading' : videoQuery.error ? 'error' : video ? 'ready' : 'empty'
-      }
-      {...(videoQuery.error ? { onRetry: () => void videoQuery.refetch() } : {})}
+      state={videoQueryPending ? 'loading' : videoQueryError ? 'error' : video ? 'ready' : 'empty'}
+      {...(videoQueryError ? { onRetry: () => void refetchVideo() } : {})}
     />
   );
 }

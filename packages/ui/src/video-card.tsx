@@ -42,7 +42,7 @@ export interface VideoCardProps {
 export function VideoCard({
   video,
   channel,
-  href = `/watch/${video.id}`,
+  href = `/watch/${video.publicVideoId ?? video.id}`,
   channelHref = `/channel/${video.channelId}`,
   className,
 }: VideoCardProps) {

@@ -3,6 +3,7 @@
 import {
   MockVideoApiClient,
   mockUploadAutoThumbnails,
+  publicVideoWatchPath,
   type VideoApiClient,
 } from '@w3ds/api-client';
 import type {
@@ -70,9 +71,14 @@ export interface UploadPageDataProps
     | 'customThumbnailUrl'
     | 'onCustomThumbnailSelect'
     | 'isPublishing'
+    | 'isSavingDraft'
+    | 'isUnpublishing'
     | 'publishError'
     | 'publishedVideo'
+    | 'shareUrl'
     | 'onPublish'
+    | 'onSaveDraft'
+    | 'onUnpublish'
     | 'onContinue'
     | 'onBack'
   > {
@@ -81,6 +87,19 @@ export interface UploadPageDataProps
   /** Optional existing saved draft to attach media to. */
   draftId?: VideoId;
   onWatchVideo?: (video: Video) => void;
+}
+
+function buildShareUrl(video: Video): string | undefined {
+  if (
+    video.status !== 'published' ||
+    !video.publicVideoId ||
+    (video.visibility !== 'public' && video.visibility !== 'unlisted')
+  ) {
+    return undefined;
+  }
+  const path = publicVideoWatchPath(video.publicVideoId);
+  if (typeof window === 'undefined') return path;
+  return `${window.location.origin}${path}`;
 }
 
 export function UploadPageData({
@@ -112,6 +131,8 @@ export function UploadPageData({
   const [thumbnailError, setThumbnailError] = useState<string | undefined>();
   const [visibilityError, setVisibilityError] = useState<string | undefined>();
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+  const [isUnpublishing, setIsUnpublishing] = useState(false);
   const [publishError, setPublishError] = useState<string | undefined>();
   const [publishedVideo, setPublishedVideo] = useState<Video | undefined>();
   const abortRef = useRef<AbortController | undefined>(undefined);
@@ -175,8 +196,33 @@ export function UploadPageData({
     setThumbnailError(undefined);
     setVisibilityError(undefined);
     setIsPublishing(false);
+    setIsSavingDraft(false);
+    setIsUnpublishing(false);
     setPublishError(undefined);
     setPublishedVideo(undefined);
+  };
+
+  const draftMetadata = () => ({
+    title: draft.title,
+    description: draft.description,
+    tags: draft.tags,
+    category: draft.category as VideoCategory,
+    language: draft.language as VideoLanguage,
+    visibility: draft.visibility as VideoVisibility,
+    thumbnailUrl: draft.thumbnailUrl,
+  });
+
+  const persistDraftMetadata = async (): Promise<Video> => {
+    const metadata = draftMetadata();
+    const existingId = draftVideoIdRef.current;
+    const video = existingId
+      ? await client.updateDraft(existingId, metadata)
+      : await client.createDraft(metadata);
+    if (!existingId) {
+      draftVideoIdRef.current = video.id;
+      setDraftVideoId(video.id);
+    }
+    return video;
   };
 
   const ensureSavedDraft = async (nextFile: File, draftSnapshot: UploadDraft): Promise<VideoId> => {
@@ -382,7 +428,7 @@ export function UploadPageData({
     if (previous) setStep(previous);
   };
 
-  const onPublish = async () => {
+  const onSaveDraft = async () => {
     const error = validateSaveDraft({
       title: draft.title,
       description: draft.description,
@@ -397,26 +443,10 @@ export function UploadPageData({
       return;
     }
 
-    setIsPublishing(true);
+    setIsSavingDraft(true);
     setPublishError(undefined);
     try {
-      const metadata = {
-        title: draft.title,
-        description: draft.description,
-        tags: draft.tags,
-        category: draft.category as VideoCategory,
-        language: draft.language as VideoLanguage,
-        visibility: draft.visibility as VideoVisibility,
-        thumbnailUrl: draft.thumbnailUrl,
-      };
-      const existingId = draftVideoIdRef.current;
-      const video = existingId
-        ? await client.updateDraft(existingId, metadata)
-        : await client.createDraft(metadata);
-      if (!existingId) {
-        draftVideoIdRef.current = video.id;
-        setDraftVideoId(video.id);
-      }
+      const video = await persistDraftMetadata();
       markCompleted('details');
       markCompleted('thumbnail');
       markCompleted('visibility');
@@ -425,7 +455,60 @@ export function UploadPageData({
     } catch (reason) {
       setPublishError(reason instanceof Error ? reason.message : 'Could not save this draft.');
     } finally {
+      setIsSavingDraft(false);
+    }
+  };
+
+  const onPublish = async () => {
+    const error = validateSaveDraft({
+      title: draft.title,
+      description: draft.description,
+      tags: draft.tags,
+      category: draft.category,
+      language: draft.language,
+      thumbnailUrl: draft.thumbnailUrl,
+      visibility: draft.visibility,
+    });
+    if (error) {
+      setPublishError(error);
+      return;
+    }
+    if (mediaAsset?.uploadState !== 'ready') {
+      setPublishError('Publishing requires a ready media asset.');
+      return;
+    }
+
+    setIsPublishing(true);
+    setPublishError(undefined);
+    try {
+      const draftVideo = await persistDraftMetadata();
+      const video = await client.publishVideo(draftVideo.id);
+      draftVideoIdRef.current = video.id;
+      setDraftVideoId(video.id);
+      markCompleted('details');
+      markCompleted('thumbnail');
+      markCompleted('visibility');
+      markCompleted('publish');
+      setPublishedVideo(video);
+    } catch (reason) {
+      setPublishError(reason instanceof Error ? reason.message : 'Could not publish this video.');
+    } finally {
       setIsPublishing(false);
+    }
+  };
+
+  const onUnpublish = async () => {
+    const videoId = publishedVideo?.id ?? draftVideoIdRef.current;
+    if (!videoId) return;
+    setIsUnpublishing(true);
+    setPublishError(undefined);
+    try {
+      const video = await client.unpublishVideo(videoId);
+      setPublishedVideo(video);
+    } catch (reason) {
+      setPublishError(reason instanceof Error ? reason.message : 'Could not unpublish this video.');
+    } finally {
+      setIsUnpublishing(false);
     }
   };
 
@@ -433,6 +516,7 @@ export function UploadPageData({
     mediaAsset && draftVideoId && mediaAsset.uploadState === 'ready'
       ? client.draftMediaContentPath(draftVideoId, mediaAsset.id)
       : undefined;
+  const shareUrl = publishedVideo ? buildShareUrl(publishedVideo) : undefined;
 
   return (
     <UploadPage
@@ -464,10 +548,19 @@ export function UploadPageData({
       {...(customThumbnailUrl !== undefined ? { customThumbnailUrl } : {})}
       onCustomThumbnailSelect={onCustomThumbnailSelect}
       isPublishing={isPublishing}
+      isSavingDraft={isSavingDraft}
+      isUnpublishing={isUnpublishing}
       {...(publishError !== undefined ? { publishError } : {})}
       {...(publishedVideo !== undefined ? { publishedVideo } : {})}
+      {...(shareUrl !== undefined ? { shareUrl } : {})}
       onPublish={() => {
         void onPublish();
+      }}
+      onSaveDraft={() => {
+        void onSaveDraft();
+      }}
+      onUnpublish={() => {
+        void onUnpublish();
       }}
       onWatch={(video) => {
         onWatch?.(video);

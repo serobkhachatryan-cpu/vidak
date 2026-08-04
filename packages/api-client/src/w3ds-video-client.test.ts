@@ -240,6 +240,107 @@ describe('W3dsVideoApiClient', () => {
     await expect(client.deleteDraftMedia('draft-1', 'asset-1')).resolves.toBeUndefined();
   });
 
+  it('publishes, unpublishes, and reads public discovery through platform routes', async () => {
+    const published = {
+      id: 'draft-1',
+      channelId: 'channel-1',
+      title: 'Live clip',
+      description: '',
+      thumbnailUrl: '',
+      durationSeconds: 0,
+      status: 'published' as const,
+      visibility: 'public' as const,
+      publicVideoId: 'pub_live',
+      publishedAt: '2026-08-04T12:00:00.000Z',
+      createdAt: '2026-08-04T10:00:00.000Z',
+      updatedAt: '2026-08-04T12:00:00.000Z',
+      viewCount: 0,
+      likeCount: 0,
+      commentCount: 0,
+      tags: [] as string[],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/videos/draft-1/publish') && init?.method === 'POST') {
+        expect(init.credentials).toBe('include');
+        return jsonResponse(published);
+      }
+      if (url.endsWith('/api/videos/draft-1/unpublish') && init?.method === 'POST') {
+        return jsonResponse({ ...published, status: 'draft', publishedAt: undefined });
+      }
+      if (url.includes('/api/videos/public?') || url.endsWith('/api/videos/public')) {
+        return jsonResponse({ items: [published], nextCursor: 'offset:1' });
+      }
+      if (url.endsWith('/api/videos/public/pub_live')) {
+        return jsonResponse(published);
+      }
+      if (url.endsWith('/api/videos/public/pub_missing')) {
+        return jsonResponse({ error: { code: 'not_found', message: 'Video was not found.' } }, 404);
+      }
+      return jsonResponse({ error: { code: 'not_found', message: 'missing' } }, 404);
+    });
+
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    await expect(client.publishVideo('draft-1')).resolves.toMatchObject({
+      publicVideoId: 'pub_live',
+      status: 'published',
+    });
+    await expect(client.unpublishVideo('draft-1')).resolves.toMatchObject({ status: 'draft' });
+    await expect(client.listPublicVideos({ limit: 2 })).resolves.toMatchObject({
+      items: [published],
+      nextCursor: 'offset:1',
+    });
+    await expect(client.getPublicVideo('pub_live')).resolves.toMatchObject({
+      publicVideoId: 'pub_live',
+    });
+    await expect(client.getPublicVideo('pub_missing')).resolves.toBeUndefined();
+    expect(client.publicMediaContentPath('pub_live', 'asset-1')).toBe(
+      '/api/videos/public/pub_live/media/asset-1/content',
+    );
+  });
+
+  it('resolves public media paths from the upload-session ready asset cache', async () => {
+    FakeXMLHttpRequest.responders = [];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/videos/public/pub_live')) {
+        return jsonResponse({
+          id: 'draft-1',
+          channelId: 'channel-1',
+          title: 'Live clip',
+          description: '',
+          thumbnailUrl: '',
+          durationSeconds: 0,
+          status: 'published',
+          visibility: 'public',
+          publicVideoId: 'pub_live',
+          publishedAt: '2026-08-04T12:00:00.000Z',
+          createdAt: '2026-08-04T10:00:00.000Z',
+          updatedAt: '2026-08-04T12:00:00.000Z',
+          viewCount: 0,
+          likeCount: 0,
+          commentCount: 0,
+          tags: [],
+        });
+      }
+      return jsonResponse({ error: { code: 'not_found', message: 'missing' } }, 404);
+    });
+    const client = new W3dsVideoApiClient({
+      fetch: fetchMock,
+      createXHR: () => new FakeXMLHttpRequest() as unknown as XMLHttpRequest,
+    });
+    const body = new Blob(['bytes'], { type: 'video/mp4' });
+    await client.uploadDraftMedia('draft-1', {
+      name: 'clip.mp4',
+      size: body.size,
+      type: 'video/mp4',
+      body,
+    });
+    await expect(client.resolvePublicMediaContentPath('pub_live')).resolves.toBe(
+      '/api/videos/public/pub_live/media/asset-1/content',
+    );
+  });
+
   it('rejects media responses that leak storage keys', async () => {
     FakeXMLHttpRequest.responders = [
       (xhr) => {

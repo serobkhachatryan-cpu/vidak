@@ -39,6 +39,27 @@ const savedDraft: Video = {
   tags: draft.tags,
 };
 
+const publishedPublic: Video = {
+  ...savedDraft,
+  status: 'published',
+  visibility: 'public',
+  publicVideoId: 'pub_design-system',
+  publishedAt: '2026-08-04T10:05:00.000Z',
+  updatedAt: '2026-08-04T10:05:00.000Z',
+};
+
+const publishedUnlisted: Video = {
+  ...publishedPublic,
+  visibility: 'unlisted',
+  publicVideoId: 'pub_unlisted-design',
+};
+
+const publishedPrivate: Video = {
+  ...publishedPublic,
+  visibility: 'private',
+  publicVideoId: 'pub_private-design',
+};
+
 const mediaAsset: DraftMediaAsset = {
   id: 'asset-design-system',
   ownerId: 'user-grace',
@@ -239,6 +260,32 @@ export const DraftReview: Story = {
     fileName: 'design-system.mp4',
     draft,
     completedSteps: ['select', 'progress', 'details', 'thumbnail', 'visibility'],
+    onSaveDraft: () => undefined,
+    onPublish: () => undefined,
+  },
+};
+
+export const Publishable: Story = {
+  args: {
+    step: 'publish',
+    fileName: 'design-system.mp4',
+    draft,
+    mediaAsset,
+    completedSteps: ['select', 'progress', 'details', 'thumbnail', 'visibility'],
+    onSaveDraft: () => undefined,
+    onPublish: () => undefined,
+  },
+};
+
+export const PublishingError: Story = {
+  args: {
+    step: 'publish',
+    fileName: 'design-system.mp4',
+    draft,
+    mediaAsset,
+    publishError: 'Publish requires at least one ready media asset.',
+    completedSteps: ['select', 'progress', 'details', 'thumbnail', 'visibility'],
+    onSaveDraft: () => undefined,
     onPublish: () => undefined,
   },
 };
@@ -249,6 +296,46 @@ export const DraftSaved: Story = {
     draft,
     publishedVideo: savedDraft,
     completedSteps: ['select', 'progress', 'details', 'thumbnail', 'visibility', 'publish'],
+    onUploadAnother: () => undefined,
+  },
+};
+
+export const PublishedPublic: Story = {
+  args: {
+    step: 'publish',
+    draft,
+    publishedVideo: publishedPublic,
+    shareUrl: 'https://vidak.example/watch/pub_design-system',
+    mediaAsset,
+    completedSteps: ['select', 'progress', 'details', 'thumbnail', 'visibility', 'publish'],
+    onWatch: () => undefined,
+    onUnpublish: () => undefined,
+    onUploadAnother: () => undefined,
+  },
+};
+
+export const PublishedUnlisted: Story = {
+  args: {
+    step: 'publish',
+    draft: { ...draft, visibility: 'unlisted' },
+    publishedVideo: publishedUnlisted,
+    shareUrl: 'https://vidak.example/watch/pub_unlisted-design',
+    mediaAsset,
+    completedSteps: ['select', 'progress', 'details', 'thumbnail', 'visibility', 'publish'],
+    onWatch: () => undefined,
+    onUnpublish: () => undefined,
+    onUploadAnother: () => undefined,
+  },
+};
+
+export const PublishedPrivate: Story = {
+  args: {
+    step: 'publish',
+    draft: { ...draft, visibility: 'private' },
+    publishedVideo: publishedPrivate,
+    mediaAsset,
+    completedSteps: ['select', 'progress', 'details', 'thumbnail', 'visibility', 'publish'],
+    onUnpublish: () => undefined,
     onUploadAnother: () => undefined,
   },
 };

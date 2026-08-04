@@ -40,6 +40,7 @@ import {
   draftMediaUploadPath,
 } from './draft-media-path';
 import { MockVideoApiClient, type MockVideoApiClientOptions } from './mock-video-client';
+import { publicMediaContentPath } from './public-media-path';
 import type { VideoApiClient } from './video-client';
 
 export interface W3dsVideoApiClientOptions {
@@ -64,19 +65,21 @@ interface ApiErrorBody {
 }
 
 /**
- * W3DS video client — cookie-based draft CRUD and protected media transfer
- * against `/api/videos/drafts`.
+ * W3DS video client — cookie-based draft/publish routes, anonymous public
+ * discovery/detail, and protected media transfer.
  *
  * Session credentials stay HttpOnly; this client never reads or stores tokens.
- * Responses never surface storage keys, filesystem paths, or public media URLs.
- * Non-draft product methods delegate to `MockVideoApiClient` so watch/feed/search
- * behavior remains unchanged in this milestone.
+ * Responses never surface storage keys, filesystem paths, or public CDN URLs.
+ * Non-durable product surfaces (comments/search/settings) still delegate to the
+ * development mock until those domains are persisted.
  */
 export class W3dsVideoApiClient implements VideoApiClient {
   private readonly baseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly createXHR: () => XMLHttpRequest;
   private readonly mock: MockVideoApiClient;
+  /** Upload-session cache: internal video id → latest ready asset id. */
+  private readonly readyAssetByVideoId = new Map<string, string>();
 
   constructor(options: W3dsVideoApiClientOptions = {}) {
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? '');
@@ -184,7 +187,9 @@ export class W3dsVideoApiClient implements VideoApiClient {
   }
 
   createVideo(_input: CreateVideoInput): Promise<Video> {
-    return Promise.reject(new Error('Publishing is not available yet. Save a draft instead.'));
+    return Promise.reject(
+      new Error('Use save draft and publish instead of the legacy createVideo path.'),
+    );
   }
 
   updateVideo(id: VideoId, input: UpdateVideoInput): Promise<Video> {
@@ -192,10 +197,16 @@ export class W3dsVideoApiClient implements VideoApiClient {
     return this.updateDraft(id, draftFields);
   }
 
-  publishVideo(_id: VideoId): Promise<Video> {
-    return Promise.reject(
-      new Error('Publishing requires media ingestion and is not available yet.'),
-    );
+  async publishVideo(id: VideoId): Promise<Video> {
+    return this.requestJson<Video>(`/api/videos/${encodeURIComponent(id)}/publish`, {
+      method: 'POST',
+    });
+  }
+
+  async unpublishVideo(id: VideoId): Promise<Video> {
+    return this.requestJson<Video>(`/api/videos/${encodeURIComponent(id)}/unpublish`, {
+      method: 'POST',
+    });
   }
 
   async createDraft(input: CreateVideoDraftInput): Promise<Video> {
@@ -227,30 +238,78 @@ export class W3dsVideoApiClient implements VideoApiClient {
     await this.request(`/api/videos/drafts/${encodeURIComponent(id)}`, { method: 'DELETE' });
   }
 
-  uploadDraftMedia(
+  async uploadDraftMedia(
     videoId: VideoId,
     file: UploadDraftMediaFile,
     options: UploadDraftMediaOptions = {},
   ): Promise<DraftMediaAsset> {
-    return uploadDraftMediaWithXhr({
+    const asset = await uploadDraftMediaWithXhr({
       url: this.url(draftMediaUploadPath(videoId)),
       file,
       signal: options.signal,
       onProgress: options.onProgress,
       createXHR: this.createXHR,
     });
+    if (asset.uploadState === 'ready') {
+      this.readyAssetByVideoId.set(videoId, asset.id);
+    }
+    return asset;
   }
 
   async getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset> {
-    return this.requestJson<DraftMediaAsset>(draftMediaAssetPath(videoId, assetId));
+    const asset = await this.requestJson<DraftMediaAsset>(draftMediaAssetPath(videoId, assetId));
+    if (asset.uploadState === 'ready') {
+      this.readyAssetByVideoId.set(videoId, asset.id);
+    }
+    return asset;
   }
 
   async deleteDraftMedia(videoId: VideoId, assetId: string): Promise<void> {
     await this.request(draftMediaAssetPath(videoId, assetId), { method: 'DELETE' });
+    if (this.readyAssetByVideoId.get(videoId) === assetId) {
+      this.readyAssetByVideoId.delete(videoId);
+    }
   }
 
   draftMediaContentPath(videoId: VideoId, assetId: string): string {
     return draftMediaContentPath(videoId, assetId);
+  }
+
+  async listPublicVideos(pagination: PaginationParams = {}): Promise<CursorPage<Video>> {
+    const params = new URLSearchParams();
+    if (pagination.cursor) params.set('cursor', pagination.cursor);
+    if (pagination.limit !== undefined) params.set('limit', String(pagination.limit));
+    const query = params.toString();
+    return this.requestJson<CursorPage<Video>>(`/api/videos/public${query ? `?${query}` : ''}`);
+  }
+
+  async getPublicVideo(publicVideoId: string): Promise<Video | undefined> {
+    const normalized = publicVideoId.trim();
+    if (!normalized) return undefined;
+    const response = await this.fetchImpl(
+      this.url(`/api/videos/public/${encodeURIComponent(normalized)}`),
+      {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      },
+    );
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      const body = await readErrorBody(response);
+      throw new Error(body.error?.message ?? `Public video request failed (${response.status})`);
+    }
+    return (await response.json()) as Video;
+  }
+
+  publicMediaContentPath(publicVideoId: string, assetId: string): string {
+    return publicMediaContentPath(publicVideoId, assetId);
+  }
+
+  async resolvePublicMediaContentPath(publicVideoId: string): Promise<string | undefined> {
+    const video = await this.getPublicVideo(publicVideoId);
+    if (!video?.publicVideoId) return undefined;
+    const assetId = this.readyAssetByVideoId.get(video.id);
+    return assetId ? publicMediaContentPath(video.publicVideoId, assetId) : undefined;
   }
 
   private async requestJson<T>(path: string, init?: RequestInit): Promise<T> {

@@ -21,7 +21,10 @@ import type {
 export const videoQueryKeys = {
   all: ['video'] as const,
   video: (id: VideoId) => [...videoQueryKeys.all, 'detail', id] as const,
+  publicVideo: (publicVideoId: string) =>
+    [...videoQueryKeys.all, 'public-detail', publicVideoId] as const,
   videos: (filters: VideoListFilters = {}) => [...videoQueryKeys.all, 'list', filters] as const,
+  publicVideos: () => [...videoQueryKeys.all, 'public-list'] as const,
   channels: (filters: SearchFilters = {}) => [...videoQueryKeys.all, 'channels', filters] as const,
   playlists: (filters: SearchFilters = {}) =>
     [...videoQueryKeys.all, 'playlists', filters] as const,
@@ -71,6 +74,36 @@ export function useInfiniteVideos(
         limit: pageSize,
       }),
     getNextPageParam,
+  });
+}
+
+/** Anonymous public discovery (`published` + `public` only). */
+export function useInfinitePublicVideos(client: VideoApiClient, pageSize = 20) {
+  return useInfiniteQuery({
+    queryKey: videoQueryKeys.publicVideos(),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      client.listPublicVideos({
+        ...(pageParam ? { cursor: pageParam } : {}),
+        limit: pageSize,
+      }),
+    getNextPageParam,
+  });
+}
+
+/**
+ * Loads a published public/unlisted video by opaque `publicVideoId`.
+ * Returns undefined (empty UI) for drafts, private, unpublished, or missing ids.
+ */
+export function usePublicVideo(
+  client: VideoApiClient,
+  publicVideoId: string,
+  options: Omit<UseQueryOptions<Video | undefined>, 'queryKey' | 'queryFn'> = {},
+) {
+  return useQuery({
+    queryKey: videoQueryKeys.publicVideo(publicVideoId),
+    queryFn: () => client.getPublicVideo(publicVideoId),
+    ...options,
   });
 }
 

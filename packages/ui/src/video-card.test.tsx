@@ -43,6 +43,14 @@ describe('VideoCard', () => {
     expect(markup).toContain('98.3K views');
   });
 
+  it('prefers the opaque public video id for watch links when present', () => {
+    const markup = renderToStaticMarkup(
+      <VideoCard video={{ ...video, publicVideoId: 'pub_design-system' }} channel={channel} />,
+    );
+    expect(markup).toContain('href="/watch/pub_design-system"');
+    expect(markup).not.toContain('href="/watch/video-design-system"');
+  });
+
   it('renders a labelled loading skeleton', () => {
     const markup = renderToStaticMarkup(<VideoCardSkeleton />);
 

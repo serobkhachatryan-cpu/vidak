@@ -176,6 +176,72 @@ describe('MockVideoApiClient', () => {
     expect(published.publishedAt).toBeTruthy();
   });
 
+  it('publishes and unpublishes drafts with ready media and exposes public discovery', async () => {
+    const publishClient = new MockVideoApiClient({ delayMs: 0, videos: [] });
+    const draft = await publishClient.createDraft({
+      title: 'Ready to ship',
+      visibility: 'public',
+    });
+    await expect(publishClient.publishVideo(draft.id)).rejects.toThrow(/ready media/i);
+
+    const body = new Blob(['bytes'], { type: 'video/mp4' });
+    await publishClient.uploadDraftMedia(draft.id, {
+      name: 'clip.mp4',
+      size: body.size,
+      type: 'video/mp4',
+      body,
+    });
+    const published = await publishClient.publishVideo(draft.id);
+    expect(published).toMatchObject({
+      status: 'published',
+      visibility: 'public',
+      publicVideoId: expect.stringMatching(/^pub_/),
+    });
+    expect(published.publishedAt).toEqual(expect.any(String));
+
+    const listed = await publishClient.listPublicVideos({ limit: 10 });
+    expect(listed.items.map((item) => item.publicVideoId)).toContain(published.publicVideoId);
+
+    const publicVideo = await publishClient.getPublicVideo(published.publicVideoId ?? '');
+    expect(publicVideo?.title).toBe('Ready to ship');
+
+    const mediaPath = await publishClient.resolvePublicMediaContentPath(
+      published.publicVideoId ?? '',
+    );
+    expect(mediaPath).toMatch(
+      new RegExp(`^/api/videos/public/${published.publicVideoId}/media/.+/content$`),
+    );
+
+    const unpublished = await publishClient.unpublishVideo(draft.id);
+    expect(unpublished.status).toBe('draft');
+    expect(unpublished.publicVideoId).toBe(published.publicVideoId);
+    expect(unpublished.publishedAt).toBeUndefined();
+    await expect(
+      publishClient.getPublicVideo(published.publicVideoId ?? ''),
+    ).resolves.toBeUndefined();
+  });
+
+  it('keeps unlisted published videos out of discovery but resolvable by public id', async () => {
+    const client = new MockVideoApiClient({ delayMs: 0, videos: [] });
+    const draft = await client.createDraft({ title: 'Link only', visibility: 'unlisted' });
+    const body = new Blob(['bytes'], { type: 'video/mp4' });
+    await client.uploadDraftMedia(draft.id, {
+      name: 'clip.mp4',
+      size: body.size,
+      type: 'video/mp4',
+      body,
+    });
+    const published = await client.publishVideo(draft.id);
+    const discovery = await client.listPublicVideos();
+    expect(discovery.items.map((item) => item.publicVideoId)).not.toContain(
+      published.publicVideoId,
+    );
+    await expect(client.getPublicVideo(published.publicVideoId ?? '')).resolves.toMatchObject({
+      visibility: 'unlisted',
+      status: 'published',
+    });
+  });
+
   it('updates profile preferences and connected accounts', async () => {
     const profile = await client.updateUserProfile('user-demo', {
       displayName: 'Demo Creator',

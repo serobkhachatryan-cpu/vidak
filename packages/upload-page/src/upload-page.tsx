@@ -73,9 +73,14 @@ export interface UploadPageProps {
   customThumbnailUrl?: string;
   onCustomThumbnailSelect?: (file: File) => void;
   isPublishing?: boolean;
+  isSavingDraft?: boolean;
+  isUnpublishing?: boolean;
   publishError?: string;
   publishedVideo?: Video;
+  shareUrl?: string;
   onPublish?: () => void;
+  onSaveDraft?: () => void;
+  onUnpublish?: () => void;
   onWatch?: (video: Video) => void;
   onUploadAnother?: () => void;
   onContinue?: () => void;
@@ -129,9 +134,14 @@ export function UploadPage({
   customThumbnailUrl,
   onCustomThumbnailSelect,
   isPublishing,
+  isSavingDraft,
+  isUnpublishing,
   publishError,
   publishedVideo,
+  shareUrl,
   onPublish,
+  onSaveDraft,
+  onUnpublish,
   onWatch,
   onUploadAnother,
   onContinue,
@@ -239,10 +249,16 @@ export function UploadPage({
           visibility={draft.visibility}
           {...(draft.thumbnailUrl ? { thumbnailUrl: draft.thumbnailUrl } : {})}
           {...(fileName !== undefined ? { fileName } : {})}
+          {...(mediaAsset !== undefined ? { mediaAsset } : {})}
           {...(isPublishing !== undefined ? { isPublishing } : {})}
+          {...(isSavingDraft !== undefined ? { isSavingDraft } : {})}
+          {...(isUnpublishing !== undefined ? { isUnpublishing } : {})}
           {...(publishError !== undefined ? { publishError } : {})}
           {...(publishedVideo !== undefined ? { publishedVideo } : {})}
+          {...(shareUrl !== undefined ? { shareUrl } : {})}
           {...(onPublish ? { onPublish } : {})}
+          {...(onSaveDraft ? { onSaveDraft } : {})}
+          {...(onUnpublish ? { onUnpublish } : {})}
           {...(onWatch ? { onWatch } : {})}
           {...(onUploadAnother ? { onUploadAnother } : {})}
         />

@@ -17,7 +17,7 @@ const mediaAsset: DraftMediaAsset = {
   updatedAt: '2026-08-04T10:00:00.000Z',
 };
 
-const publishedVideo: Video = {
+const publishedPublicVideo: Video = {
   id: 'video-new',
   channelId: 'channel-studio',
   title: 'Building a practical design system',
@@ -26,6 +26,7 @@ const publishedVideo: Video = {
   durationSeconds: 742,
   status: 'published',
   visibility: 'public',
+  publicVideoId: 'pub_design-system',
   category: 'education',
   language: 'en',
   publishedAt: '2026-08-04T10:00:00.000Z',
@@ -35,6 +36,17 @@ const publishedVideo: Video = {
   likeCount: 0,
   commentCount: 0,
   tags: ['design systems'],
+};
+
+const draftDetails = {
+  ...emptyUploadDraft(),
+  title: 'Caching server state',
+  description: 'Reliable client-side fetching',
+  category: 'education' as const,
+  language: 'en' as const,
+  visibility: 'unlisted' as const,
+  thumbnailUrl: 'https://example.com/thumb.jpg',
+  tags: ['react'],
 };
 
 describe('UploadPage', () => {
@@ -84,36 +96,73 @@ describe('UploadPage', () => {
     expect(markup).toContain('demo.mp4');
   });
 
-  it('renders visibility options and publish confirmation summary', () => {
-    const draft = {
-      ...emptyUploadDraft(),
-      title: 'Caching server state',
-      description: 'Reliable client-side fetching',
-      category: 'education' as const,
-      language: 'en' as const,
-      visibility: 'unlisted' as const,
-      thumbnailUrl: 'https://example.com/thumb.jpg',
-      tags: ['react'],
-    };
-    const visibility = renderToStaticMarkup(<UploadPage step="visibility" draft={draft} />);
+  it('renders draft review without ready media and disables publishing', () => {
+    const visibility = renderToStaticMarkup(<UploadPage step="visibility" draft={draftDetails} />);
     expect(visibility).toContain('role="radiogroup"');
     expect(visibility).toContain('Public');
     expect(visibility).toContain('Unlisted');
     expect(visibility).toContain('Private');
 
     const publish = renderToStaticMarkup(
-      <UploadPage step="publish" draft={draft} fileName="cache.mp4" />,
+      <UploadPage
+        step="publish"
+        draft={draftDetails}
+        fileName="cache.mp4"
+        onSaveDraft={() => undefined}
+        onPublish={() => undefined}
+      />,
     );
     expect(publish).toContain('Caching server state');
     expect(publish).toContain('Save draft');
-    expect(publish).toContain('Publishing is not available yet');
+    expect(publish).toContain('Publish');
+    expect(publish).toContain('Publishing is disabled until this draft has a ready media asset');
     expect(publish).toContain('Unlisted');
+    expect(publish).toContain('disabled');
+  });
+
+  it('renders a publishable review when ready media is attached', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="publish"
+        draft={{ ...draftDetails, visibility: 'public' }}
+        fileName="cache.mp4"
+        mediaAsset={mediaAsset}
+        onPublish={() => undefined}
+        onSaveDraft={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Media ready');
+    expect(markup).toContain('Publish');
+    expect(markup).toContain('Save draft');
+    expect(markup).not.toContain('Publishing is disabled until this draft has a ready media asset');
+  });
+
+  it('renders publishing validation and route errors', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="publish"
+        draft={draftDetails}
+        mediaAsset={mediaAsset}
+        publishError="Publish requires at least one ready media asset."
+        onPublish={() => undefined}
+      />,
+    );
+    expect(markup).toContain('role="alert"');
+    expect(markup).toContain('Publish requires at least one ready media asset.');
   });
 
   it('renders the draft saved success state', () => {
-    const { publishedAt: _publishedAt, ...draftVideoBase } = publishedVideo;
+    const {
+      publicVideoId: _publicVideoId,
+      publishedAt: _publishedAt,
+      ...draftBase
+    } = publishedPublicVideo;
+    void _publicVideoId;
     void _publishedAt;
-    const draftVideo: Video = { ...draftVideoBase, status: 'draft' };
+    const draftVideo: Video = {
+      ...draftBase,
+      status: 'draft',
+    };
     const markup = renderToStaticMarkup(
       <UploadPage
         step="publish"
@@ -131,8 +180,66 @@ describe('UploadPage', () => {
     expect(markup).toContain('not published');
     expect(markup).toContain('Upload another');
     expect(markup).not.toContain('Watch video');
+    expect(markup).not.toContain('data-testid="share-link"');
     expect(markup).toContain('aria-label="Publish confirmation"');
-    expect(markup).not.toContain('aria-label="Upload steps"');
+  });
+
+  it('renders published public share link without draft ids or storage keys', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="publish"
+        draft={{ ...emptyUploadDraft(), title: publishedPublicVideo.title, visibility: 'public' }}
+        publishedVideo={publishedPublicVideo}
+        shareUrl="https://vidak.example/watch/pub_design-system"
+        mediaAsset={mediaAsset}
+        onWatch={() => undefined}
+        onUnpublish={() => undefined}
+        onUploadAnother={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Your video is live');
+    expect(markup).toContain('Published · Public');
+    expect(markup).toContain('data-testid="share-link"');
+    expect(markup).toContain('/watch/pub_design-system');
+    expect(markup).toContain('Watch video');
+    expect(markup).toContain('Unpublish');
+    expect(markup).not.toContain(publishedPublicVideo.id);
+    expect(markup).not.toMatch(/storageKey|media_/i);
+  });
+
+  it('renders published unlisted share link and keeps private videos unshareable', () => {
+    const unlisted = renderToStaticMarkup(
+      <UploadPage
+        step="publish"
+        draft={{ ...emptyUploadDraft(), visibility: 'unlisted' }}
+        publishedVideo={{
+          ...publishedPublicVideo,
+          visibility: 'unlisted',
+          publicVideoId: 'pub_unlisted',
+        }}
+        shareUrl="https://vidak.example/watch/pub_unlisted"
+        onUnpublish={() => undefined}
+      />,
+    );
+    expect(unlisted).toContain('Published · Unlisted');
+    expect(unlisted).toContain('/watch/pub_unlisted');
+
+    const privatePublished = renderToStaticMarkup(
+      <UploadPage
+        step="publish"
+        draft={{ ...emptyUploadDraft(), visibility: 'private' }}
+        publishedVideo={{
+          ...publishedPublicVideo,
+          visibility: 'private',
+          publicVideoId: 'pub_private',
+        }}
+        onUnpublish={() => undefined}
+      />,
+    );
+    expect(privatePublished).toContain('Published · Private');
+    expect(privatePublished).toContain('not shareable');
+    expect(privatePublished).not.toContain('data-testid="share-link"');
+    expect(privatePublished).not.toContain('/watch/pub_private');
   });
 
   it('renders cancelled upload recovery actions', () => {

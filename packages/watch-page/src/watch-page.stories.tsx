@@ -68,8 +68,26 @@ export const Empty: Story = {
   args: { state: 'empty' },
 };
 
+export const UnavailableVideo: Story = {
+  args: { state: 'empty' },
+};
+
 export const ErrorState: Story = {
   args: { state: 'error' },
+};
+
+export const PublishedPublicPlayer: Story = {
+  args: {
+    video: { ...video, publicVideoId: 'pub_design-system', visibility: 'public' },
+    mediaSrc: '/api/videos/public/pub_design-system/media/asset-design/content',
+  },
+};
+
+export const PublishedUnlistedPlayer: Story = {
+  args: {
+    video: { ...video, publicVideoId: 'pub_unlisted', visibility: 'unlisted' },
+    mediaSrc: '/api/videos/public/pub_unlisted/media/asset-design/content',
+  },
 };
 
 export const Dark: Story = {

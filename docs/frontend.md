@@ -83,3 +83,27 @@ pnpm test:e2e
 `pnpm lint` runs Biome across the repository. Unit tests run in Vitest with
 Node as the default environment, while end-to-end tests run in Chromium through
 Playwright. Storybook can be built with `pnpm storybook:build`.
+
+## Public video navigation and share links
+
+Browser-facing watch links for published videos use only the opaque
+`publicVideoId` (`pub_…`):
+
+| Surface | Path |
+| --- | --- |
+| Home discovery cards | `/watch/{publicVideoId}` |
+| Creator share link (public / unlisted) | `{origin}/watch/{publicVideoId}` |
+| Public media stream (player `src`) | `/api/videos/public/{publicVideoId}/media/{assetId}/content` |
+
+Rules:
+
+- Share links never include storage keys, filesystem paths, or internal draft
+  video ids.
+- Home discovery lists only `published` + `public` videos from
+  `GET /api/videos/public`.
+- Unlisted published videos are reachable by share link but do not appear in
+  discovery.
+- Drafts and private videos are not rendered through public watch UI; the watch
+  page shows an unavailable state instead.
+- Development auth (`AUTH_PROVIDER=dev`) keeps the in-memory mock client, which
+  mirrors the same public id and visibility rules for local browsing.

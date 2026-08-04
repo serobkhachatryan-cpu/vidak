@@ -79,10 +79,25 @@ describe('WatchPage', () => {
     expect(renderToStaticMarkup(<WatchPage state="loading" />)).toContain(
       'aria-label="Loading video"',
     );
-    expect(renderToStaticMarkup(<WatchPage state="empty" />)).toContain('Video unavailable');
+    const unavailable = renderToStaticMarkup(<WatchPage state="empty" />);
+    expect(unavailable).toContain('Video unavailable');
+    expect(unavailable).toContain('unpublished, private, or could not be found');
     expect(renderToStaticMarkup(<WatchPage state="error" onRetry={() => undefined} />)).toContain(
       'Could not load this video',
     );
+  });
+
+  it('streams public media through the public media content path when provided', () => {
+    const markup = renderToStaticMarkup(
+      <WatchPage
+        video={{ ...video, publicVideoId: 'pub_design-system', visibility: 'public' }}
+        channel={channel}
+        mediaSrc="/api/videos/public/pub_design-system/media/asset-1/content"
+      />,
+    );
+    expect(markup).toContain('data-testid="public-video-player"');
+    expect(markup).toContain('/api/videos/public/pub_design-system/media/asset-1/content');
+    expect(markup).not.toMatch(/storageKey|drafts\//);
   });
 
   it('supports dark mode and subscribed actions', () => {

@@ -1,5 +1,6 @@
 'use client';
 
+import { publicVideoWatchPath } from '@w3ds/api-client';
 import { UploadPageData } from '@w3ds/upload-page';
 import { useRouter } from 'next/navigation';
 import { ApplicationShell } from '../../components/application-shell';
@@ -17,7 +18,11 @@ export function UploadPageFeature() {
         client={videoApiClient}
         channelId={uploadChannelId}
         onWatchVideo={(video) => {
-          router.push(`/watch/${video.id}`);
+          if (video.publicVideoId) {
+            router.push(publicVideoWatchPath(video.publicVideoId));
+            return;
+          }
+          router.push(`/watch/${encodeURIComponent(video.id)}`);
         }}
       />
     </ApplicationShell>
