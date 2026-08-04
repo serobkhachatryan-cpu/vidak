@@ -29,6 +29,28 @@ describe('MockVideoApiClient', () => {
     expect(page.items.map((comment) => comment.id)).toEqual(['comment-1', 'comment-3']);
   });
 
+  it('sorts comments and loads nested replies independently', async () => {
+    const newest = await client.listComments('video-design-system', { sort: 'newest' });
+    const replies = await client.listComments('video-design-system', { parentId: 'comment-1' });
+
+    expect(newest.items.map((comment) => comment.id)).toEqual(['comment-3', 'comment-1']);
+    expect(replies.items.map((comment) => comment.id)).toEqual(['comment-2']);
+  });
+
+  it('creates replies and records comment reactions', async () => {
+    const reply = await client.createComment('video-design-system', {
+      parentId: 'comment-1',
+      body: 'Thanks for the walkthrough.',
+    });
+    const reacted = await client.reactToComment('comment-1', 'like');
+    const parent = await client.listComments('video-design-system');
+
+    expect(reply.parentId).toBe('comment-1');
+    expect(parent.items[0]?.replyCount).toBe(2);
+    expect(reacted.viewerReaction).toBe('like');
+    expect(reacted.likeCount).toBe(43);
+  });
+
   it('returns undefined for an unknown resource', async () => {
     await expect(client.getVideo('missing-video')).resolves.toBeUndefined();
   });

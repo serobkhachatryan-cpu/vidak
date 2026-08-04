@@ -1,5 +1,6 @@
 export {
   useChannel,
+  useCommentReplies,
   useInfiniteVideoComments,
   useInfiniteVideos,
   usePlaylist,

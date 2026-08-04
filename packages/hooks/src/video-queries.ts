@@ -3,6 +3,9 @@ import { getNextPageParam, type VideoApiClient } from '@w3ds/api-client';
 import type {
   Channel,
   ChannelId,
+  Comment,
+  CommentId,
+  CommentListFilters,
   CursorPage,
   PaginationParams,
   Playlist,
@@ -21,7 +24,8 @@ export const videoQueryKeys = {
   channel: (id: ChannelId) => [...videoQueryKeys.all, 'channel', id] as const,
   playlist: (id: PlaylistId) => [...videoQueryKeys.all, 'playlist', id] as const,
   userProfile: (id: UserProfileId) => [...videoQueryKeys.all, 'profile', id] as const,
-  comments: (videoId: VideoId) => [...videoQueryKeys.all, 'comments', videoId] as const,
+  comments: (videoId: VideoId, filters: CommentListFilters = {}) =>
+    [...videoQueryKeys.all, 'comments', videoId, filters] as const,
 };
 
 export function useVideo(
@@ -102,15 +106,34 @@ export function useUserProfile(
   });
 }
 
-export function useInfiniteVideoComments(client: VideoApiClient, videoId: VideoId, pageSize = 20) {
+export function useInfiniteVideoComments(
+  client: VideoApiClient,
+  videoId: VideoId,
+  filters: CommentListFilters = {},
+  pageSize = 20,
+) {
   return useInfiniteQuery({
-    queryKey: videoQueryKeys.comments(videoId),
+    queryKey: videoQueryKeys.comments(videoId, filters),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
-      client.listComments(videoId, {
-        ...(pageParam ? { cursor: pageParam } : {}),
-        limit: pageSize,
-      }),
+      client.listComments(
+        videoId,
+        filters,
+        { ...(pageParam ? { cursor: pageParam } : {}), limit: pageSize },
+      ),
     getNextPageParam,
+  });
+}
+
+export function useCommentReplies(
+  client: VideoApiClient,
+  videoId: VideoId,
+  parentId: CommentId,
+  options: Omit<UseQueryOptions<CursorPage<Comment>>, 'queryKey' | 'queryFn'> = {},
+) {
+  return useQuery({
+    queryKey: [...videoQueryKeys.comments(videoId, { parentId }), 'replies'] as const,
+    queryFn: () => client.listComments(videoId, { parentId }),
+    ...options,
   });
 }

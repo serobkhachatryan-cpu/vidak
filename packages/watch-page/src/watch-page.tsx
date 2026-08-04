@@ -1,13 +1,29 @@
 'use client';
 
 import type { VideoApiClient } from '@w3ds/api-client';
-import { useChannel, useVideo, useVideos } from '@w3ds/hooks';
-import type { Channel, Video, VideoId } from '@w3ds/types';
+import {
+  useChannel,
+  useInfiniteVideoComments,
+  useVideo,
+  useVideos,
+  videoQueryKeys,
+} from '@w3ds/hooks';
+import type {
+  Channel,
+  Comment,
+  CommentId,
+  CommentReaction,
+  CommentRichText,
+  CommentSort,
+  Video,
+  VideoId,
+} from '@w3ds/types';
 import {
   AppShell,
   type AppShellProps,
   Avatar,
   Button,
+  Comments,
   EmptyState,
   ErrorState,
   Heading,
@@ -18,7 +34,8 @@ import {
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
-import type { ReactNode } from 'react';
+import { useQueries } from '@tanstack/react-query';
+import { useMemo, useState, type ReactNode } from 'react';
 
 const cx = (...classes: Array<string | false | null | undefined>) =>
   classes.filter(Boolean).join(' ');
@@ -53,6 +70,13 @@ export interface WatchPageActions {
   onDislike?: () => void;
   onShare?: () => void;
   onSave?: () => void;
+  onComment?: (body: string, richText: readonly CommentRichText[]) => void | Promise<void>;
+  onReply?: (
+    comment: Comment,
+    body: string,
+    richText: readonly CommentRichText[],
+  ) => void | Promise<void>;
+  onCommentReaction?: (comment: Comment, reaction: CommentReaction | undefined) => void;
 }
 
 export interface WatchPageProps {
@@ -66,6 +90,22 @@ export interface WatchPageProps {
   onRetry?: () => void;
   actions?: WatchPageActions;
   subscribed?: boolean;
+  comments?: readonly Comment[];
+  commentAuthors?: Readonly<
+    Record<
+      string,
+      { displayName: string; handle: string; avatarUrl?: string; isVerified: boolean } | undefined
+    >
+  >;
+  commentReplies?: Readonly<Record<CommentId, readonly Comment[] | undefined>>;
+  commentsState?: 'ready' | 'loading' | 'empty' | 'error';
+  commentSort?: CommentSort;
+  onCommentSortChange?: (sort: CommentSort) => void;
+  onLoadMoreComments?: () => void;
+  hasMoreComments?: boolean;
+  isFetchingMoreComments?: boolean;
+  onLoadCommentReplies?: (comment: Comment) => void;
+  onRetryComments?: () => void;
   shell?: Omit<AppShellProps, 'children'>;
   theme?: 'light' | 'dark';
   className?: string;
@@ -176,6 +216,17 @@ function WatchContent({
   relatedChannels,
   actions,
   subscribed = false,
+  comments = [],
+  commentAuthors,
+  commentReplies,
+  commentsState = 'ready',
+  commentSort,
+  onCommentSortChange,
+  onLoadMoreComments,
+  hasMoreComments,
+  isFetchingMoreComments,
+  onLoadCommentReplies,
+  onRetryComments,
 }: Required<Pick<WatchPageProps, 'video'>> &
   Omit<
     WatchPageProps,
@@ -277,6 +328,23 @@ function WatchContent({
             </ul>
           )}
         </section>
+        <Comments
+          comments={comments}
+          authors={commentAuthors}
+          repliesByParent={commentReplies}
+          state={commentsState}
+          totalCount={video.commentCount}
+          sort={commentSort ?? 'top'}
+          onSortChange={onCommentSortChange}
+          onSubmit={actions?.onComment}
+          onReply={actions?.onReply}
+          onReaction={actions?.onCommentReaction}
+          onLoadReplies={onLoadCommentReplies}
+          onRetry={onRetryComments}
+          onLoadMore={onLoadMoreComments}
+          hasNextPage={hasMoreComments}
+          isFetchingNextPage={isFetchingMoreComments}
+        />
       </div>
       <RelatedVideos videos={relatedVideos} channels={relatedChannels} />
     </div>
@@ -294,6 +362,17 @@ export function WatchPage({
   onRetry,
   actions,
   subscribed,
+  comments,
+  commentAuthors,
+  commentReplies,
+  commentsState,
+  commentSort,
+  onCommentSortChange,
+  onLoadMoreComments,
+  hasMoreComments,
+  isFetchingMoreComments,
+  onLoadCommentReplies,
+  onRetryComments,
   shell,
   theme,
   className,
@@ -321,6 +400,17 @@ export function WatchPage({
         {...(relatedChannels ? { relatedChannels } : {})}
         {...(actions ? { actions } : {})}
         {...(subscribed === undefined ? {} : { subscribed })}
+        {...(comments ? { comments } : {})}
+        {...(commentAuthors ? { commentAuthors } : {})}
+        {...(commentReplies ? { commentReplies } : {})}
+        {...(commentsState ? { commentsState } : {})}
+        {...(commentSort ? { commentSort } : {})}
+        {...(onCommentSortChange ? { onCommentSortChange } : {})}
+        {...(onLoadMoreComments ? { onLoadMoreComments } : {})}
+        {...(hasMoreComments === undefined ? {} : { hasMoreComments })}
+        {...(isFetchingMoreComments === undefined ? {} : { isFetchingMoreComments })}
+        {...(onLoadCommentReplies ? { onLoadCommentReplies } : {})}
+        {...(onRetryComments ? { onRetryComments } : {})}
       />
     );
 
@@ -337,6 +427,45 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
   const videoQuery = useVideo(client, videoId);
   const video = videoQuery.data;
   const channelQuery = useChannel(client, video?.channelId ?? '', { enabled: Boolean(video) });
+  const [commentSort, setCommentSort] = useState<CommentSort>('top');
+  const [expandedCommentIds, setExpandedCommentIds] = useState<readonly CommentId[]>([]);
+  const commentsQuery = useInfiniteVideoComments(client, videoId, { sort: commentSort }, 10);
+  const comments = commentsQuery.data?.pages.flatMap((page) => page.items) ?? [];
+  const replyQueries = useQueries({
+    queries: expandedCommentIds.map((parentId) => ({
+      queryKey: videoQueryKeys.comments(videoId, { parentId }),
+      queryFn: () => client.listComments(videoId, { parentId }),
+    })),
+  });
+  const replies = replyQueries.flatMap((query) => query.data?.items ?? []);
+  const authorIds = useMemo(
+    () => Array.from(new Set([...comments, ...replies].map((comment) => comment.authorId))),
+    [comments, replies],
+  );
+  const authorQueries = useQueries({
+    queries: authorIds.map((id) => ({
+      queryKey: videoQueryKeys.userProfile(id),
+      queryFn: () => client.getUserProfile(id),
+    })),
+  });
+  const commentAuthors = useMemo(
+    () =>
+      Object.fromEntries(
+        authorQueries.flatMap((query, index) => {
+          const author = query.data;
+          const id = authorIds[index];
+          return author && id ? [[id, author] as const] : [];
+        }),
+      ),
+    [authorIds, authorQueries],
+  );
+  const commentReplies = useMemo(
+    () =>
+      Object.fromEntries(
+        expandedCommentIds.map((parentId, index) => [parentId, replyQueries[index]?.data?.items ?? []]),
+      ),
+    [expandedCommentIds, replyQueries],
+  );
   const relatedFilters = video
     ? { channelId: video.channelId, status: 'published' as const, visibility: 'public' as const }
     : { status: 'published' as const, visibility: 'public' as const };
@@ -357,6 +486,43 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
       {...(channelQuery.data ? { channel: channelQuery.data } : {})}
       relatedVideos={relatedVideos}
       relatedChannels={channelQuery.data ? { [channelQuery.data.id]: channelQuery.data } : {}}
+      comments={comments}
+      commentAuthors={commentAuthors}
+      commentReplies={commentReplies}
+      commentSort={commentSort}
+      onCommentSortChange={setCommentSort}
+      hasMoreComments={commentsQuery.hasNextPage}
+      isFetchingMoreComments={commentsQuery.isFetchingNextPage}
+      onLoadMoreComments={() => void commentsQuery.fetchNextPage()}
+      onLoadCommentReplies={(comment) =>
+        setExpandedCommentIds((ids) => (ids.includes(comment.id) ? ids : [...ids, comment.id]))
+      }
+      onRetryComments={() => void commentsQuery.refetch()}
+      actions={{
+        ...props.actions,
+        onComment: async (body, richText) => {
+          await client.createComment(videoId, { body, richText });
+          await commentsQuery.refetch();
+          await props.actions?.onComment?.(body, richText);
+        },
+        onReply: async (comment, body, richText) => {
+          await client.createComment(videoId, { body, richText, parentId: comment.id });
+          await props.actions?.onReply?.(comment, body, richText);
+        },
+        onCommentReaction: (comment, reaction) => {
+          void client.reactToComment(comment.id, reaction);
+          props.actions?.onCommentReaction?.(comment, reaction);
+        },
+      }}
+      commentsState={
+        commentsQuery.isPending
+          ? 'loading'
+          : commentsQuery.error
+            ? 'error'
+            : comments.length > 0
+              ? 'ready'
+              : 'empty'
+      }
       state={
         videoQuery.isPending ? 'loading' : videoQuery.error ? 'error' : video ? 'ready' : 'empty'
       }

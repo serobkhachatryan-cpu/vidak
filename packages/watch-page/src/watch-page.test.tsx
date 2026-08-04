@@ -1,4 +1,4 @@
-import type { Channel, Video } from '@w3ds/types';
+import type { Channel, Comment, Video } from '@w3ds/types';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { WatchPage } from './watch-page';
@@ -31,12 +31,30 @@ const video: Video = {
   tags: ['design systems', 'frontend'],
 };
 
+const comment: Comment = {
+  id: 'comment-1',
+  videoId: video.id,
+  authorId: 'user-ada',
+  body: 'The component examples make the system easier to understand.',
+  createdAt: '2026-07-14T13:00:00.000Z',
+  likeCount: 42,
+  replyCount: 0,
+};
+
 describe('WatchPage', () => {
   it('renders the accessible watch experience and related videos', () => {
     const markup = renderToStaticMarkup(
       <WatchPage
         video={video}
         channel={channel}
+        comments={[comment]}
+        commentAuthors={{
+          [comment.authorId]: {
+            displayName: 'Ada Lovelace',
+            handle: 'ada-lovelace',
+            isVerified: true,
+          },
+        }}
         relatedVideos={[{ ...video, id: 'related-video', title: 'A related video' }]}
         relatedChannels={{ [channel.id]: channel }}
       />,
@@ -51,6 +69,8 @@ describe('WatchPage', () => {
     expect(markup).toContain('aria-label="Video tags"');
     expect(markup).toContain('Up next');
     expect(markup).toContain('A related video');
+    expect(markup).toContain('Comments (3)');
+    expect(markup).toContain('The component examples make the system easier to understand.');
     expect(markup).toContain('xl:grid-cols-[minmax(0,1fr)_22rem]');
     expect(markup).toContain('sm:grid-cols-2 xl:grid-cols-1');
   });

@@ -2,6 +2,10 @@ import type {
   Channel,
   ChannelId,
   Comment,
+  CommentId,
+  CommentListFilters,
+  CommentReaction,
+  CreateCommentInput,
   CursorPage,
   PaginationParams,
   Playlist,
@@ -19,5 +23,11 @@ export interface VideoApiClient {
   getChannel(id: ChannelId): Promise<Channel | undefined>;
   getPlaylist(id: PlaylistId): Promise<Playlist | undefined>;
   getUserProfile(id: UserProfileId): Promise<UserProfile | undefined>;
-  listComments(videoId: VideoId, pagination?: PaginationParams): Promise<CursorPage<Comment>>;
+  listComments(
+    videoId: VideoId,
+    filters?: CommentListFilters,
+    pagination?: PaginationParams,
+  ): Promise<CursorPage<Comment>>;
+  createComment(videoId: VideoId, input: CreateCommentInput): Promise<Comment>;
+  reactToComment(id: CommentId, reaction: CommentReaction | undefined): Promise<Comment>;
 }

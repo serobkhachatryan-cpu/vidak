@@ -76,3 +76,12 @@ export {
 } from './primitives';
 export type { VideoCardProps, VideoCardSkeletonProps } from './video-card';
 export { VideoCard, VideoCardSkeleton } from './video-card';
+export type {
+  CommentAuthor,
+  CommentEditorProps,
+  CommentItemProps,
+  CommentListProps,
+  CommentsProps,
+  CommentsState,
+} from './comments';
+export { CommentEditor, CommentItem, CommentList, CommentListSkeleton, Comments } from './comments';

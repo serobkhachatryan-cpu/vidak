@@ -2,6 +2,10 @@ import type {
   Channel,
   ChannelId,
   Comment,
+  CommentId,
+  CommentListFilters,
+  CommentReaction,
+  CreateCommentInput,
   CursorPage,
   PaginationParams,
   Playlist,
@@ -26,6 +30,7 @@ export interface MockVideoApiClientOptions {
   delayMs?: number;
   channels?: readonly Channel[];
   comments?: readonly Comment[];
+  currentUserId?: UserProfileId;
   playlists?: readonly Playlist[];
   userProfiles?: readonly UserProfile[];
   videos?: readonly Video[];
@@ -34,7 +39,8 @@ export interface MockVideoApiClientOptions {
 export class MockVideoApiClient implements VideoApiClient {
   private readonly delayMs: number;
   private readonly channels: readonly Channel[];
-  private readonly comments: readonly Comment[];
+  private comments: Comment[];
+  private readonly currentUserId: UserProfileId;
   private readonly playlists: readonly Playlist[];
   private readonly userProfiles: readonly UserProfile[];
   private readonly videos: readonly Video[];
@@ -42,7 +48,8 @@ export class MockVideoApiClient implements VideoApiClient {
   constructor(options: MockVideoApiClientOptions = {}) {
     this.delayMs = options.delayMs ?? 0;
     this.channels = options.channels ?? mockChannels;
-    this.comments = options.comments ?? mockComments;
+    this.comments = [...(options.comments ?? mockComments)];
+    this.currentUserId = options.currentUserId ?? 'user-grace';
     this.playlists = options.playlists ?? mockPlaylists;
     this.userProfiles = options.userProfiles ?? mockUserProfiles;
     this.videos = options.videos ?? mockVideos;
@@ -78,13 +85,67 @@ export class MockVideoApiClient implements VideoApiClient {
 
   async listComments(
     videoId: VideoId,
+    filters: CommentListFilters = {},
     pagination: PaginationParams = {},
   ): Promise<CursorPage<Comment>> {
     await this.wait();
-    return createCursorPage(
-      this.comments.filter((comment) => comment.videoId === videoId && !comment.parentId),
-      pagination,
+    const comments = this.comments
+      .filter(
+        (comment) =>
+          comment.videoId === videoId &&
+          (filters.parentId === undefined ? !comment.parentId : comment.parentId === filters.parentId),
+      )
+      .sort((first, second) => {
+        if (filters.sort === 'newest') {
+          return new Date(second.createdAt).getTime() - new Date(first.createdAt).getTime();
+        }
+        return second.likeCount - first.likeCount;
+      });
+    return createCursorPage(comments, pagination);
+  }
+
+  async createComment(videoId: VideoId, input: CreateCommentInput): Promise<Comment> {
+    await this.wait();
+    const comment: Comment = {
+      id: `comment-${this.comments.length + 1}`,
+      videoId,
+      authorId: this.currentUserId,
+      ...(input.parentId ? { parentId: input.parentId } : {}),
+      body: input.body,
+      ...(input.richText ? { richText: input.richText } : {}),
+      createdAt: new Date().toISOString(),
+      likeCount: 0,
+      dislikeCount: 0,
+      replyCount: 0,
+    };
+    this.comments = [...this.comments, comment].map((item) =>
+      item.id === input.parentId ? { ...item, replyCount: item.replyCount + 1 } : item,
     );
+    return comment;
+  }
+
+  async reactToComment(
+    id: CommentId,
+    reaction: CommentReaction | undefined,
+  ): Promise<Comment> {
+    await this.wait();
+    const comment = this.comments.find((item) => item.id === id);
+    if (!comment) throw new Error(`Comment ${id} was not found`);
+    const previousReaction = comment.viewerReaction;
+    const next = {
+      ...comment,
+      viewerReaction: reaction,
+      likeCount:
+        comment.likeCount +
+        (reaction === 'like' ? 1 : 0) -
+        (previousReaction === 'like' ? 1 : 0),
+      dislikeCount:
+        (comment.dislikeCount ?? 0) +
+        (reaction === 'dislike' ? 1 : 0) -
+        (previousReaction === 'dislike' ? 1 : 0),
+    };
+    this.comments = this.comments.map((item) => (item.id === id ? next : item));
+    return next;
   }
 
   private filterVideos(filters: VideoListFilters): readonly Video[] {
