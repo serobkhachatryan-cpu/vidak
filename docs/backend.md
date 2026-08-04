@@ -5,12 +5,13 @@
 Platform backend capabilities are hosted as Next.js route handlers in
 `apps/web`. W3DS authentication persists platform users, login offers, and
 sessions in PostgreSQL through Drizzle ORM. Authenticated creators can also
-persist local creator channels, video draft metadata, and private draft media
-assets on that store. Protected media transfer routes stream uploads and
-downloads through private storage; public playback URLs are not exposed yet.
+persist local creator channels, video draft/published metadata, and private
+media assets on that store. The durable video model supports an explicit
+draft ↔ published lifecycle with visibility and publishing metadata; public
+discovery routes and public playback URLs are not exposed yet.
 
 There is still no queue worker, video-processing pipeline, eVault sync, ACL
-layer, or public publish path.
+layer, or public discovery/playback path.
 
 ```mermaid
 flowchart LR
@@ -99,8 +100,9 @@ local creator channel. Product responses reuse the existing `Video` and
    creator channel for the authenticated platform user (`owner_id` unique).
 4. Drafts are scoped to that owner/channel. Cross-user reads, updates, and
    deletes return `404` (`not_found`) so resource existence is not disclosed.
-5. Draft rows always use product `status: "draft"`. Publishing is intentionally
-   unavailable in this milestone.
+5. Draft routes only operate on `status: "draft"` rows. Publish/unpublish is a
+   separate store/domain lifecycle (see below); public HTTP routes for that
+   lifecycle are not exposed in this phase.
 
 `CreatorVideoService` depends on a `CreatorVideoStore` interface:
 
@@ -129,12 +131,83 @@ Draft metadata routes do **not** implement:
 - Public playback URLs or `w3ds://file` protocol references
 - Transcoding / processing pipelines
 - eVault writes, ontology mapping, ACLs, or Awareness
-- Marking a draft as published / public feed ingestion
+- Public discovery / watch routes keyed by `publicVideoId`
+- Creator UI publish controls or Next.js publish HTTP endpoints
 - Changes to unrelated watch, channel, search, or public feed behavior
 - Changes to the development provider's mock `createVideo` / `publishVideo`
   semantics
 
 Private media bytes are transferred through the dedicated media routes below.
+
+## Video publishing lifecycle (store / domain)
+
+The persisted `videos` model has an explicit product lifecycle and a separate
+visibility field. Publishing metadata is durable; public routes that would
+consume it are intentionally deferred.
+
+### Lifecycle states
+
+| `status` | Meaning |
+| --- | --- |
+| `draft` | Editable owner-only working copy. Draft CRUD and media upload attach here. |
+| `published` | Owner has published the video. Draft CRUD no longer targets the row; media rows and ownership remain intact. |
+
+`processing` and `archived` remain in the product `VideoStatus` union for later
+phases and are rejected by publish/unpublish transitions today
+(`invalid_transition` / 409).
+
+### Visibility (independent of lifecycle)
+
+Reuse the existing `visibility` column — do not introduce a second competing
+field:
+
+| `visibility` | Meaning |
+| --- | --- |
+| `private` | Owner-intended private access only. |
+| `unlisted` | Reachable by opaque link later; not listed in public discovery. |
+| `public` | Intended for public discovery once public routes exist. |
+
+Publish and unpublish **do not** change visibility. A published video may remain
+`private` or `unlisted`.
+
+### Publishing metadata
+
+| Field | Meaning |
+| --- | --- |
+| `published_at` / `publishedAt` | Timestamp of the current publication. Set on transition into `published`; cleared on unpublish. |
+| `public_video_id` / `publicVideoId` | Opaque, stable public identifier (`pub_<id>`). Assigned on first publish; unique when set; **preserved** across unpublish/republish for later public routes. |
+
+### Store / domain transitions
+
+`CreatorVideoStore` / `CreatorVideoService` expose:
+
+- `publishOwnedVideo` / `publishVideo`
+- `unpublishOwnedVideo` / `unpublishVideo`
+
+Rules:
+
+1. **Ownership** — only the owning platform user may publish or unpublish.
+   Missing or cross-user ids return `not_found` / 404 (no existence disclosure).
+2. **Ready media precondition** — publish succeeds only when the video has at
+   least one attached `media_assets` row with `upload_state = ready`. Otherwise
+   `precondition_failed` / 409. The PostgreSQL path checks this inside the same
+   transaction as the status update.
+3. **Publish** (`draft` → `published`) — sets `status`, `publishedAt` (if unset
+   for this publication), and `publicVideoId` (if never assigned). Preserves
+   ownership, `createdAt`, visibility, tags/metadata, and media links.
+4. **Unpublish** (`published` → `draft`) — sets `status` back to `draft` and
+   clears `publishedAt`. Preserves `publicVideoId`, ownership, visibility, and
+   media integrity.
+5. **Idempotency** —
+   - Publish on an already-published owned video returns the existing row
+     unchanged (same `publishedAt` and `publicVideoId`).
+   - Unpublish on an already-draft owned video returns the existing row
+     unchanged.
+6. **Integrity** — publish/unpublish never reassign `owner_id` / `channel_id`,
+   never rewrite media asset rows, and never invent a second visibility field.
+
+No Next.js publish/unpublish route, public watch path, or feed ingestion is
+wired in this phase.
 
 ## Media asset storage and protected transfer routes
 
@@ -317,8 +390,8 @@ Server-only tables (Drizzle schema in `apps/web/src/server/db/schema.ts`):
 | `w3ds_login_offers` | One-time login offers with expiry, status (`pending` / `verifying` / `completed` / `expired` / `failed`), and failure codes. |
 | `w3ds_platform_sessions` | Platform sessions with user id, access/refresh `jti` identifiers, expiry timestamps, and revocation. |
 | `creator_channels` | Local creator channel per platform user (`owner_id` unique); product `Channel` projection. |
-| `videos` | Creator video drafts (`status = draft`) with title, description, visibility, tags, language/category, and timestamps. |
-| `media_assets` | Durable media metadata for draft-owned blobs (opaque storage key, content type, size, upload state). |
+| `videos` | Creator videos with draft/published lifecycle, visibility, publishing metadata (`published_at`, unique `public_video_id`), title/description/tags, and timestamps. |
+| `media_assets` | Durable media metadata for video-owned blobs (opaque storage key, content type, size, upload state). |
 
 `W3dsAuthService` depends on a `W3dsAuthStore` interface:
 
@@ -421,7 +494,7 @@ Backend-oriented infrastructure is limited to the repository tooling:
   argument.
 - pnpm workspaces and Turborepo manage dependency ordering and task execution.
 - Drizzle migrations under `apps/web/drizzle/` version the W3DS auth,
-  creator-draft, and media-asset schema.
+  creator-video (including publish lifecycle), and media-asset schema.
 
 When additional backend domains are introduced, document their API versioning,
 authorization model, persistence strategy, storage lifecycle, observability,

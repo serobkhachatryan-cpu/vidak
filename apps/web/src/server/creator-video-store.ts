@@ -9,7 +9,7 @@ import type {
 import { and, desc, eq, sql } from 'drizzle-orm';
 import { CreatorVideoError } from './creator-video-errors';
 import type { W3dsDatabase } from './db/client';
-import { creatorChannels, videos } from './db/schema';
+import { creatorChannels, mediaAssets, videos } from './db/schema';
 
 export interface CreateChannelRecordInput {
   id: string;
@@ -34,7 +34,7 @@ export interface CreateDraftRecordInput {
 }
 
 /**
- * Durable persistence for local creator channels and video drafts.
+ * Durable persistence for local creator channels and video drafts/published rows.
  * Runtime production uses PostgreSQL; in-memory exists only for unit tests.
  */
 export interface CreatorVideoStore {
@@ -53,6 +53,19 @@ export interface CreatorVideoStore {
     input: UpdateVideoDraftInput,
   ): Promise<Video | undefined>;
   deleteDraft(videoId: string, ownerId: string): Promise<boolean>;
+  /**
+   * Atomically publishes an owned video when it has at least one ready media asset.
+   * Idempotent when already published for the owner: returns the existing row
+   * unchanged (same `publishedAt` and `publicVideoId`).
+   */
+  publishOwnedVideo(videoId: string, ownerId: string, publicVideoId: string): Promise<Video>;
+  /**
+   * Atomically unpublishes an owned video back to draft.
+   * Idempotent when already a draft for the owner: returns the existing row
+   * unchanged. Clears `publishedAt`; preserves `publicVideoId`, visibility,
+   * ownership, createdAt, and media links.
+   */
+  unpublishOwnedVideo(videoId: string, ownerId: string): Promise<Video>;
 }
 
 function toChannel(row: {
@@ -96,6 +109,7 @@ function toVideo(row: {
   viewCount: number;
   likeCount: number;
   commentCount: number;
+  publicVideoId: string | null;
   publishedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
@@ -111,6 +125,7 @@ function toVideo(row: {
     visibility: row.visibility,
     ...(row.category ? { category: row.category } : {}),
     ...(row.language ? { language: row.language } : {}),
+    ...(row.publicVideoId ? { publicVideoId: row.publicVideoId } : {}),
     ...(row.publishedAt ? { publishedAt: row.publishedAt.toISOString() } : {}),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
@@ -129,11 +144,25 @@ function cloneVideo(video: Video): Video {
   return { ...video, tags: [...video.tags] };
 }
 
+type StoredVideo = Video & { ownerId: string };
+
 /** In-memory store for unit tests only — never used as a production fallback. */
 export class InMemoryCreatorVideoStore implements CreatorVideoStore {
   private readonly channelsByOwnerId = new Map<string, Channel>();
   private readonly channelsById = new Map<string, Channel>();
-  private readonly draftsById = new Map<string, Video & { ownerId: string }>();
+  private readonly videosById = new Map<string, StoredVideo>();
+  /** videoId → ready media asset count (test helper for publish preconditions). */
+  private readonly readyMediaCounts = new Map<string, number>();
+
+  /** Test helper: registers that an owned video has a ready media asset attached. */
+  seedReadyMediaAsset(videoId: string): void {
+    this.readyMediaCounts.set(videoId, (this.readyMediaCounts.get(videoId) ?? 0) + 1);
+  }
+
+  /** Test helper: clears ready-media registration for a video. */
+  clearReadyMediaAssets(videoId: string): void {
+    this.readyMediaCounts.delete(videoId);
+  }
 
   async findOrCreateChannel(input: CreateChannelRecordInput): Promise<Channel> {
     const existing = this.channelsByOwnerId.get(input.ownerId);
@@ -165,7 +194,7 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
       throw new CreatorVideoError('Creator channel was not found.', 'not_found', 404);
     }
     const now = new Date().toISOString();
-    const video: Video & { ownerId: string } = {
+    const video: StoredVideo = {
       id: input.id,
       channelId: input.channelId,
       ownerId: input.ownerId,
@@ -184,7 +213,7 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
       commentCount: 0,
       tags: [...input.tags],
     };
-    this.draftsById.set(video.id, video);
+    this.videosById.set(video.id, video);
     const nextChannel: Channel = { ...channel, videoCount: channel.videoCount + 1 };
     this.channelsById.set(nextChannel.id, nextChannel);
     this.channelsByOwnerId.set(nextChannel.ownerId, nextChannel);
@@ -192,14 +221,14 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
   }
 
   async listDraftsByOwnerId(ownerId: string): Promise<Video[]> {
-    return [...this.draftsById.values()]
+    return [...this.videosById.values()]
       .filter((draft) => draft.ownerId === ownerId && draft.status === 'draft')
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .map(cloneVideo);
   }
 
   async getOwnedDraft(videoId: string, ownerId: string): Promise<Video | undefined> {
-    const draft = this.draftsById.get(videoId);
+    const draft = this.videosById.get(videoId);
     if (!draft || draft.ownerId !== ownerId || draft.status !== 'draft') return undefined;
     return cloneVideo(draft);
   }
@@ -209,11 +238,11 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
     ownerId: string,
     input: UpdateVideoDraftInput,
   ): Promise<Video | undefined> {
-    const existing = this.draftsById.get(videoId);
+    const existing = this.videosById.get(videoId);
     if (!existing || existing.ownerId !== ownerId || existing.status !== 'draft') {
       return undefined;
     }
-    const next: Video & { ownerId: string } = {
+    const next: StoredVideo = {
       ...existing,
       ...(input.title !== undefined ? { title: input.title } : {}),
       ...(input.description !== undefined ? { description: input.description } : {}),
@@ -224,16 +253,17 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
       ...(input.thumbnailUrl !== undefined ? { thumbnailUrl: input.thumbnailUrl } : {}),
       updatedAt: new Date().toISOString(),
     };
-    this.draftsById.set(videoId, next);
+    this.videosById.set(videoId, next);
     return cloneVideo(next);
   }
 
   async deleteDraft(videoId: string, ownerId: string): Promise<boolean> {
-    const existing = this.draftsById.get(videoId);
+    const existing = this.videosById.get(videoId);
     if (!existing || existing.ownerId !== ownerId || existing.status !== 'draft') {
       return false;
     }
-    this.draftsById.delete(videoId);
+    this.videosById.delete(videoId);
+    this.readyMediaCounts.delete(videoId);
     const channel = this.channelsById.get(existing.channelId);
     if (channel) {
       const nextChannel: Channel = {
@@ -244,6 +274,83 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
       this.channelsByOwnerId.set(nextChannel.ownerId, nextChannel);
     }
     return true;
+  }
+
+  async publishOwnedVideo(videoId: string, ownerId: string, publicVideoId: string): Promise<Video> {
+    const normalizedId = videoId.trim();
+    const normalizedPublicId = publicVideoId.trim();
+    if (!normalizedId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    if (!normalizedPublicId) {
+      throw new CreatorVideoError('Public video id is required.', 'validation_failed', 400);
+    }
+
+    const existing = this.videosById.get(normalizedId);
+    if (!existing || existing.ownerId !== ownerId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    if (existing.status === 'published') {
+      return cloneVideo(existing);
+    }
+    if (existing.status !== 'draft') {
+      throw new CreatorVideoError(
+        'Video cannot be published from its current state.',
+        'invalid_transition',
+        409,
+      );
+    }
+    if ((this.readyMediaCounts.get(normalizedId) ?? 0) < 1) {
+      throw new CreatorVideoError(
+        'Video cannot be published without at least one ready media asset.',
+        'precondition_failed',
+        409,
+      );
+    }
+
+    const now = new Date().toISOString();
+    const next: StoredVideo = {
+      ...existing,
+      status: 'published',
+      publicVideoId: existing.publicVideoId ?? normalizedPublicId,
+      publishedAt: existing.publishedAt ?? now,
+      updatedAt: now,
+    };
+    this.videosById.set(normalizedId, next);
+    return cloneVideo(next);
+  }
+
+  async unpublishOwnedVideo(videoId: string, ownerId: string): Promise<Video> {
+    const normalizedId = videoId.trim();
+    if (!normalizedId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+
+    const existing = this.videosById.get(normalizedId);
+    if (!existing || existing.ownerId !== ownerId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    if (existing.status === 'draft') {
+      return cloneVideo(existing);
+    }
+    if (existing.status !== 'published') {
+      throw new CreatorVideoError(
+        'Video cannot be unpublished from its current state.',
+        'invalid_transition',
+        409,
+      );
+    }
+
+    const now = new Date().toISOString();
+    const { publishedAt: _publishedAt, ...rest } = existing;
+    void _publishedAt;
+    const next: StoredVideo = {
+      ...rest,
+      status: 'draft',
+      updatedAt: now,
+    };
+    this.videosById.set(normalizedId, next);
+    return cloneVideo(next);
   }
 }
 
@@ -307,6 +414,7 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
         viewCount: 0,
         likeCount: 0,
         commentCount: 0,
+        publicVideoId: null,
         publishedAt: null,
         createdAt: now,
         updatedAt: now,
@@ -387,5 +495,134 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       })
       .where(eq(creatorChannels.id, row.channelId));
     return true;
+  }
+
+  async publishOwnedVideo(videoId: string, ownerId: string, publicVideoId: string): Promise<Video> {
+    const normalizedId = videoId.trim();
+    const normalizedPublicId = publicVideoId.trim();
+    if (!normalizedId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    if (!normalizedPublicId) {
+      throw new CreatorVideoError('Public video id is required.', 'validation_failed', 400);
+    }
+
+    return this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(videos)
+        .where(and(eq(videos.id, normalizedId), eq(videos.ownerId, ownerId)))
+        .limit(1);
+      if (!existing) {
+        throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+      }
+      if (existing.status === 'published') {
+        return toVideo(existing);
+      }
+      if (existing.status !== 'draft') {
+        throw new CreatorVideoError(
+          'Video cannot be published from its current state.',
+          'invalid_transition',
+          409,
+        );
+      }
+
+      const [readyAsset] = await tx
+        .select({ id: mediaAssets.id })
+        .from(mediaAssets)
+        .where(
+          and(
+            eq(mediaAssets.videoId, normalizedId),
+            eq(mediaAssets.ownerId, ownerId),
+            eq(mediaAssets.uploadState, 'ready'),
+          ),
+        )
+        .limit(1);
+      if (!readyAsset) {
+        throw new CreatorVideoError(
+          'Video cannot be published without at least one ready media asset.',
+          'precondition_failed',
+          409,
+        );
+      }
+
+      const now = new Date();
+      const [row] = await tx
+        .update(videos)
+        .set({
+          status: 'published',
+          publishedAt: existing.publishedAt ?? now,
+          publicVideoId: existing.publicVideoId ?? normalizedPublicId,
+          updatedAt: now,
+        })
+        .where(
+          and(eq(videos.id, normalizedId), eq(videos.ownerId, ownerId), eq(videos.status, 'draft')),
+        )
+        .returning();
+      if (row) return toVideo(row);
+
+      // Concurrent publish won the race — return the published row if present.
+      const [again] = await tx
+        .select()
+        .from(videos)
+        .where(and(eq(videos.id, normalizedId), eq(videos.ownerId, ownerId)))
+        .limit(1);
+      if (again?.status === 'published') return toVideo(again);
+      throw new CreatorVideoError('Failed to publish video.', 'internal_error', 500);
+    });
+  }
+
+  async unpublishOwnedVideo(videoId: string, ownerId: string): Promise<Video> {
+    const normalizedId = videoId.trim();
+    if (!normalizedId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+
+    return this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(videos)
+        .where(and(eq(videos.id, normalizedId), eq(videos.ownerId, ownerId)))
+        .limit(1);
+      if (!existing) {
+        throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+      }
+      if (existing.status === 'draft') {
+        return toVideo(existing);
+      }
+      if (existing.status !== 'published') {
+        throw new CreatorVideoError(
+          'Video cannot be unpublished from its current state.',
+          'invalid_transition',
+          409,
+        );
+      }
+
+      const now = new Date();
+      const [row] = await tx
+        .update(videos)
+        .set({
+          status: 'draft',
+          publishedAt: null,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(videos.id, normalizedId),
+            eq(videos.ownerId, ownerId),
+            eq(videos.status, 'published'),
+          ),
+        )
+        .returning();
+      if (row) return toVideo(row);
+
+      const [again] = await tx
+        .select()
+        .from(videos)
+        .where(and(eq(videos.id, normalizedId), eq(videos.ownerId, ownerId)))
+        .limit(1);
+      if (again?.status === 'draft') return toVideo(again);
+      throw new CreatorVideoError('Failed to unpublish video.', 'internal_error', 500);
+    });
   }
 }

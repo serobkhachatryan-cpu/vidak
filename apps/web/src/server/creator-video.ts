@@ -108,6 +108,33 @@ export class CreatorVideoService {
     }
   }
 
+  /**
+   * Publishes an owned video when it has at least one ready media asset.
+   * Idempotent when already published. Assigns a stable `publicVideoId` on
+   * first publish. Does not expose a public route.
+   */
+  async publishVideo(accessToken: string, videoId: string): Promise<Video> {
+    const user = await this.requireUser(accessToken);
+    const normalizedId = videoId.trim();
+    if (!normalizedId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    return this.store.publishOwnedVideo(normalizedId, user.id, `pub_${this.createId()}`);
+  }
+
+  /**
+   * Unpublishes an owned video back to draft. Idempotent when already a draft.
+   * Preserves ownership, visibility, media links, and `publicVideoId`.
+   */
+  async unpublishVideo(accessToken: string, videoId: string): Promise<Video> {
+    const user = await this.requireUser(accessToken);
+    const normalizedId = videoId.trim();
+    if (!normalizedId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    return this.store.unpublishOwnedVideo(normalizedId, user.id);
+  }
+
   private async requireUser(accessToken: string): Promise<AuthUser> {
     if (!accessToken.trim()) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);

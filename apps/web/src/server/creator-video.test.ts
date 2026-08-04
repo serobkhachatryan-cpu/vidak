@@ -152,4 +152,82 @@ describe('CreatorVideoService', () => {
       id: draft.id,
     });
   });
+
+  it('publishes and unpublishes owned videos through the domain service', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    let sequence = 0;
+    const service = new CreatorVideoService({
+      store,
+      resolveUser: async () => owner,
+      createId: () => `id-${++sequence}`,
+    });
+
+    const draft = await service.createDraft('token', {
+      title: 'Ready to ship',
+      visibility: 'private',
+    });
+    store.seedReadyMediaAsset(draft.id);
+
+    const published = await service.publishVideo('token', draft.id);
+    expect(published).toMatchObject({
+      id: draft.id,
+      status: 'published',
+      visibility: 'private',
+      publicVideoId: expect.stringMatching(/^pub_id-\d+$/),
+    });
+    expect(published.publishedAt).toEqual(expect.any(String));
+
+    const again = await service.publishVideo('token', draft.id);
+    expect(again).toEqual(published);
+
+    const unpublished = await service.unpublishVideo('token', draft.id);
+    expect(unpublished).toMatchObject({
+      id: draft.id,
+      status: 'draft',
+      visibility: 'private',
+      publicVideoId: published.publicVideoId,
+    });
+    expect(unpublished.publishedAt).toBeUndefined();
+
+    await expect(service.listDrafts('token')).resolves.toEqual([
+      expect.objectContaining({ id: draft.id, status: 'draft' }),
+    ]);
+  });
+
+  it('rejects publish without ready media and hides cross-user publish/unpublish', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    let sequence = 0;
+    const createId = () => `id-${++sequence}`;
+    const ownerService = new CreatorVideoService({
+      store,
+      resolveUser: async () => owner,
+      createId,
+    });
+    const otherService = new CreatorVideoService({
+      store,
+      resolveUser: async () => other,
+      createId,
+    });
+
+    const draft = await ownerService.createDraft('owner-token', { title: 'No media yet' });
+
+    await expect(ownerService.publishVideo('owner-token', draft.id)).rejects.toMatchObject({
+      code: 'precondition_failed',
+      status: 409,
+    });
+
+    store.seedReadyMediaAsset(draft.id);
+    await expect(otherService.publishVideo('other-token', draft.id)).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+
+    const published = await ownerService.publishVideo('owner-token', draft.id);
+    expect(published.status).toBe('published');
+
+    await expect(otherService.unpublishVideo('other-token', draft.id)).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+  });
 });

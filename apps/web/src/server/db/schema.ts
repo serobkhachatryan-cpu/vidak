@@ -48,9 +48,11 @@ export const creatorChannels = pgTable(
 );
 
 /**
- * Creator video drafts. Product `Video` rows with draft lifecycle only —
- * no eVault sync or published catalog in this milestone. Binary media is
- * tracked separately via `media_assets` + the server-only MediaStorage adapter.
+ * Creator videos with an explicit draft | published lifecycle.
+ * Visibility (`private` | `unlisted` | `public`) is independent of lifecycle.
+ * `public_video_id` is assigned on first publish for later public routes —
+ * those routes are not exposed in this milestone. Binary media is tracked
+ * separately via `media_assets` + the server-only MediaStorage adapter.
  */
 export const videos = pgTable(
   'videos',
@@ -74,6 +76,11 @@ export const videos = pgTable(
     viewCount: integer('view_count').notNull().default(0),
     likeCount: integer('like_count').notNull().default(0),
     commentCount: integer('comment_count').notNull().default(0),
+    /**
+     * Opaque stable public identifier. Null until first publish; unique when set.
+     * Survives unpublish so later public routes can keep a stable key.
+     */
+    publicVideoId: text('public_video_id').unique(),
     publishedAt: timestamp('published_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
@@ -81,6 +88,7 @@ export const videos = pgTable(
   (table) => [
     index('videos_owner_id_status_idx').on(table.ownerId, table.status),
     index('videos_channel_id_idx').on(table.channelId),
+    index('videos_public_video_id_idx').on(table.publicVideoId),
   ],
 );
 

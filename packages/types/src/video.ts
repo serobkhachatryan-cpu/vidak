@@ -37,6 +37,11 @@ export interface Video {
   visibility: VideoVisibility;
   category?: VideoCategory;
   language?: VideoLanguage;
+  /**
+   * Opaque, stable identifier assigned on first publish for later public routes.
+   * Preserved across unpublish/republish; omitted until the video has been published once.
+   */
+  publicVideoId?: string;
   publishedAt?: string;
   createdAt: string;
   updatedAt: string;
