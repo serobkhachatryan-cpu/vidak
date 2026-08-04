@@ -19,7 +19,8 @@
     "react-dom": ">=19"
   },
   "dependencies": {
-    "@w3ds/design-tokens": "workspace:*"
+    "@w3ds/design-tokens": "workspace:*",
+    "@w3ds/types": "workspace:*"
   },
   "devDependencies": {
     "@storybook/react-vite": "latest",

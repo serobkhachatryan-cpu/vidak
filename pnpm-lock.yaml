@@ -140,10 +140,17 @@ importers:
         version: 4.3.3
 
   packages/api-client:
+    dependencies:
+      '@w3ds/types':
+        specifier: workspace:*
+        version: link:../types
     devDependencies:
       typescript:
         specifier: 6.0.3
         version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.10(@types/node@26.1.2)(vite@8.2.0(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0))
 
   packages/auth:
     devDependencies:
@@ -167,10 +174,29 @@ importers:
         version: 4.1.10(@types/node@26.1.2)(vite@8.2.0(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0))
 
   packages/hooks:
+    dependencies:
+      '@w3ds/api-client':
+        specifier: workspace:*
+        version: link:../api-client
+      '@w3ds/types':
+        specifier: workspace:*
+        version: link:../types
     devDependencies:
+      '@tanstack/react-query':
+        specifier: latest
+        version: 5.101.4(react@19.2.8)
+      '@types/react':
+        specifier: latest
+        version: 19.2.18
+      react:
+        specifier: latest
+        version: 19.2.8
       typescript:
         specifier: 6.0.3
         version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.10(@types/node@26.1.2)(vite@8.2.0(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0))
 
   packages/icons:
     devDependencies:
@@ -201,6 +227,9 @@ importers:
       '@w3ds/design-tokens':
         specifier: workspace:*
         version: link:../design-tokens
+      '@w3ds/types':
+        specifier: workspace:*
+        version: link:../types
     devDependencies:
       '@storybook/react-vite':
         specifier: latest
@@ -237,6 +266,14 @@ importers:
         version: 6.0.3
 
 packages:
+
+  '@tanstack/query-core@5.101.4':
+    resolution: {integrity: sha512-gNwcvOJcRbLWPOLG/2OBm+zM+Yv+MKsXKEOWC57USuZDEsI71hEErQsiEGx5wX9rzWWkfwM0fVSPoiIFSsxfiw==}
+
+  '@tanstack/react-query@5.101.4':
+    resolution: {integrity: sha512-yRg2pfOCxIs4ZJW3XYYHU/WgtD04FHSnfHlpRT7h7pR77hwkdRG4wxbKe4aq6P0RvXUTBSQpQeadS1SUYUe+KA==}
+    peerDependencies:
+      react: ^18 || ^19
 
   '@adobe/css-tools@4.5.0':
     resolution: {integrity: sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q==}
@@ -2270,6 +2307,13 @@ packages:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
 
 snapshots:
+
+  '@tanstack/query-core@5.101.4': {}
+
+  '@tanstack/react-query@5.101.4(react@19.2.8)':
+    dependencies:
+      '@tanstack/query-core': 5.101.4
+      react: 19.2.8
 
   '@adobe/css-tools@4.5.0': {}
 

@@ -9,9 +9,22 @@
   "scripts": {
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
     "clean": "rm -rf dist"
   },
+  "peerDependencies": {
+    "@tanstack/react-query": ">=5",
+    "react": ">=19"
+  },
+  "dependencies": {
+    "@w3ds/api-client": "workspace:*",
+    "@w3ds/types": "workspace:*"
+  },
   "devDependencies": {
-    "typescript": "6.0.3"
+    "@tanstack/react-query": "latest",
+    "@types/react": "latest",
+    "react": "latest",
+    "typescript": "6.0.3",
+    "vitest": "latest"
   }
 }
