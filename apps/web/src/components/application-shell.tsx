@@ -1,8 +1,8 @@
 'use client';
 
 import { platformName } from '@w3ds/config';
-import { AppShell, Button, Header, Sidebar } from '@w3ds/ui';
-import { type ReactNode, useEffect, useState } from 'react';
+import { AppShell, Button, Header, SearchInput, Sidebar } from '@w3ds/ui';
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
@@ -13,11 +13,13 @@ const navigation = [
 export interface ApplicationShellProps {
   children: ReactNode;
   currentHref?: string;
+  searchValue?: string;
 }
 
-export function ApplicationShell({ children, currentHref }: ApplicationShellProps) {
+export function ApplicationShell({ children, currentHref, searchValue = '' }: ApplicationShellProps) {
   const [darkMode, setDarkMode] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
   const navigationItems = navigation.map((item) => ({
     ...item,
     current: item.href === currentHref,
@@ -29,6 +31,38 @@ export function ApplicationShell({ children, currentHref }: ApplicationShellProp
       delete document.documentElement.dataset.theme;
     };
   }, [darkMode]);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      if (
+        (event.metaKey || event.ctrlKey) &&
+        event.key.toLocaleLowerCase() === 'k' &&
+        !event.altKey
+      ) {
+        event.preventDefault();
+        searchRef.current?.focus();
+      } else if (
+        event.key === '/' &&
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        target?.tagName !== 'INPUT' &&
+        target?.tagName !== 'TEXTAREA' &&
+        !target?.isContentEditable
+      ) {
+        event.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', focusSearch);
+    return () => window.removeEventListener('keydown', focusSearch);
+  }, []);
+
+  const submitSearch = (event: FormEvent<HTMLFormElement>) => {
+    const query = new FormData(event.currentTarget).get('q')?.toString().trim();
+    if (!query) event.preventDefault();
+  };
 
   return (
     <AppShell
@@ -43,6 +77,18 @@ export function ApplicationShell({ children, currentHref }: ApplicationShellProp
             </a>
           }
           onMenuClick={() => setMobileNavigationOpen(true)}
+          navigation={
+            <form action="/search" method="get" onSubmit={submitSearch} className="mx-auto max-w-xl">
+              <SearchInput
+                ref={searchRef}
+                name="q"
+                defaultValue={searchValue}
+                placeholder="Search videos, channels, and playlists"
+                aria-label="Search"
+                shortcut="⌘K"
+              />
+            </form>
+          }
           actions={
             <Button
               size="sm"

@@ -10,6 +10,7 @@ import type {
   PaginationParams,
   Playlist,
   PlaylistId,
+  SearchFilters,
   UserProfile,
   UserProfileId,
   Video,
@@ -21,6 +22,8 @@ export const videoQueryKeys = {
   all: ['video'] as const,
   video: (id: VideoId) => [...videoQueryKeys.all, 'detail', id] as const,
   videos: (filters: VideoListFilters = {}) => [...videoQueryKeys.all, 'list', filters] as const,
+  channels: (filters: SearchFilters = {}) => [...videoQueryKeys.all, 'channels', filters] as const,
+  playlists: (filters: SearchFilters = {}) => [...videoQueryKeys.all, 'playlists', filters] as const,
   channel: (id: ChannelId) => [...videoQueryKeys.all, 'channel', id] as const,
   playlist: (id: PlaylistId) => [...videoQueryKeys.all, 'playlist', id] as const,
   userProfile: (id: UserProfileId) => [...videoQueryKeys.all, 'profile', id] as const,
@@ -63,6 +66,40 @@ export function useInfiniteVideos(
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
       client.listVideos(filters, {
+        ...(pageParam ? { cursor: pageParam } : {}),
+        limit: pageSize,
+      }),
+    getNextPageParam,
+  });
+}
+
+export function useInfiniteChannels(
+  client: VideoApiClient,
+  filters: SearchFilters = {},
+  pageSize = 20,
+) {
+  return useInfiniteQuery({
+    queryKey: videoQueryKeys.channels(filters),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      client.listChannels(filters, {
+        ...(pageParam ? { cursor: pageParam } : {}),
+        limit: pageSize,
+      }),
+    getNextPageParam,
+  });
+}
+
+export function useInfinitePlaylists(
+  client: VideoApiClient,
+  filters: SearchFilters = {},
+  pageSize = 20,
+) {
+  return useInfiniteQuery({
+    queryKey: videoQueryKeys.playlists(filters),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      client.listPlaylists(filters, {
         ...(pageParam ? { cursor: pageParam } : {}),
         limit: pageSize,
       }),

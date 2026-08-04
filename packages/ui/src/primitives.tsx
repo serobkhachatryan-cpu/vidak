@@ -189,9 +189,10 @@ Input.displayName = 'Input';
 export interface SearchInputProps extends Omit<InputProps, 'type'> {
   onClear?: () => void;
   clearLabel?: string;
+  shortcut?: string;
 }
 export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
-  ({ className, onClear, clearLabel = 'Clear search', ...props }, ref) => (
+  ({ className, onClear, clearLabel = 'Clear search', shortcut, ...props }, ref) => (
     <div className="relative">
       <span
         aria-hidden="true"
@@ -202,7 +203,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
       <Input
         ref={ref}
         type="search"
-        className={cx('pl-9', onClear && 'pr-10', className)}
+        className={cx('pl-9', (onClear || shortcut) && 'pr-10', className)}
         {...props}
       />
       {onClear && (
@@ -217,6 +218,11 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
         >
           ×
         </button>
+      )}
+      {shortcut && !onClear && (
+        <kbd className="pointer-events-none absolute inset-y-0 right-3 my-auto flex h-5 items-center rounded border border-border px-1 font-sans text-[10px] text-muted-foreground">
+          {shortcut}
+        </kbd>
       )}
     </div>
   ),

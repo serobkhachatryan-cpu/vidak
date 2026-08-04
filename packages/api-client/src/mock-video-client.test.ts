@@ -23,6 +23,16 @@ describe('MockVideoApiClient', () => {
     expect(page.items.map((video) => video.id)).toEqual(['video-accessible-player']);
   });
 
+  it('searches channels and playlists and sorts videos by views', async () => {
+    const channels = await client.listChannels({ query: 'studio' });
+    const playlists = await client.listPlaylists({ query: 'platform' });
+    const videos = await client.listVideos({ sort: 'views' });
+
+    expect(channels.items.map((channel) => channel.id)).toEqual(['channel-studio']);
+    expect(playlists.items.map((playlist) => playlist.id)).toEqual(['playlist-foundations']);
+    expect(videos.items[0]?.id).toBe('video-design-system');
+  });
+
   it('lists only top-level comments for a video', async () => {
     const page = await client.listComments('video-design-system');
 

@@ -10,6 +10,7 @@ import type {
   PaginationParams,
   Playlist,
   PlaylistId,
+  SearchFilters,
   UserProfile,
   UserProfileId,
   Video,
@@ -20,7 +21,9 @@ import type {
 export interface VideoApiClient {
   getVideo(id: VideoId): Promise<Video | undefined>;
   listVideos(filters?: VideoListFilters, pagination?: PaginationParams): Promise<CursorPage<Video>>;
+  listChannels(filters?: SearchFilters, pagination?: PaginationParams): Promise<CursorPage<Channel>>;
   getChannel(id: ChannelId): Promise<Channel | undefined>;
+  listPlaylists(filters?: SearchFilters, pagination?: PaginationParams): Promise<CursorPage<Playlist>>;
   getPlaylist(id: PlaylistId): Promise<Playlist | undefined>;
   getUserProfile(id: UserProfileId): Promise<UserProfile | undefined>;
   listComments(

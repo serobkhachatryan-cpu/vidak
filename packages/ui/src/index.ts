@@ -85,3 +85,12 @@ export type {
   CommentsState,
 } from './comments';
 export { CommentEditor, CommentItem, CommentList, CommentListSkeleton, Comments } from './comments';
+export type { SearchFiltersProps, SearchSortControlProps } from './search-results';
+export {
+  ChannelSearchResult,
+  PlaylistSearchResult,
+  SearchFilters,
+  SearchResultSkeleton,
+  SearchSortControl,
+  searchResultLabels,
+} from './search-results';

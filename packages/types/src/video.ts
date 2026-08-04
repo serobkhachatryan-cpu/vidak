@@ -1,4 +1,5 @@
 import type { ChannelId } from './channel';
+import type { SearchSort } from './search';
 
 export type VideoId = string;
 export type VideoStatus = 'draft' | 'processing' | 'published' | 'archived';
@@ -27,4 +28,5 @@ export interface VideoListFilters {
   status?: VideoStatus;
   visibility?: VideoVisibility;
   search?: string;
+  sort?: SearchSort;
 }

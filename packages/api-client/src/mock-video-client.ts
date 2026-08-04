@@ -10,6 +10,7 @@ import type {
   PaginationParams,
   Playlist,
   PlaylistId,
+  SearchFilters,
   UserProfile,
   UserProfileId,
   Video,
@@ -73,9 +74,39 @@ export class MockVideoApiClient implements VideoApiClient {
     return this.channels.find((channel) => channel.id === id);
   }
 
+  async listChannels(
+    filters: SearchFilters = {},
+    pagination: PaginationParams = {},
+  ): Promise<CursorPage<Channel>> {
+    await this.wait();
+    const search = filters.query?.trim().toLocaleLowerCase();
+    const channels = this.channels.filter(
+      (channel) =>
+        !search ||
+        `${channel.name} ${channel.handle} ${channel.description ?? ''}`
+          .toLocaleLowerCase()
+          .includes(search),
+    );
+    return createCursorPage(channels, pagination);
+  }
+
   async getPlaylist(id: PlaylistId): Promise<Playlist | undefined> {
     await this.wait();
     return this.playlists.find((playlist) => playlist.id === id);
+  }
+
+  async listPlaylists(
+    filters: SearchFilters = {},
+    pagination: PaginationParams = {},
+  ): Promise<CursorPage<Playlist>> {
+    await this.wait();
+    const search = filters.query?.trim().toLocaleLowerCase();
+    const playlists = this.playlists.filter(
+      (playlist) =>
+        !search ||
+        `${playlist.title} ${playlist.description ?? ''}`.toLocaleLowerCase().includes(search),
+    );
+    return createCursorPage(playlists, pagination);
   }
 
   async getUserProfile(id: UserProfileId): Promise<UserProfile | undefined> {
@@ -151,7 +182,7 @@ export class MockVideoApiClient implements VideoApiClient {
   private filterVideos(filters: VideoListFilters): readonly Video[] {
     const search = filters.search?.trim().toLocaleLowerCase();
 
-    return this.videos.filter((video) => {
+    const videos = this.videos.filter((video) => {
       if (filters.channelId && video.channelId !== filters.channelId) return false;
       if (filters.status && video.status !== filters.status) return false;
       if (filters.visibility && video.visibility !== filters.visibility) return false;
@@ -166,6 +197,18 @@ export class MockVideoApiClient implements VideoApiClient {
 
       return true;
     });
+
+    if (filters.sort === 'uploadDate') {
+      return [...videos].sort(
+        (first, second) =>
+          new Date(second.publishedAt ?? second.createdAt).getTime() -
+          new Date(first.publishedAt ?? first.createdAt).getTime(),
+      );
+    }
+    if (filters.sort === 'views') {
+      return [...videos].sort((first, second) => second.viewCount - first.viewCount);
+    }
+    return videos;
   }
 
   private async wait(): Promise<void> {
