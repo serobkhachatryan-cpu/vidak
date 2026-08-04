@@ -12,3 +12,4 @@ storybook-static
 !.env.example
 .tools
 .DS_Store
+.data

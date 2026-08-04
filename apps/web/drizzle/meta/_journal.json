@@ -15,6 +15,13 @@
       "when": 1785862625907,
       "tag": "0001_wakeful_shiver_man",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785863519717,
+      "tag": "0002_chief_alice",
+      "breakpoints": true
     }
   ]
 }

@@ -5,15 +5,18 @@
 Platform backend capabilities are hosted as Next.js route handlers in
 `apps/web`. W3DS authentication persists platform users, login offers, and
 sessions in PostgreSQL through Drizzle ORM. Authenticated creators can also
-persist local creator channels and video draft metadata on that store.
+persist local creator channels and video draft metadata on that store. Durable
+media asset metadata and a local-disk blob adapter exist as a server-only
+foundation; upload HTTP APIs and public playback are not exposed yet.
 
-There is still no media storage, queue worker, video-processing pipeline,
-eVault sync, ACL layer, or public publish path.
+There is still no queue worker, video-processing pipeline, eVault sync, ACL
+layer, or public publish path.
 
 ```mermaid
 flowchart LR
   Clients["Next.js applications"] --> Auth["apps/web API routes\nW3DS auth + drafts"]
-  Auth --> DB["PostgreSQL\nusers / sessions / channels / drafts"]
+  Auth --> DB["PostgreSQL\nusers / sessions / channels / drafts / media_assets"]
+  Auth --> Disk["LocalDiskMediaStorage\ndevelopment blobs"]
   Auth --> Platform["Registry + eVault\nserver-side verification"]
   Contracts["@w3ds/auth<br/>contracts and browser storage"] -. client-only boundary .-> Platform
   API["@w3ds/api-client<br/>mock + W3DS cookie clients"] -. client-only boundary .-> Platform
@@ -66,6 +69,7 @@ Configure the flow with the root `.env.example` values:
 - `W3DS_AUTH_JWT_SECRET` (32+ secret characters)
 - `W3DS_AUTH_PLATFORM_NAME` (optional; defaults to `vidak`)
 - `W3DS_AUTH_MIN_WALLET_VERSION` (optional temporary compatibility gate)
+- `MEDIA_STORAGE_ROOT` (optional; local-disk MediaStorage root, defaults to `.data/media`)
 
 If W3DS auth is enabled without `DATABASE_URL`, route handlers return a clear
 `configuration_error` (HTTP 503). Development email/password auth does not use
@@ -119,13 +123,74 @@ cookie/bearer parsing or write ad-hoc SQL.
 
 This milestone does **not** implement:
 
-- File upload, blob/object storage, or `w3ds://file` references
+- File upload HTTP routes, multipart handling, or streaming download endpoints
+- Public playback URLs or `w3ds://file` protocol references
 - Transcoding / processing pipelines
 - eVault writes, ontology mapping, ACLs, or Awareness
 - Marking a draft as published / public feed ingestion
 - Changes to unrelated watch, channel, search, or public feed behavior
 - Changes to the development provider's mock `createVideo` / `publishVideo`
   semantics
+
+## Media asset storage foundation
+
+Server-only durable media metadata and a private blob adapter prepare later
+upload phases. No Next.js route handlers expose these APIs yet.
+
+### `media_assets` model
+
+| Column | Purpose |
+| --- | --- |
+| `id` | Opaque asset identifier. |
+| `owner_id` | Platform user that owns the asset (FK → `w3ds_platform_users`). |
+| `video_id` | Creator video draft the asset belongs to (FK → `videos`, `ON DELETE CASCADE`). |
+| `storage_key` | Opaque MediaStorage object key (unique). Never a user-supplied path. |
+| `original_filename` | Client-provided filename retained as metadata only. |
+| `content_type` | MIME type metadata. |
+| `byte_size` | Declared object size in bytes (non-negative integer). |
+| `upload_state` | Lifecycle: `pending` → `uploading` → `ready` / `failed`. |
+| `created_at` / `updated_at` | Timestamps with time zone. |
+
+Ownership is enforced at the store layer:
+
+1. `createAsset` succeeds only when `video_id` is a draft owned by the same
+   `owner_id`.
+2. Reads, state updates, and deletes are scoped by `(asset_id, owner_id)`.
+3. Cross-user access returns “not found” rather than disclosing existence.
+4. Deleting a draft cascades media asset rows in PostgreSQL.
+
+`MediaAssetStore` mirrors the draft store split:
+
+- **Production / runtime:** `PostgresMediaAssetStore` via `DATABASE_URL`
+- **Unit tests only:** `InMemoryMediaAssetStore` injected explicitly — never
+  used as a production fallback
+
+### `MediaStorage` contract
+
+```ts
+interface MediaStorage {
+  createStorageKey(): string;
+  write(storageKey: string, data: Uint8Array): Promise<void>;
+  read(storageKey: string): Promise<Uint8Array>;
+  delete(storageKey: string): Promise<void>;
+  exists(storageKey: string): Promise<boolean>;
+}
+```
+
+Rules:
+
+- Storage keys are opaque (`media_<uuid>`). Path separators, `..`, and other
+  traversal forms are rejected before any filesystem resolve.
+- `LocalDiskMediaStorage` is the development implementation: flat files under a
+  private root directory (`MEDIA_STORAGE_ROOT`, or `.data/media` under the
+  process cwd by default).
+- Object bytes are never stored in PostgreSQL; only metadata and the opaque key
+  are durable in `media_assets`.
+- Callers that delete an asset row should also `MediaStorage.delete` the
+  returned `storageKey` so orphaned blobs are cleaned up.
+
+This foundation intentionally stops short of upload routes, signed URLs,
+transcoding, and eVault file envelopes.
 
 ## Persistence model
 
@@ -138,6 +203,7 @@ Server-only tables (Drizzle schema in `apps/web/src/server/db/schema.ts`):
 | `w3ds_platform_sessions` | Platform sessions with user id, access/refresh `jti` identifiers, expiry timestamps, and revocation. |
 | `creator_channels` | Local creator channel per platform user (`owner_id` unique); product `Channel` projection. |
 | `videos` | Creator video drafts (`status = draft`) with title, description, visibility, tags, language/category, and timestamps. |
+| `media_assets` | Durable media metadata for draft-owned blobs (opaque storage key, content type, size, upload state). |
 
 `W3dsAuthService` depends on a `W3dsAuthStore` interface:
 
@@ -188,10 +254,10 @@ Package scripts:
 2. Set `DATABASE_URL`, `W3DS_REGISTRY_BASE_URL`, and `W3DS_AUTH_JWT_SECRET` in the
    server environment only — never `NEXT_PUBLIC_*` for these values.
 3. Run `pnpm db:migrate` (or the equivalent release job) before or as part of
-   deploying application instances that speak W3DS auth / drafts.
+   deploying application instances that speak W3DS auth / drafts / media assets.
 4. Prefer multiple Node instances behind a load balancer; session/offer/draft
-   state is shared through PostgreSQL, so process-local maps must not be
-   reintroduced.
+   and media-asset metadata is shared through PostgreSQL, so process-local maps
+   must not be reintroduced. Local-disk MediaStorage is for development only.
 5. Rotate `W3DS_AUTH_JWT_SECRET` only with a planned invalidation of existing
    sessions (changing the secret invalidates outstanding JWTs).
 6. Keep Registry and eVault base URLs server-side; do not expose them to the
@@ -239,8 +305,8 @@ Backend-oriented infrastructure is limited to the repository tooling:
 - Docker supports production builds for a selected app through the `APP` build
   argument.
 - pnpm workspaces and Turborepo manage dependency ordering and task execution.
-- Drizzle migrations under `apps/web/drizzle/` version the W3DS auth and
-  creator-draft schema.
+- Drizzle migrations under `apps/web/drizzle/` version the W3DS auth,
+  creator-draft, and media-asset schema.
 
 When additional backend domains are introduced, document their API versioning,
 authorization model, persistence strategy, storage lifecycle, observability,

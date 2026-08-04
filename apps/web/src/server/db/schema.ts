@@ -49,7 +49,8 @@ export const creatorChannels = pgTable(
 
 /**
  * Creator video drafts. Product `Video` rows with draft lifecycle only —
- * no media blobs, eVault sync, or published catalog in this milestone.
+ * no eVault sync or published catalog in this milestone. Binary media is
+ * tracked separately via `media_assets` + the server-only MediaStorage adapter.
  */
 export const videos = pgTable(
   'videos',
@@ -80,6 +81,42 @@ export const videos = pgTable(
   (table) => [
     index('videos_owner_id_status_idx').on(table.ownerId, table.status),
     index('videos_channel_id_idx').on(table.channelId),
+  ],
+);
+
+/**
+ * Upload lifecycle for durable media attached to a creator video draft.
+ * Suitable for later multipart / processing phases; no public playback yet.
+ */
+export type MediaUploadState = 'pending' | 'uploading' | 'ready' | 'failed';
+
+/**
+ * Durable media asset metadata owned by a platform user and linked to one of
+ * that user's creator video drafts. Bytes live behind MediaStorage via an
+ * opaque `storage_key` — never a user-supplied filesystem path.
+ */
+export const mediaAssets = pgTable(
+  'media_assets',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => w3dsPlatformUsers.id),
+    videoId: text('video_id')
+      .notNull()
+      .references(() => videos.id, { onDelete: 'cascade' }),
+    storageKey: text('storage_key').notNull().unique(),
+    originalFilename: text('original_filename').notNull(),
+    contentType: text('content_type').notNull(),
+    byteSize: integer('byte_size').notNull(),
+    uploadState: text('upload_state').$type<MediaUploadState>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    index('media_assets_owner_id_idx').on(table.ownerId),
+    index('media_assets_video_id_idx').on(table.videoId),
+    index('media_assets_owner_id_video_id_idx').on(table.ownerId, table.videoId),
   ],
 );
 
@@ -136,3 +173,4 @@ export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
 export type W3dsPlatformSessionRow = typeof w3dsPlatformSessions.$inferSelect;
 export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
 export type VideoRow = typeof videos.$inferSelect;
+export type MediaAssetRow = typeof mediaAssets.$inferSelect;
