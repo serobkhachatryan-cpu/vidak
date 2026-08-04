@@ -113,9 +113,24 @@ importers:
 
   apps/web:
     dependencies:
+      '@tanstack/react-query':
+        specifier: latest
+        version: 5.101.4(react@19.2.8)
+      '@w3ds/api-client':
+        specifier: workspace:*
+        version: link:../../packages/api-client
       '@w3ds/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@w3ds/design-tokens':
+        specifier: workspace:*
+        version: link:../../packages/design-tokens
+      '@w3ds/hooks':
+        specifier: workspace:*
+        version: link:../../packages/hooks
+      '@w3ds/ui':
+        specifier: workspace:*
+        version: link:../../packages/ui
       next:
         specifier: latest
         version: 16.2.12(@babel/core@7.29.7)(@playwright/test@1.62.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)

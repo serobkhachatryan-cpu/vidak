@@ -10,7 +10,12 @@
     "clean": "rm -rf .next"
   },
   "dependencies": {
+    "@tanstack/react-query": "latest",
+    "@w3ds/api-client": "workspace:*",
     "@w3ds/config": "workspace:*",
+    "@w3ds/design-tokens": "workspace:*",
+    "@w3ds/hooks": "workspace:*",
+    "@w3ds/ui": "workspace:*",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest"

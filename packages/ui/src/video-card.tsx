@@ -1,0 +1,108 @@
+import type { Channel, Video } from '@w3ds/types';
+import { Avatar, Badge, Skeleton } from './primitives.js';
+
+const cx = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' ');
+const focusRing =
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background';
+
+function formatDuration(durationSeconds: number): string {
+  const hours = Math.floor(durationSeconds / 3600);
+  const minutes = Math.floor((durationSeconds % 3600) / 60);
+  const seconds = durationSeconds % 60;
+
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`
+    : `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatViews(viewCount: number): string {
+  return `${new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(viewCount)} views`;
+}
+
+function formatPublishedAt(publishedAt?: string): string | undefined {
+  if (!publishedAt) return undefined;
+  const days = Math.max(0, Math.floor((Date.now() - new Date(publishedAt).getTime()) / 86_400_000));
+  if (days < 1) return 'Today';
+  if (days < 30) return `${days} day${days === 1 ? '' : 's'} ago`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `${months} month${months === 1 ? '' : 's'} ago`;
+  const years = Math.floor(months / 12);
+  return `${years} year${years === 1 ? '' : 's'} ago`;
+}
+
+export interface VideoCardProps {
+  video: Video;
+  channel?: Pick<Channel, 'name' | 'handle' | 'avatarUrl'>;
+  href?: string;
+  channelHref?: string;
+  className?: string;
+}
+
+export function VideoCard({
+  video,
+  channel,
+  href = `/watch/${video.id}`,
+  channelHref = `/channel/${video.channelId}`,
+  className,
+}: VideoCardProps) {
+  const metadata = [formatViews(video.viewCount), formatPublishedAt(video.publishedAt)].filter(Boolean).join(' · ');
+  const channelName = channel?.name ?? 'Unknown channel';
+
+  return (
+    <article className={cx('group min-w-0', className)}>
+      <a
+        href={href}
+        aria-label={`Watch ${video.title}`}
+        className={cx('relative block overflow-hidden rounded-lg bg-muted', focusRing)}
+      >
+        <img
+          src={video.thumbnailUrl}
+          alt=""
+          loading="lazy"
+          className="aspect-video w-full object-cover transition-transform duration-normal group-hover:scale-[1.03]"
+        />
+        <Badge
+          tone="muted"
+          className="absolute bottom-2 right-2 bg-black/80 text-white"
+          aria-label={`Duration ${formatDuration(video.durationSeconds)}`}
+        >
+          {formatDuration(video.durationSeconds)}
+        </Badge>
+      </a>
+      <div className="flex gap-3 pt-3">
+        <a href={channelHref} aria-label={`Visit ${channelName}`} className={cx('shrink-0 rounded-full', focusRing)}>
+          <Avatar {...(channel?.avatarUrl ? { src: channel.avatarUrl } : {})} alt="" name={channelName} size="md" />
+        </a>
+        <div className="min-w-0">
+          <a href={href} className={cx('line-clamp-2 block font-sans font-semibold text-foreground hover:text-primary', focusRing)}>
+            {video.title}
+          </a>
+          <a href={channelHref} className={cx('mt-1 block truncate font-sans text-sm text-muted-foreground hover:text-foreground', focusRing)}>
+            {channelName}
+          </a>
+          <p className="mt-0.5 font-sans text-sm text-muted-foreground">{metadata}</p>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+export interface VideoCardSkeletonProps {
+  className?: string;
+}
+
+export function VideoCardSkeleton({ className }: VideoCardSkeletonProps) {
+  return (
+    <div className={cx('min-w-0', className)} aria-label="Loading video">
+      <Skeleton className="aspect-video w-full" />
+      <div className="flex gap-3 pt-3">
+        <Skeleton circle className="h-10 w-10 shrink-0" />
+        <div className="flex-1 space-y-2 pt-1">
+          <Skeleton className="h-4 w-11/12" />
+          <Skeleton className="h-4 w-8/12" />
+          <Skeleton className="h-3 w-6/12" />
+        </div>
+      </div>
+    </div>
+  );
+}

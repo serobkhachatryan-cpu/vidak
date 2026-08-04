@@ -74,3 +74,5 @@ export type {
   SplitPaneProps,
   StackProps,
 } from './layout.js';
+export { VideoCard, VideoCardSkeleton } from './video-card.js';
+export type { VideoCardProps, VideoCardSkeletonProps } from './video-card.js';

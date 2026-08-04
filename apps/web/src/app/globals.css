@@ -1,16 +1,36 @@
 @import "tailwindcss";
+@import "@w3ds/design-tokens/styles.css";
 
-:root {
-  color-scheme: dark;
+@source "../../../../packages/ui/src";
+@source "../features";
+
+@theme inline {
+  --color-background: var(--w3ds-color-background);
+  --color-foreground: var(--w3ds-color-foreground);
+  --color-surface: var(--w3ds-color-surface);
+  --color-surface-raised: var(--w3ds-color-surface-raised);
+  --color-muted: var(--w3ds-color-muted);
+  --color-muted-foreground: var(--w3ds-color-muted-foreground);
+  --color-border: var(--w3ds-color-border);
+  --color-primary: var(--w3ds-color-primary);
+  --color-primary-foreground: var(--w3ds-color-primary-foreground);
+  --color-success: var(--w3ds-color-success);
+  --color-success-foreground: var(--w3ds-color-success-foreground);
+  --color-warning: var(--w3ds-color-warning);
+  --color-warning-foreground: var(--w3ds-color-warning-foreground);
+  --color-danger: var(--w3ds-color-danger);
+  --color-danger-foreground: var(--w3ds-color-danger-foreground);
+  --font-sans: var(--w3ds-font-family-sans);
+  --breakpoint-sm: 40rem;
+  --breakpoint-md: 48rem;
+  --breakpoint-lg: 64rem;
+  --breakpoint-xl: 80rem;
+  --z-index-modal: 1400;
 }
+
 body {
   margin: 0;
-  background: #09090b;
-  color: #fafafa;
-  font-family: Arial, sans-serif;
-}
-main {
-  max-width: 72rem;
-  margin: 0 auto;
-  padding: 4rem 1.5rem;
+  background: var(--w3ds-color-background);
+  color: var(--w3ds-color-foreground);
+  font-family: var(--w3ds-font-family-sans);
 }
