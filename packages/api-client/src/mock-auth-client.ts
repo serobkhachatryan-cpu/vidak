@@ -6,6 +6,8 @@ import {
   type AuthUser,
   createAuthUser,
   getAuthProviderCapabilities,
+  type LoginChallenge,
+  type LoginChallengeStatus,
   type LoginInput,
   type RegisterInput,
   type UpdateAuthProfileInput,
@@ -149,6 +151,25 @@ export class MockAuthApiClient implements AuthClient {
     if (refreshToken) {
       this.revokeRefreshToken(refreshToken);
     }
+  }
+
+  async createLoginChallenge(): Promise<LoginChallenge> {
+    throw new AuthenticationError(
+      'W3DS sign-in challenges are not available with the development provider.',
+      'unsupported_capability',
+    );
+  }
+
+  async getLoginChallengeStatus(_offerId: string): Promise<LoginChallengeStatus> {
+    throw new AuthenticationError(
+      'W3DS sign-in challenges are not available with the development provider.',
+      'unsupported_capability',
+    );
+  }
+
+  async restoreSession(): Promise<AuthSession | null> {
+    // Development restore uses browser token storage + `refresh`.
+    return null;
   }
 
   async updateProfile(accessToken: string, input: UpdateAuthProfileInput): Promise<AuthUser> {

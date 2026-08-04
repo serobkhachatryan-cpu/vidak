@@ -5,6 +5,8 @@ import {
   type AuthSession,
   type AuthUser,
   getAuthProviderCapabilities,
+  type LoginChallenge,
+  type LoginChallengeStatus,
   type LoginInput,
   type RegisterInput,
   type UpdateAuthProfileInput,
@@ -16,16 +18,68 @@ import type {
   DeleteAccountInput,
 } from '@w3ds/types';
 
+export interface W3dsAuthClientOptions {
+  /** Origin for platform auth routes. Defaults to same-origin relative paths. */
+  baseUrl?: string;
+  /** Injectable fetch for tests. Defaults to global `fetch`. */
+  fetch?: typeof fetch;
+}
+
+interface OfferResponse {
+  offerId: string;
+  uri: string;
+  expiresAt: string;
+}
+
+interface ApiErrorBody {
+  error?: { code?: string; message?: string };
+}
+
 /**
- * W3DS authentication provider.
+ * W3DS authentication provider — same-origin HTTP client for Vidak `/api/auth/*`.
  *
- * Phase 1 establishes the provider boundary and capability gates.
- * Platform HTTP (offer / callback / session) arrives in a later milestone —
- * no Registry, eVault, wallet, or protocol traffic is performed here.
+ * The browser never contacts Registry, eVault, or other protocol services.
+ * Session credentials are carried as HttpOnly cookies set by the platform routes.
  */
 export class W3dsAuthClient implements AuthClient {
   readonly provider = 'w3ds' as const;
   readonly capabilities: AuthProviderCapabilities = getAuthProviderCapabilities('w3ds');
+
+  private readonly baseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+  private refreshInFlight: Promise<AuthSession> | undefined;
+
+  constructor(options: W3dsAuthClientOptions = {}) {
+    this.baseUrl = trimTrailingSlash(options.baseUrl ?? '');
+    this.fetchImpl = options.fetch ?? fetch;
+  }
+
+  async createLoginChallenge(): Promise<LoginChallenge> {
+    const offer = await this.requestJson<OfferResponse>('/api/auth/offer');
+    return {
+      offerId: offer.offerId,
+      signInUri: offer.uri,
+      expiresAt: offer.expiresAt,
+    };
+  }
+
+  async getLoginChallengeStatus(offerId: string): Promise<LoginChallengeStatus> {
+    const encoded = encodeURIComponent(offerId);
+    return this.requestJson<LoginChallengeStatus>(`/api/auth/offer/${encoded}/status`);
+  }
+
+  async restoreSession(): Promise<AuthSession | null> {
+    try {
+      return await this.requestJson<AuthSession>('/api/auth/session');
+    } catch (error) {
+      if (!isInvalidSession(error)) return null;
+      try {
+        return await this.refreshWithCookies();
+      } catch {
+        return null;
+      }
+    }
+  }
 
   async login(_input: LoginInput): Promise<AuthSession> {
     throw unsupported('Email and password sign-in is not available with W3DS authentication.');
@@ -38,21 +92,23 @@ export class W3dsAuthClient implements AuthClient {
   }
 
   async refresh(_refreshToken: string): Promise<AuthSession> {
-    throw unavailable('W3DS session refresh requires the platform authentication API.');
+    return this.refreshWithCookies();
   }
 
   async getCurrentUser(_accessToken: string): Promise<AuthUser> {
-    throw unavailable('W3DS current-user lookup requires the platform authentication API.');
+    return this.requestJson<AuthUser>('/api/auth/me');
   }
 
   async logout(_refreshToken?: string): Promise<void> {
-    // Local logout clears client persistence in AuthenticationProvider even if
-    // the provider cannot reach a platform API yet.
-    return;
+    try {
+      await this.request('/api/auth/logout', { method: 'POST' });
+    } catch {
+      // Local logout still clears client state even if the network call fails.
+    }
   }
 
   async updateProfile(_accessToken: string, _input: UpdateAuthProfileInput): Promise<AuthUser> {
-    throw unavailable('W3DS profile updates require the platform authentication API.');
+    throw unavailable('W3DS profile updates require the platform profile API.');
   }
 
   async changeEmail(_accessToken: string, _input: ChangeEmailInput): Promise<AuthUser> {
@@ -77,6 +133,47 @@ export class W3dsAuthClient implements AuthClient {
   async deleteAccount(_accessToken: string, _input: DeleteAccountInput): Promise<void> {
     throw unavailable('W3DS account deletion requires the platform authentication API.');
   }
+
+  private refreshWithCookies(): Promise<AuthSession> {
+    if (!this.refreshInFlight) {
+      this.refreshInFlight = this.requestJson<AuthSession>('/api/auth/refresh', {
+        method: 'POST',
+      }).finally(() => {
+        this.refreshInFlight = undefined;
+      });
+    }
+    return this.refreshInFlight;
+  }
+
+  private async requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await this.request(path, init);
+    return (await response.json()) as T;
+  }
+
+  private async request(path: string, init?: RequestInit): Promise<Response> {
+    const response = await this.fetchImpl(this.url(path), {
+      ...init,
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json',
+        ...(init?.headers ?? {}),
+      },
+    });
+
+    if (response.ok || response.status === 204) return response;
+
+    const body = await readErrorBody(response);
+    const code = mapAuthErrorCode(body.error?.code, response.status);
+    throw new AuthenticationError(body.error?.message ?? 'Authentication request failed.', code);
+  }
+
+  private url(path: string): string {
+    return `${this.baseUrl}${path}`;
+  }
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.endsWith('/') ? value.slice(0, -1) : value;
 }
 
 function unsupported(message: string): AuthenticationError {
@@ -85,4 +182,33 @@ function unsupported(message: string): AuthenticationError {
 
 function unavailable(message: string): AuthenticationError {
   return new AuthenticationError(message, 'provider_unavailable');
+}
+
+function isInvalidSession(error: unknown): boolean {
+  return error instanceof AuthenticationError && error.code === 'invalid_session';
+}
+
+async function readErrorBody(response: Response): Promise<ApiErrorBody> {
+  try {
+    return (await response.json()) as ApiErrorBody;
+  } catch {
+    return {};
+  }
+}
+
+function mapAuthErrorCode(code: string | undefined, status: number): AuthenticationError['code'] {
+  switch (code) {
+    case 'invalid_credentials':
+    case 'email_in_use':
+    case 'invalid_session':
+    case 'invalid_password':
+    case 'weak_password':
+    case 'confirmation_mismatch':
+    case 'validation_failed':
+    case 'unsupported_capability':
+    case 'provider_unavailable':
+      return code;
+    default:
+      return status === 401 || status === 403 ? 'invalid_session' : 'provider_unavailable';
+  }
 }

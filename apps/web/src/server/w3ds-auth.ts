@@ -1,0 +1,790 @@
+import { randomUUID } from 'node:crypto';
+import { type AuthSession, type AuthUser, createAuthUser } from '@w3ds/auth';
+
+const crypto = globalThis.crypto;
+const encoder = new TextEncoder();
+
+const accessTokenLifetimeSeconds = 15 * 60;
+const refreshTokenLifetimeSeconds = 7 * 24 * 60 * 60;
+const defaultOfferLifetimeMs = 5 * 60 * 1000;
+const requestTimeoutMs = 5_000;
+
+export const w3dsAccessCookieName = 'w3ds_access';
+export const w3dsRefreshCookieName = 'w3ds_refresh';
+
+export interface W3dsAuthConfig {
+  platformName: string;
+  registryBaseUrl: string;
+  jwtSecret: string;
+  minimumWalletVersion?: string;
+  offerLifetimeMs?: number;
+}
+
+export interface LoginOffer {
+  offerId: string;
+  sessionId: string;
+  uri: string;
+  expiresAt: string;
+}
+
+export type LoginOfferStatus =
+  | { status: 'pending' }
+  | { status: 'completed'; session: AuthSession }
+  | { status: 'expired' }
+  | { status: 'failed'; error: { code: string; message: string } };
+
+export interface W3dsCallbackInput {
+  w3id: string;
+  session: string;
+  signature: string;
+  appVersion?: string;
+}
+
+export interface VerifiedW3dsIdentity {
+  eName: string;
+  eVaultId: string;
+  eVaultUri: string;
+}
+
+export interface W3dsIdentityVerifier {
+  verify(input: {
+    eName: string;
+    session: string;
+    signature: string;
+  }): Promise<VerifiedW3dsIdentity>;
+}
+
+export class W3dsAuthError extends Error {
+  constructor(
+    message: string,
+    public readonly code: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'W3dsAuthError';
+  }
+}
+
+interface StoredOffer {
+  id: string;
+  sessionId: string;
+  expiresAt: number;
+  status: 'pending' | 'verifying' | 'completed' | 'expired' | 'failed';
+  platformSessionId?: string;
+  errorCode?: string;
+}
+
+interface StoredPlatformSession {
+  id: string;
+  user: AuthUser;
+  accessJti: string;
+  refreshJti: string;
+  accessExpiresAt: number;
+  refreshExpiresAt: number;
+  revoked: boolean;
+}
+
+interface PlatformTokenClaims {
+  sub: string;
+  sid: string;
+  jti: string;
+  typ: 'access' | 'refresh';
+  iat: number;
+  exp: number;
+}
+
+export interface W3dsAuthServiceOptions {
+  config: W3dsAuthConfig;
+  identityVerifier?: W3dsIdentityVerifier;
+  now?: () => number;
+}
+
+/**
+ * Platform-side W3DS authentication service.
+ *
+ * Next route handlers are its public surface. Registry and eVault traffic is
+ * intentionally confined to the verifier, so no browser code sees protocol
+ * service URLs, certificates, or public-key material.
+ *
+ * The store is process-local because the repository has no database yet. A
+ * deployed multi-instance platform must replace it with durable shared storage
+ * before enabling W3DS authentication in production.
+ */
+export class W3dsAuthService {
+  private readonly config: Required<Pick<W3dsAuthConfig, 'offerLifetimeMs'>> & W3dsAuthConfig;
+  private readonly identityVerifier: W3dsIdentityVerifier;
+  private readonly now: () => number;
+  private readonly offersById = new Map<string, StoredOffer>();
+  private readonly offersBySessionId = new Map<string, StoredOffer>();
+  private readonly usersByEName = new Map<string, AuthUser>();
+  private readonly sessionsById = new Map<string, StoredPlatformSession>();
+
+  constructor(options: W3dsAuthServiceOptions) {
+    this.config = {
+      ...options.config,
+      offerLifetimeMs: options.config.offerLifetimeMs ?? defaultOfferLifetimeMs,
+    };
+    this.now = options.now ?? Date.now;
+    this.identityVerifier =
+      options.identityVerifier ?? new RegistryW3dsIdentityVerifier(this.config.registryBaseUrl);
+  }
+
+  createOffer(publicBaseUrl: string): LoginOffer {
+    const baseUrl = parseHttpUrl(publicBaseUrl, 'The platform public URL');
+    const offerId = randomUUID();
+    const sessionId = randomUUID();
+    const expiresAt = this.now() + this.config.offerLifetimeMs;
+    const callbackUrl = new URL('/api/auth/callback', baseUrl).toString();
+    const offerUri = new URL('w3ds://auth');
+    offerUri.searchParams.set('redirect', callbackUrl);
+    offerUri.searchParams.set('session', sessionId);
+    offerUri.searchParams.set('platform', this.config.platformName);
+
+    const offer: StoredOffer = {
+      id: offerId,
+      sessionId,
+      expiresAt,
+      status: 'pending',
+    };
+    this.offersById.set(offer.id, offer);
+    this.offersBySessionId.set(offer.sessionId, offer);
+
+    return {
+      offerId,
+      sessionId,
+      uri: offerUri.toString(),
+      expiresAt: new Date(expiresAt).toISOString(),
+    };
+  }
+
+  async completeOffer(input: W3dsCallbackInput): Promise<void> {
+    validateCallbackInput(input);
+    const offer = this.offersBySessionId.get(input.session);
+    if (!offer) {
+      throw new W3dsAuthError('Authentication session was not found.', 'invalid_session', 401);
+    }
+    this.expireOfferIfNeeded(offer);
+    if (offer.status === 'expired') {
+      throw new W3dsAuthError('Authentication session has expired.', 'expired_session', 401);
+    }
+    if (offer.status !== 'pending') {
+      throw new W3dsAuthError('Authentication session was already used.', 'consumed_session', 401);
+    }
+    if (
+      this.config.minimumWalletVersion &&
+      !isAtLeastVersion(input.appVersion, this.config.minimumWalletVersion)
+    ) {
+      throw new W3dsAuthError(
+        'The eID wallet version is not supported.',
+        'unsupported_wallet',
+        400,
+      );
+    }
+
+    offer.status = 'verifying';
+    try {
+      const identity = await this.identityVerifier.verify({
+        eName: input.w3id,
+        session: input.session,
+        signature: input.signature,
+      });
+      if (identity.eName !== input.w3id) {
+        throw new W3dsAuthError('Identity verification failed.', 'invalid_signature', 401);
+      }
+
+      const user = this.findOrCreateUser(identity);
+      const platformSession = await this.issueSession(user);
+      offer.platformSessionId = platformSession.id;
+      offer.status = 'completed';
+    } catch (error) {
+      offer.status = 'failed';
+      offer.errorCode = error instanceof W3dsAuthError ? error.code : 'verification_failed';
+      if (error instanceof W3dsAuthError) throw error;
+      throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+    }
+  }
+
+  async getOfferStatus(offerId: string): Promise<LoginOfferStatus> {
+    const offer = this.offersById.get(offerId);
+    if (!offer) {
+      throw new W3dsAuthError('Authentication offer was not found.', 'invalid_offer', 404);
+    }
+    this.expireOfferIfNeeded(offer);
+    switch (offer.status) {
+      case 'pending':
+      case 'verifying':
+        return { status: 'pending' };
+      case 'expired':
+        return { status: 'expired' };
+      case 'failed':
+        return {
+          status: 'failed',
+          error: {
+            code: offer.errorCode ?? 'verification_failed',
+            message: 'Authentication could not be verified.',
+          },
+        };
+      case 'completed': {
+        const session = offer.platformSessionId
+          ? this.sessionsById.get(offer.platformSessionId)
+          : undefined;
+        if (!session || session.revoked) {
+          return {
+            status: 'failed',
+            error: { code: 'invalid_session', message: 'Authentication session is unavailable.' },
+          };
+        }
+        return { status: 'completed', session: await this.toAuthSession(session, false) };
+      }
+    }
+  }
+
+  /**
+   * Returns the refresh credential for a same-origin route handler to set as
+   * an HTTP-only cookie. It must never be serialized into an API response.
+   */
+  async getOfferSessionForCookie(offerId: string): Promise<AuthSession> {
+    const offer = this.offersById.get(offerId);
+    const session = offer?.platformSessionId
+      ? this.sessionsById.get(offer.platformSessionId)
+      : undefined;
+    if (offer?.status !== 'completed' || !session || session.revoked) {
+      throw new W3dsAuthError('Authentication session is unavailable.', 'invalid_session', 401);
+    }
+    return this.toAuthSession(session, true);
+  }
+
+  async getSession(accessToken: string): Promise<AuthSession> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    return this.toAuthSession(platformSession, false);
+  }
+
+  async refreshSession(refreshToken: string): Promise<AuthSession> {
+    const platformSession = await this.getActiveSession(refreshToken, 'refresh');
+    if (platformSession.refreshExpiresAt <= this.now()) {
+      platformSession.revoked = true;
+      throw new W3dsAuthError('Authentication session has expired.', 'invalid_session', 401);
+    }
+    return this.toAuthSession(await this.issueSession(platformSession.user, platformSession), true);
+  }
+
+  async logout(accessToken?: string, refreshToken?: string): Promise<void> {
+    const token = accessToken ?? refreshToken;
+    if (!token) return;
+    try {
+      const claims = await this.verifyPlatformToken(token);
+      const session = this.sessionsById.get(claims.sid);
+      if (session) session.revoked = true;
+    } catch {
+      // Logout is idempotent. Client cookies are still cleared by the route.
+    }
+  }
+
+  private expireOfferIfNeeded(offer: StoredOffer) {
+    if (
+      (offer.status === 'pending' || offer.status === 'verifying') &&
+      offer.expiresAt <= this.now()
+    ) {
+      offer.status = 'expired';
+    }
+  }
+
+  private findOrCreateUser(identity: VerifiedW3dsIdentity): AuthUser {
+    const existing = this.usersByEName.get(identity.eName);
+    if (existing) return existing;
+
+    const displayName = identity.eName.slice(1).split('.')[0] || 'W3DS user';
+    const user = createAuthUser({
+      id: `w3ds_${randomUUID()}`,
+      displayName,
+      handle: displayName,
+      roles: ['creator'],
+      eName: identity.eName,
+      eVaultId: identity.eVaultId,
+      eVaultUri: identity.eVaultUri,
+    });
+    this.usersByEName.set(user.eName, user);
+    return user;
+  }
+
+  private async issueSession(
+    user: AuthUser,
+    previousSession?: StoredPlatformSession,
+  ): Promise<StoredPlatformSession> {
+    const nowSeconds = Math.floor(this.now() / 1000);
+    const id = previousSession?.id ?? randomUUID();
+    const accessJti = randomUUID();
+    const refreshJti = randomUUID();
+    const next: StoredPlatformSession = {
+      id,
+      user,
+      accessJti,
+      refreshJti,
+      accessExpiresAt: (nowSeconds + accessTokenLifetimeSeconds) * 1000,
+      refreshExpiresAt: (nowSeconds + refreshTokenLifetimeSeconds) * 1000,
+      revoked: false,
+    };
+    this.sessionsById.set(next.id, next);
+    return next;
+  }
+
+  private async toAuthSession(
+    platformSession: StoredPlatformSession,
+    includeRefreshToken = true,
+  ): Promise<AuthSession> {
+    const nowSeconds = Math.floor(this.now() / 1000);
+    const accessToken = await this.createPlatformToken({
+      sub: platformSession.user.id,
+      sid: platformSession.id,
+      jti: platformSession.accessJti,
+      typ: 'access',
+      iat: nowSeconds,
+      exp: Math.floor(platformSession.accessExpiresAt / 1000),
+    });
+    const refreshToken = await this.createPlatformToken({
+      sub: platformSession.user.id,
+      sid: platformSession.id,
+      jti: platformSession.refreshJti,
+      typ: 'refresh',
+      iat: nowSeconds,
+      exp: Math.floor(platformSession.refreshExpiresAt / 1000),
+    });
+    return {
+      user: platformSession.user,
+      provider: 'w3ds',
+      tokens: {
+        accessToken,
+        ...(includeRefreshToken ? { refreshToken } : {}),
+        expiresAt: new Date(platformSession.accessExpiresAt).toISOString(),
+      },
+    };
+  }
+
+  private async getActiveSession(
+    token: string,
+    expectedType: PlatformTokenClaims['typ'],
+  ): Promise<StoredPlatformSession> {
+    const claims = await this.verifyPlatformToken(token);
+    if (claims.typ !== expectedType) {
+      throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+    }
+    const session = this.sessionsById.get(claims.sid);
+    const expectedJti = expectedType === 'access' ? session?.accessJti : session?.refreshJti;
+    if (
+      !session ||
+      session.revoked ||
+      claims.jti !== expectedJti ||
+      claims.sub !== session.user.id
+    ) {
+      throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+    }
+    return session;
+  }
+
+  private async createPlatformToken(claims: PlatformTokenClaims): Promise<string> {
+    const header = base64UrlEncode(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
+    const payload = base64UrlEncode(JSON.stringify(claims));
+    const signingInput = `${header}.${payload}`;
+    const key = await crypto.subtle.importKey(
+      'raw',
+      toArrayBuffer(encoder.encode(this.config.jwtSecret)),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const signature = await crypto.subtle.sign(
+      'HMAC',
+      key,
+      toArrayBuffer(encoder.encode(signingInput)),
+    );
+    return `${signingInput}.${base64UrlEncode(new Uint8Array(signature))}`;
+  }
+
+  private async verifyPlatformToken(token: string): Promise<PlatformTokenClaims> {
+    const [encodedHeader, encodedPayload, encodedSignature, ...rest] = token.split('.');
+    if (!encodedHeader || !encodedPayload || !encodedSignature || rest.length > 0) {
+      throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+    }
+    const header = parseJson<{ alg?: string; typ?: string }>(encodedHeader);
+    const claims = parseJson<Partial<PlatformTokenClaims>>(encodedPayload);
+    if (header.alg !== 'HS256' || header.typ !== 'JWT' || !isPlatformTokenClaims(claims)) {
+      throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+    }
+    const key = await crypto.subtle.importKey(
+      'raw',
+      toArrayBuffer(encoder.encode(this.config.jwtSecret)),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['verify'],
+    );
+    const valid = await crypto.subtle.verify(
+      'HMAC',
+      key,
+      toArrayBuffer(base64UrlDecode(encodedSignature)),
+      toArrayBuffer(encoder.encode(`${encodedHeader}.${encodedPayload}`)),
+    );
+    if (!valid || claims.exp <= Math.floor(this.now() / 1000)) {
+      throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+    }
+    return claims;
+  }
+}
+
+/** Verifies eID wallet signatures against Registry-attested eVault keys. */
+export class RegistryW3dsIdentityVerifier implements W3dsIdentityVerifier {
+  private readonly registryBaseUrl: string;
+
+  constructor(registryBaseUrl: string) {
+    this.registryBaseUrl = parseHttpUrl(registryBaseUrl, 'W3DS Registry URL').toString();
+  }
+
+  async verify(input: {
+    eName: string;
+    session: string;
+    signature: string;
+  }): Promise<VerifiedW3dsIdentity> {
+    if (!isEName(input.eName)) {
+      throw new W3dsAuthError('Identity verification failed.', 'invalid_signature', 401);
+    }
+    const registry = parseRegistryResolution(
+      await getJson(
+        new URL(`/resolve?w3id=${encodeURIComponent(input.eName)}`, this.registryBaseUrl),
+      ),
+    );
+    if (registry.eName !== input.eName) {
+      throw new W3dsAuthError('Identity verification failed.', 'invalid_signature', 401);
+    }
+    const certificates = parseWhoisResponse(
+      await getJson(new URL('/whois', registry.eVaultUri), { 'X-ENAME': input.eName }),
+    );
+    const jwks = parseJwks(await getJson(new URL('/.well-known/jwks.json', this.registryBaseUrl)));
+    const certificatesForIdentity = await Promise.all(
+      certificates.map((certificate) =>
+        verifyKeyBindingCertificate(certificate, jwks, input.eName),
+      ),
+    );
+    const payload = toArrayBuffer(encoder.encode(input.session));
+    const signature = decodeSignature(input.signature);
+    const verified = await Promise.any(
+      certificatesForIdentity.map(async (certificate) => {
+        const publicKey = await importW3dsPublicKey(certificate.publicKey);
+        const valid = await crypto.subtle.verify(
+          { name: 'ECDSA', hash: 'SHA-256' },
+          publicKey,
+          toArrayBuffer(signature),
+          payload,
+        );
+        if (!valid) throw new Error('Signature does not match this key.');
+      }),
+    ).then(
+      () => true,
+      () => false,
+    );
+    if (!verified) {
+      throw new W3dsAuthError('Identity verification failed.', 'invalid_signature', 401);
+    }
+    return {
+      eName: registry.eName,
+      eVaultId: registry.eVaultId,
+      eVaultUri: registry.eVaultUri,
+    };
+  }
+}
+
+interface RegistryResolution {
+  eName: string;
+  eVaultId: string;
+  eVaultUri: string;
+}
+
+interface RegistryJwk {
+  kid?: string;
+  kty?: string;
+  crv?: string;
+  x?: string;
+  y?: string;
+  use?: string;
+  alg?: string;
+}
+
+interface KeyBindingCertificate {
+  eName: string;
+  publicKey: string;
+  exp: number;
+}
+
+function validateCallbackInput(input: W3dsCallbackInput) {
+  if (!input.w3id?.trim() || !input.session?.trim() || !input.signature?.trim()) {
+    throw new W3dsAuthError('Missing required authentication fields.', 'validation_failed', 400);
+  }
+  if (!isEName(input.w3id)) {
+    throw new W3dsAuthError('The W3DS identity is invalid.', 'validation_failed', 400);
+  }
+}
+
+function isEName(value: string): boolean {
+  return /^@[a-z0-9][a-z0-9.-]*$/i.test(value);
+}
+
+function isAtLeastVersion(actual: string | undefined, minimum: string): boolean {
+  if (!actual) return false;
+  const parse = (value: string) => {
+    if (!/^\d+(?:\.\d+){0,2}$/.test(value)) return undefined;
+    return value.split('.').map(Number);
+  };
+  const parsedActual = parse(actual);
+  const parsedMinimum = parse(minimum);
+  if (!parsedActual || !parsedMinimum) return false;
+  for (let index = 0; index < 3; index += 1) {
+    const left = parsedActual[index] ?? 0;
+    const right = parsedMinimum[index] ?? 0;
+    if (left !== right) return left > right;
+  }
+  return true;
+}
+
+function isPlatformTokenClaims(value: Partial<PlatformTokenClaims>): value is PlatformTokenClaims {
+  return (
+    typeof value.sub === 'string' &&
+    typeof value.sid === 'string' &&
+    typeof value.jti === 'string' &&
+    (value.typ === 'access' || value.typ === 'refresh') &&
+    typeof value.iat === 'number' &&
+    typeof value.exp === 'number'
+  );
+}
+
+function parseHttpUrl(value: string, label: string): URL {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:')
+      throw new Error('Unsupported protocol');
+    return url;
+  } catch {
+    throw new W3dsAuthError(`${label} must be an HTTP(S) URL.`, 'configuration_error', 503);
+  }
+}
+
+async function getJson(url: URL, headers?: HeadersInit): Promise<unknown> {
+  let response: Response;
+  try {
+    const init: RequestInit = {
+      cache: 'no-store',
+      signal: AbortSignal.timeout(requestTimeoutMs),
+      ...(headers ? { headers } : {}),
+    };
+    response = await fetch(url, init);
+  } catch {
+    throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+  }
+  if (!response.ok) {
+    throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+  }
+  try {
+    return (await response.json()) as unknown;
+  } catch {
+    throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+  }
+}
+
+function parseRegistryResolution(value: unknown): RegistryResolution {
+  if (!isRecord(value) || typeof value.ename !== 'string' || typeof value.evault !== 'string') {
+    throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+  }
+  const eVaultUri = typeof value.uri === 'string' ? value.uri : undefined;
+  if (!eVaultUri) {
+    throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+  }
+  return {
+    eName: value.ename,
+    eVaultId: value.evault,
+    eVaultUri: parseHttpUrl(eVaultUri, 'Resolved eVault URL').toString(),
+  };
+}
+
+function parseWhoisResponse(value: unknown): readonly string[] {
+  if (
+    !isRecord(value) ||
+    !Array.isArray(value.keyBindingCertificates) ||
+    !value.keyBindingCertificates.every((certificate) => typeof certificate === 'string')
+  ) {
+    throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+  }
+  return value.keyBindingCertificates;
+}
+
+function parseJwks(value: unknown): readonly RegistryJwk[] {
+  if (!isRecord(value) || !Array.isArray(value.keys)) {
+    throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+  }
+  return value.keys.filter(isRecord);
+}
+
+async function verifyKeyBindingCertificate(
+  token: string,
+  jwks: readonly RegistryJwk[],
+  expectedEName: string,
+): Promise<KeyBindingCertificate> {
+  const [encodedHeader, encodedPayload, encodedSignature, ...rest] = token.split('.');
+  if (!encodedHeader || !encodedPayload || !encodedSignature || rest.length > 0) {
+    throw new Error('Invalid certificate.');
+  }
+  const header = parseJson<{ alg?: string; kid?: string }>(encodedHeader);
+  const payload = parseJson<{ ename?: string; publicKey?: string; exp?: number }>(encodedPayload);
+  const jwk = jwks.find((candidate) => candidate.kid === header.kid);
+  if (
+    header.alg !== 'ES256' ||
+    !jwk ||
+    payload.ename !== expectedEName ||
+    typeof payload.publicKey !== 'string' ||
+    typeof payload.exp !== 'number' ||
+    payload.exp <= Math.floor(Date.now() / 1000)
+  ) {
+    throw new Error('Invalid certificate.');
+  }
+  const key = await crypto.subtle.importKey(
+    'jwk',
+    jwk,
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['verify'],
+  );
+  const valid = await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' },
+    key,
+    toArrayBuffer(base64UrlDecode(encodedSignature)),
+    toArrayBuffer(encoder.encode(`${encodedHeader}.${encodedPayload}`)),
+  );
+  if (!valid) throw new Error('Invalid certificate.');
+  return { eName: payload.ename, publicKey: payload.publicKey, exp: payload.exp };
+}
+
+async function importW3dsPublicKey(encodedKey: string): Promise<CryptoKey> {
+  const bytes = decodeMultibase(encodedKey);
+  if (bytes.length === 65 && bytes[0] === 4) {
+    return crypto.subtle.importKey(
+      'raw',
+      toArrayBuffer(bytes),
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false,
+      ['verify'],
+    );
+  }
+  return crypto.subtle.importKey(
+    'spki',
+    toArrayBuffer(bytes),
+    { name: 'ECDSA', namedCurve: 'P-256' },
+    false,
+    ['verify'],
+  );
+}
+
+function decodeSignature(signature: string): Uint8Array {
+  if (signature.startsWith('z')) return decodeBase58(signature.slice(1));
+  if (signature.startsWith('m')) return decodeBase64(signature.slice(1));
+  if (signature.startsWith('f')) return hexDecode(signature.slice(1));
+  return decodeBase64(signature);
+}
+
+function decodeMultibase(value: string): Uint8Array {
+  const prefix = value[0];
+  const content = value.slice(1);
+  if (prefix === 'z') return decodeBase58(content);
+  if (prefix === 'm') return decodeBase64(content);
+  if (prefix === 'f') return hexDecode(content);
+  throw new Error('Unsupported public key encoding.');
+}
+
+function decodeBase64(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9+/_-]*={0,2}$/.test(value)) throw new Error('Invalid base64 value.');
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/');
+  return new Uint8Array(Buffer.from(normalized, 'base64'));
+}
+
+function base64UrlEncode(value: string | Uint8Array): string {
+  const bytes = typeof value === 'string' ? encoder.encode(value) : value;
+  return Buffer.from(bytes).toString('base64url');
+}
+
+function base64UrlDecode(value: string): Uint8Array {
+  if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('Invalid base64url value.');
+  return new Uint8Array(Buffer.from(value, 'base64url'));
+}
+
+function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const output = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(output).set(bytes);
+  return output;
+}
+
+function hexDecode(value: string): Uint8Array {
+  if (!/^[a-f\d]+$/i.test(value) || value.length % 2 !== 0) throw new Error('Invalid hex value.');
+  return new Uint8Array(Buffer.from(value, 'hex'));
+}
+
+function decodeBase58(value: string): Uint8Array {
+  const alphabet = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz';
+  const bytes: number[] = [];
+  for (const character of value) {
+    const digit = alphabet.indexOf(character);
+    if (digit < 0) throw new Error('Invalid base58 value.');
+    let carry = digit;
+    for (let index = bytes.length - 1; index >= 0; index -= 1) {
+      const next = (bytes[index] ?? 0) * 58 + carry;
+      bytes[index] = next & 0xff;
+      carry = next >> 8;
+    }
+    while (carry > 0) {
+      bytes.unshift(carry & 0xff);
+      carry >>= 8;
+    }
+  }
+  for (const character of value) {
+    if (character !== '1') break;
+    bytes.unshift(0);
+  }
+  return new Uint8Array(bytes.length > 0 ? bytes : [0]);
+}
+
+function parseJson<T>(encoded: string): T {
+  try {
+    return JSON.parse(new TextDecoder().decode(base64UrlDecode(encoded))) as T;
+  } catch {
+    throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+let service: W3dsAuthService | undefined;
+
+export function getW3dsAuthService(): W3dsAuthService {
+  service ??= new W3dsAuthService({ config: readW3dsAuthConfig() });
+  return service;
+}
+
+function readW3dsAuthConfig(): W3dsAuthConfig {
+  const platformName = process.env.W3DS_AUTH_PLATFORM_NAME?.trim() || 'vidak';
+  const registryBaseUrl = process.env.W3DS_REGISTRY_BASE_URL?.trim();
+  const jwtSecret = process.env.W3DS_AUTH_JWT_SECRET;
+  if (!registryBaseUrl || !jwtSecret || jwtSecret.length < 32) {
+    throw new W3dsAuthError('W3DS authentication is not configured.', 'configuration_error', 503);
+  }
+  return {
+    platformName,
+    registryBaseUrl,
+    jwtSecret,
+    ...(process.env.W3DS_AUTH_MIN_WALLET_VERSION
+      ? { minimumWalletVersion: process.env.W3DS_AUTH_MIN_WALLET_VERSION }
+      : {}),
+  };
+}
+
+export function getBearerToken(headers: Headers): string | undefined {
+  const authorization = headers.get('authorization');
+  if (!authorization?.startsWith('Bearer ')) return undefined;
+  const token = authorization.slice('Bearer '.length).trim();
+  return token || undefined;
+}

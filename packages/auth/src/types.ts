@@ -111,6 +111,23 @@ export interface UpdateAuthProfileInput {
 }
 
 /**
+ * Product-facing sign-in challenge for the W3DS provider.
+ * `signInUri` is an opaque deeplink/QR value — not a protocol teaching surface.
+ */
+export interface LoginChallenge {
+  offerId: string;
+  signInUri: string;
+  expiresAt: string;
+}
+
+/** Status of a pending W3DS login challenge while the SPA polls for completion. */
+export type LoginChallengeStatus =
+  | { status: 'pending' }
+  | { status: 'completed'; session: AuthSession }
+  | { status: 'expired' }
+  | { status: 'failed'; error: { code: string; message: string } };
+
+/**
  * Capability matrix for the active authentication provider.
  * Feature UI should gate password vs challenge flows on these flags.
  */
@@ -142,11 +159,27 @@ export interface AuthApi {
 
 /**
  * Provider-driven authentication client.
- * Implementations: development (mock) and W3DS (platform HTTP — later phases).
+ * Implementations: development (mock) and W3DS (platform HTTP).
  */
 export interface AuthClient extends AuthApi {
   readonly provider: AuthProviderId;
   readonly capabilities: AuthProviderCapabilities;
+
+  /**
+   * Create a W3DS sign-in challenge (offer).
+   * Unsupported for the development provider.
+   */
+  createLoginChallenge(): Promise<LoginChallenge>;
+
+  /** Poll a W3DS sign-in challenge until it reaches a terminal state. */
+  getLoginChallengeStatus(offerId: string): Promise<LoginChallengeStatus>;
+
+  /**
+   * Restore the current platform session.
+   * W3DS uses same-origin cookies via `/api/auth/session` (+ refresh).
+   * Development returns `null` and relies on browser token storage + `refresh`.
+   */
+  restoreSession(): Promise<AuthSession | null>;
 }
 
 export interface TokenStorage {

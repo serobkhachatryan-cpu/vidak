@@ -2,24 +2,63 @@
 
 ## Current state
 
-This repository does not yet implement a backend service. There are no API
-route handlers, server actions, database models, persistence adapters, queue
-workers, storage integrations, production authentication flows, or
-video-processing pipelines in the current source tree.
+The first platform backend capability is native W3DS authentication, hosted as
+Next.js route handlers in `apps/web`. There is still no general-purpose API,
+database model, queue worker, storage integration, or video-processing
+pipeline.
 
 The platform description and package names establish intended domains, but they
 do not constitute implemented runtime capabilities.
 
 ```mermaid
 flowchart LR
-  Clients["Next.js applications"] -. no application API boundary yet .-> Platform["Backend platform"]
-  Auth["@w3ds/auth<br/>contracts and browser storage"] -. client-only boundary .-> Platform
+  Clients["Next.js applications"] --> Auth["apps/web API routes\nW3DS authentication"]
+  Auth --> Platform["Registry + eVault\nserver-side verification"]
+  Contracts["@w3ds/auth<br/>contracts and browser storage"] -. client-only boundary .-> Platform
   API["@w3ds/api-client<br/>typed mock clients"] -. client-only boundary .-> Platform
   SDK["@w3ds/sdk<br/>empty export"] -. reserved boundary .-> Platform
   Player["@w3ds/player<br/>empty export"] -. reserved boundary .-> Platform
 ```
 
-## Existing server-side behavior
+## W3DS authentication backend
+
+`apps/web` exposes these Node.js route handlers:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/auth/offer` | Create a one-time, five-minute `w3ds://auth` login offer. |
+| `POST` | `/api/auth/callback` | Receive the wallet callback and verify its signature server-side. |
+| `GET` | `/api/auth/offer/:offerId/status` | Let the same-origin SPA poll for login completion. |
+| `GET` | `/api/auth/session` | Restore an authenticated platform session. |
+| `GET` | `/api/auth/me` | Read the current platform user. |
+| `POST` | `/api/auth/refresh` | Rotate an HTTP-only refresh session. |
+| `POST` | `/api/auth/logout` | Revoke a platform session and clear cookies. |
+
+The backend resolves the W3ID in Registry, loads key-binding certificates from
+the resolved eVault's `/whois` endpoint, verifies the Registry-signed ES256
+certificates, and verifies the eID wallet's ECDSA P-256 signature over the
+one-time session ID. The browser never contacts those protocol services or
+receives their certificates or public-key material.
+
+The platform issues signed access and refresh JWTs. Both are set as `HttpOnly`,
+`SameSite=Lax` cookies; the access credential has a 15-minute lifetime and the
+refresh credential rotates with a seven-day lifetime. `Authorization: Bearer`
+access tokens are accepted for server-to-server/API clients.
+
+Configure the flow with the root `.env.example` values:
+
+- `W3DS_REGISTRY_BASE_URL`
+- `W3DS_AUTH_JWT_SECRET` (32+ secret characters)
+- `W3DS_AUTH_PLATFORM_NAME` (optional; defaults to `vidak`)
+- `W3DS_AUTH_MIN_WALLET_VERSION` (optional temporary compatibility gate)
+
+The current session, offer, and user stores are process-local because Vidak
+does not yet have a database. This is suitable for local development and a
+single long-lived Node instance only. Before deployment to a multi-instance or
+serverless environment, replace those stores with durable shared persistence,
+add offer/session cleanup, rate limiting, and structured security audit logs.
+
+## Other server-side behavior
 
 The applications can be built and served by Next.js. This is the only current
 server runtime:
@@ -31,8 +70,8 @@ server runtime:
 - The included Compose configuration builds and exposes the `web` application
   on port 3000 with `NODE_ENV=production`.
 
-No custom request handling, API contract, or external service connection is
-defined in the applications.
+Other than W3DS authentication, no custom request handling, API contract, or
+external service connection is defined in the applications.
 
 ## Package boundaries
 

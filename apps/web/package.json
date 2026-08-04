@@ -6,6 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf .next"
   },
@@ -17,18 +18,20 @@
     "@w3ds/config": "workspace:*",
     "@w3ds/design-tokens": "workspace:*",
     "@w3ds/hooks": "workspace:*",
+    "@w3ds/settings-page": "workspace:*",
     "@w3ds/types": "workspace:*",
     "@w3ds/ui": "workspace:*",
     "@w3ds/upload-page": "workspace:*",
     "@w3ds/user-profile-page": "workspace:*",
-    "@w3ds/settings-page": "workspace:*",
     "@w3ds/watch-page": "workspace:*",
     "next": "latest",
+    "qrcode": "^1.5.4",
     "react": "latest",
     "react-dom": "latest"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "latest",
+    "@types/qrcode": "^1.5.6",
     "@types/react": "latest",
     "@types/react-dom": "latest",
     "tailwindcss": "latest"

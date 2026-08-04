@@ -2,9 +2,13 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
+  type AuthProviderCapabilities,
+  type AuthProviderId,
   type AuthSession,
   type AuthUser,
   createBrowserTokenStorage,
+  type LoginChallenge,
+  type LoginChallengeStatus,
   type LoginInput,
   type RegisterInput,
   restoreStoredSession,
@@ -27,24 +31,41 @@ interface AuthenticationContextValue {
   session: AuthSession | undefined;
   isLoading: boolean;
   error: Error | null;
+  provider: AuthProviderId;
+  capabilities: AuthProviderCapabilities;
   login(input: LoginInput): Promise<AuthSession>;
   register(input: RegisterInput): Promise<AuthSession>;
   logout(): Promise<void>;
   updateSessionUser(user: AuthUser): void;
+  createLoginChallenge(): Promise<LoginChallenge>;
+  getLoginChallengeStatus(offerId: string): Promise<LoginChallengeStatus>;
+  acceptSession(session: AuthSession, remember?: boolean): AuthSession;
 }
 
 const AuthenticationContext = createContext<AuthenticationContextValue | undefined>(undefined);
+
+async function restoreAuthSession(): Promise<AuthSession | null> {
+  if (authApiClient.capabilities.w3dsAuthChallenge) {
+    return authApiClient.restoreSession();
+  }
+  return restoreStoredSession(authApiClient, tokenStorage);
+}
 
 export function AuthenticationProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const sessionQuery = useQuery({
     queryKey: authSessionQueryKey,
-    queryFn: () => restoreStoredSession(authApiClient, tokenStorage),
+    queryFn: restoreAuthSession,
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
   });
 
   const persist = (session: AuthSession, remember: boolean) => {
+    if (session.provider === 'w3ds') {
+      // W3DS credentials live in HttpOnly cookies; keep React Query hydrated.
+      queryClient.setQueryData(authSessionQueryKey, session);
+      return session;
+    }
     storeSession(tokenStorage, session, remember);
     queryClient.setQueryData(authSessionQueryKey, session);
     return session;
@@ -63,6 +84,8 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
       session: sessionQuery.data ?? undefined,
       isLoading: sessionQuery.isPending,
       error: sessionQuery.error,
+      provider: authApiClient.provider,
+      capabilities: authApiClient.capabilities,
       login: async (input) => persist(await loginMutation.mutateAsync(input), input.remember),
       register: async (input) => persist(await registerMutation.mutateAsync(input), input.remember),
       logout: async () => {
@@ -81,10 +104,15 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
         const current = queryClient.getQueryData<AuthSession | null>(authSessionQueryKey);
         if (!current) return;
         const next = { ...current, user };
-        const stored = tokenStorage.read();
-        storeSession(tokenStorage, next, stored?.remember ?? false);
+        if (current.provider !== 'w3ds') {
+          const stored = tokenStorage.read();
+          storeSession(tokenStorage, next, stored?.remember ?? false);
+        }
         queryClient.setQueryData(authSessionQueryKey, next);
       },
+      createLoginChallenge: () => authApiClient.createLoginChallenge(),
+      getLoginChallengeStatus: (offerId) => authApiClient.getLoginChallengeStatus(offerId),
+      acceptSession: (session, remember = true) => persist(session, remember),
     }),
     [
       loginMutation,

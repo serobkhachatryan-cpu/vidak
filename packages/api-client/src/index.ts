@@ -13,4 +13,5 @@ export type { MockVideoApiClientOptions } from './mock-video-client';
 export { MockVideoApiClient } from './mock-video-client';
 export { createCursorPage, getNextPageParam } from './pagination';
 export type { VideoApiClient } from './video-client';
+export type { W3dsAuthClientOptions } from './w3ds-auth-client';
 export { W3dsAuthClient } from './w3ds-auth-client';

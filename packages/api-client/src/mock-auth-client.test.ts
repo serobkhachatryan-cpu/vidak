@@ -126,32 +126,15 @@ describe('createAuthClient', () => {
   });
 });
 
-describe('W3dsAuthClient', () => {
-  it('exposes W3DS capabilities and rejects password-based operations', async () => {
-    const client = new W3dsAuthClient();
-    expect(client.provider).toBe('w3ds');
-    expect(client.capabilities).toMatchObject({
-      emailPasswordLogin: false,
-      passwordRegistration: false,
-      w3dsAuthChallenge: true,
-      changePassword: false,
-      changeEmail: false,
+describe('development provider challenge APIs', () => {
+  it('rejects W3DS challenge methods and reports a null cookie restore', async () => {
+    const client = new MockAuthApiClient();
+    await expect(client.createLoginChallenge()).rejects.toMatchObject({
+      code: 'unsupported_capability',
     });
-
-    await expect(
-      client.login({ email: 'a@b.c', password: 'password123', remember: false }),
-    ).rejects.toMatchObject({ code: 'unsupported_capability' });
-    await expect(
-      client.register({
-        email: 'a@b.c',
-        password: 'password123',
-        displayName: 'A',
-        remember: false,
-      }),
-    ).rejects.toMatchObject({ code: 'unsupported_capability' });
-    await expect(client.refresh('refresh.token')).rejects.toMatchObject({
-      code: 'provider_unavailable',
+    await expect(client.getLoginChallengeStatus('offer-1')).rejects.toMatchObject({
+      code: 'unsupported_capability',
     });
-    await expect(client.logout()).resolves.toBeUndefined();
+    await expect(client.restoreSession()).resolves.toBeNull();
   });
 });

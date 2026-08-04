@@ -8,6 +8,8 @@ export type {
   AuthUser,
   AuthUserPermissions,
   AuthUserProfile,
+  LoginChallenge,
+  LoginChallengeStatus,
   LoginInput,
   RegisterInput,
   Role,
