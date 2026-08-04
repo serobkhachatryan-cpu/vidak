@@ -2,7 +2,9 @@
 
 import { platformName } from '@w3ds/config';
 import { AppShell, Button, Header, SearchInput, Sidebar } from '@w3ds/ui';
+import { useRouter } from 'next/navigation';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import { useAuthentication, useUserProfile } from '../features/auth/auth-provider';
 
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
@@ -17,6 +19,9 @@ export interface ApplicationShellProps {
 }
 
 export function ApplicationShell({ children, currentHref, searchValue = '' }: ApplicationShellProps) {
+  const router = useRouter();
+  const { isLoading, logout } = useAuthentication();
+  const user = useUserProfile();
   const [darkMode, setDarkMode] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -90,15 +95,38 @@ export function ApplicationShell({ children, currentHref, searchValue = '' }: Ap
             </form>
           }
           actions={
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-pressed={darkMode}
-              aria-label={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
-              onClick={() => setDarkMode((current) => !current)}
-            >
-              {darkMode ? 'Light mode' : 'Dark mode'}
-            </Button>
+            <div className="flex items-center gap-1">
+              <Button
+                size="sm"
+                variant="ghost"
+                aria-pressed={darkMode}
+                aria-label={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
+                onClick={() => setDarkMode((current) => !current)}
+              >
+                {darkMode ? 'Light mode' : 'Dark mode'}
+              </Button>
+              {!isLoading &&
+                (user ? (
+                  <>
+                    <Button size="sm" variant="ghost" onClick={() => router.push('/library')}>
+                      {user.displayName}
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        void logout().then(() => router.replace('/'));
+                      }}
+                    >
+                      Sign out
+                    </Button>
+                  </>
+                ) : (
+                  <Button size="sm" variant="secondary" onClick={() => router.push('/login')}>
+                    Sign in
+                  </Button>
+                ))}
+            </div>
           }
         />
       }

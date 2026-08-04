@@ -119,6 +119,9 @@ importers:
       '@w3ds/api-client':
         specifier: workspace:*
         version: link:../../packages/api-client
+      '@w3ds/auth':
+        specifier: workspace:*
+        version: link:../../packages/auth
       '@w3ds/config':
         specifier: workspace:*
         version: link:../../packages/config
@@ -162,6 +165,9 @@ importers:
 
   packages/api-client:
     dependencies:
+      '@w3ds/auth':
+        specifier: workspace:*
+        version: link:../auth
       '@w3ds/types':
         specifier: workspace:*
         version: link:../types
@@ -178,6 +184,9 @@ importers:
       typescript:
         specifier: 6.0.3
         version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.10(@types/node@26.1.2)(vite@8.2.0(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0))
 
   packages/config:
     devDependencies:

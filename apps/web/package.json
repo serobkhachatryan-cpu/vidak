@@ -12,6 +12,7 @@
   "dependencies": {
     "@tanstack/react-query": "latest",
     "@w3ds/api-client": "workspace:*",
+    "@w3ds/auth": "workspace:*",
     "@w3ds/config": "workspace:*",
     "@w3ds/design-tokens": "workspace:*",
     "@w3ds/hooks": "workspace:*",
