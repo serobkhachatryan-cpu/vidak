@@ -208,6 +208,20 @@ export class MockVideoApiClient implements VideoApiClient {
     if (filters.sort === 'views') {
       return [...videos].sort((first, second) => second.viewCount - first.viewCount);
     }
+    if (filters.sort === 'relevance' && search) {
+      const score = (video: Video) => {
+        const title = video.title.toLocaleLowerCase();
+        const description = video.description.toLocaleLowerCase();
+        const tags = video.tags.join(' ').toLocaleLowerCase();
+        if (title === search) return 0;
+        if (title.startsWith(search)) return 1;
+        if (title.includes(search)) return 2;
+        if (tags.includes(search)) return 3;
+        if (description.includes(search)) return 4;
+        return 5;
+      };
+      return [...videos].sort((first, second) => score(first) - score(second));
+    }
     return videos;
   }
 
