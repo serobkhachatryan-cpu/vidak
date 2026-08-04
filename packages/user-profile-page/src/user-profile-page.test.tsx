@@ -110,6 +110,7 @@ describe('UserProfilePage', () => {
     expect(markup).toContain('Building thoughtful tools for curious people.');
     expect(markup).toContain('London, United Kingdom');
     expect(markup).toContain('example.com/ada');
+    expect(markup).toContain('opens in a new tab');
     expect(markup).toContain('Joined January 2025');
     expect(markup).toContain('aria-label="Follow Ada Lovelace"');
     expect(markup).toContain('aria-label="Share Ada Lovelace&#x27;s profile"');
@@ -188,8 +189,9 @@ describe('UserProfilePage', () => {
     const aboutMarkup = renderToStaticMarkup(
       <UserProfilePage profile={profile} activeTab="about" videoCount={24} />,
     );
-    expect(aboutMarkup).toContain('aria-label="Channel description"');
+    expect(aboutMarkup).toContain('aria-label="Profile description"');
     expect(aboutMarkup).toContain('aria-label="Profile statistics"');
+    expect(aboutMarkup).toContain('opens in a new tab');
     expect(aboutMarkup).toContain('Joined');
     expect(aboutMarkup).toContain('January 2025');
     expect(aboutMarkup).toContain('999 followers');

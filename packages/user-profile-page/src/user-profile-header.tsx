@@ -1,16 +1,21 @@
 import type { UserProfile } from '@w3ds/types';
 import { Avatar, Badge, Button, Heading, IconButton, Text } from '@w3ds/ui';
 import { useEffect, useId, useRef, useState } from 'react';
-import {
-  formatFollowers,
-  formatFollowing,
-  formatJoinDate,
-  formatVideoCount,
-  formatWebsiteLabel,
-} from './format';
+import { formatFollowers, formatFollowing, formatJoinDate, formatVideoCount } from './format';
+import { ProfileWebsiteLink } from './profile-website-link';
 import { cx, focusRing } from './styles';
 
 export const userProfileBannerClassName = 'h-28 w-full rounded-xl sm:h-40 lg:h-56';
+
+export interface UserProfileHeaderProps {
+  profile: UserProfile;
+  followerCount: number;
+  followingCount: number;
+  videoCount: number;
+  following: boolean;
+  onFollowToggle: () => void;
+  onShare: () => void;
+}
 
 function ProfileBanner({ profile }: { profile: UserProfile }) {
   return profile.bannerUrl ? (
@@ -73,16 +78,16 @@ function MoreActionsMenu({ displayName }: { displayName: string }) {
 
   useEffect(() => {
     if (!open) return;
-    const onPointerDown = (event: MouseEvent) => {
+    const onPointerDown = (event: PointerEvent) => {
       if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
     };
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setOpen(false);
     };
-    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
     return () => {
-      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [open]);
@@ -131,26 +136,14 @@ export function UserProfileHeader({
   following,
   onFollowToggle,
   onShare,
-}: {
-  profile: UserProfile;
-  followerCount: number;
-  followingCount: number;
-  videoCount: number;
-  following: boolean;
-  onFollowToggle: () => void;
-  onShare: () => void;
-}) {
+}: UserProfileHeaderProps) {
   const joinedAt = formatJoinDate(profile.joinedAt);
   const summary = [
     formatFollowers(followerCount),
     formatFollowing(followingCount),
     formatVideoCount(videoCount),
   ].join(' · ');
-  const meta = [
-    profile.location,
-    profile.websiteUrl ? formatWebsiteLabel(profile.websiteUrl) : undefined,
-    joinedAt ? `Joined ${joinedAt}` : undefined,
-  ].filter(Boolean);
+  const hasMeta = Boolean(profile.location || profile.websiteUrl || joinedAt);
 
   return (
     <header className="space-y-4">
@@ -189,19 +182,12 @@ export function UserProfileHeader({
                 {profile.bio}
               </Text>
             )}
-            {meta.length > 0 && (
+            {hasMeta && (
               <ul className="mt-2 flex flex-wrap gap-x-3 gap-y-1 font-sans text-sm text-muted-foreground">
                 {profile.location && <li>{profile.location}</li>}
                 {profile.websiteUrl && (
                   <li>
-                    <a
-                      href={profile.websiteUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className={cx('text-primary hover:underline', focusRing)}
-                    >
-                      {formatWebsiteLabel(profile.websiteUrl)}
-                    </a>
+                    <ProfileWebsiteLink url={profile.websiteUrl} />
                   </li>
                 )}
                 {joinedAt && <li>Joined {joinedAt}</li>}

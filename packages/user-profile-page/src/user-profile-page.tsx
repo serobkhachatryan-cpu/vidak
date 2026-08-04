@@ -61,7 +61,7 @@ function UserProfilePageSkeleton() {
     <LoadingRegion label="Loading profile">
       <div className="space-y-6">
         <Skeleton className={userProfileBannerClassName} />
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
             <Skeleton circle className="h-20 w-20 shrink-0 sm:h-28 sm:w-28" />
             <div className="space-y-2">
@@ -70,7 +70,7 @@ function UserProfilePageSkeleton() {
               <Skeleton className="h-4 w-64" />
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Skeleton className="h-10 w-24" />
             <Skeleton className="h-10 w-20" />
             <Skeleton className="h-10 w-10" />
@@ -138,15 +138,17 @@ export function UserProfilePage({
       return;
     }
     if (typeof navigator !== 'undefined' && typeof navigator.share === 'function' && profile) {
-      void navigator.share({
-        title: profile.displayName,
-        text: `Check out @${profile.handle} on W3DS`,
-        ...(typeof window !== 'undefined' ? { url: window.location.href } : {}),
-      });
+      void navigator
+        .share({
+          title: profile.displayName,
+          text: `Check out @${profile.handle} on W3DS`,
+          ...(typeof window !== 'undefined' ? { url: window.location.href } : {}),
+        })
+        .catch(() => undefined);
       return;
     }
     if (typeof navigator !== 'undefined' && navigator.clipboard && typeof window !== 'undefined') {
-      void navigator.clipboard.writeText(window.location.href);
+      void navigator.clipboard.writeText(window.location.href).catch(() => undefined);
     }
   };
 

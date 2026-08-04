@@ -16,9 +16,8 @@ import {
   formatFollowing,
   formatJoinDate,
   formatVideoCount,
-  formatWebsiteLabel,
 } from './format';
-import { cx, focusRing } from './styles';
+import { ProfileWebsiteLink } from './profile-website-link';
 import {
   LoadingRegion,
   LoadMoreVideos,
@@ -42,6 +41,16 @@ function PlaylistPlaceholderCard({ title }: { title: string }) {
   );
 }
 
+export interface VideosPanelProps {
+  videos: readonly Video[];
+  channelsById: Readonly<Record<string, Channel>>;
+  state: UserProfileSectionState;
+  onRetry?: (() => void) | undefined;
+  onLoadMore?: (() => void) | undefined;
+  hasMore?: boolean | undefined;
+  isFetchingMore?: boolean | undefined;
+}
+
 export function VideosPanel({
   videos,
   channelsById,
@@ -50,15 +59,7 @@ export function VideosPanel({
   onLoadMore,
   hasMore,
   isFetchingMore,
-}: {
-  videos: readonly Video[];
-  channelsById: Readonly<Record<string, Channel>>;
-  state: UserProfileSectionState;
-  onRetry?: (() => void) | undefined;
-  onLoadMore?: (() => void) | undefined;
-  hasMore?: boolean | undefined;
-  isFetchingMore?: boolean | undefined;
-}) {
+}: VideosPanelProps) {
   return (
     <UserProfileSection
       state={state}
@@ -93,15 +94,13 @@ export function VideosPanel({
   );
 }
 
-export function PlaylistsPanel({
-  playlists,
-  state,
-  onRetry,
-}: {
+export interface PlaylistsPanelProps {
   playlists: readonly Playlist[];
   state: UserProfileSectionState;
   onRetry?: (() => void) | undefined;
-}) {
+}
+
+export function PlaylistsPanel({ playlists, state, onRetry }: PlaylistsPanelProps) {
   return (
     <UserProfileSection
       state={state}
@@ -138,17 +137,19 @@ export function PlaylistsPanel({
   );
 }
 
+export interface AboutPanelProps {
+  profile: UserProfile;
+  followerCount: number;
+  followingCount: number;
+  videoCount: number;
+}
+
 export function AboutPanel({
   profile,
   followerCount,
   followingCount,
   videoCount,
-}: {
-  profile: UserProfile;
-  followerCount: number;
-  followingCount: number;
-  videoCount: number;
-}) {
+}: AboutPanelProps) {
   const joinedAt = formatJoinDate(profile.joinedAt);
   const details = [
     { label: 'Username', value: `@${profile.handle}` },
@@ -161,7 +162,7 @@ export function AboutPanel({
 
   return (
     <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]">
-      <section aria-label="Channel description" className="rounded-lg bg-surface-raised p-4">
+      <section aria-label="Profile description" className="rounded-lg bg-surface-raised p-4">
         <Heading as="h2" size="sm">
           Description
         </Heading>
@@ -170,14 +171,7 @@ export function AboutPanel({
         </Text>
         {profile.websiteUrl && (
           <p className="mt-4 font-sans text-sm">
-            <a
-              href={profile.websiteUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={cx('text-primary hover:underline', focusRing)}
-            >
-              {formatWebsiteLabel(profile.websiteUrl)}
-            </a>
+            <ProfileWebsiteLink url={profile.websiteUrl} />
           </p>
         )}
       </section>

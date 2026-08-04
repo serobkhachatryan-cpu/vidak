@@ -144,6 +144,9 @@ export const VideosError: Story = { args: { videosState: 'error', onRetryVideos:
 export const NoPlaylists: Story = {
   args: { activeTab: 'playlists', playlists: [], playlistsState: 'empty' },
 };
+export const PlaylistsLoading: Story = {
+  args: { activeTab: 'playlists', playlistsState: 'loading' },
+};
 export const PlaylistsError: Story = {
   args: { activeTab: 'playlists', playlistsState: 'error', onRetryPlaylists: noop },
 };

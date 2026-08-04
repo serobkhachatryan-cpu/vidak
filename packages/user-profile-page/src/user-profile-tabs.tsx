@@ -23,15 +23,13 @@ function tabIndexForKey(key: string, current: number, total: number): number | u
   return undefined;
 }
 
-export function UserProfileTabs({
-  scope,
-  activeTab,
-  onChange,
-}: {
+export interface UserProfileTabsProps {
   scope: string;
   activeTab: UserProfileTabId;
   onChange: (tab: UserProfileTabId) => void;
-}) {
+}
+
+export function UserProfileTabs({ scope, activeTab, onChange }: UserProfileTabsProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {

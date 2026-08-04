@@ -7,7 +7,7 @@ import {
   useInfiniteVideos,
   useUserProfile,
 } from '@w3ds/hooks';
-import type { Channel, UserProfileId } from '@w3ds/types';
+import type { Channel, ChannelId, Playlist, UserProfileId, Video } from '@w3ds/types';
 import { useMemo } from 'react';
 import { UserProfilePage, type UserProfilePageProps } from './user-profile-page';
 import type { UserProfileSectionState } from './user-profile-section';
@@ -53,6 +53,22 @@ export function ownedChannelsForUser(
   return channels.filter((channel) => channel.ownerId === userId);
 }
 
+/** When ownership is a single channel the API already scoped the list; otherwise filter client-side. */
+export function videosForOwnedChannels(
+  videos: readonly Video[],
+  ownedChannelIds: ReadonlySet<ChannelId>,
+  primaryChannelId: ChannelId | undefined,
+): readonly Video[] {
+  return primaryChannelId ? videos : videos.filter((video) => ownedChannelIds.has(video.channelId));
+}
+
+export function playlistsForOwnedChannels(
+  playlists: readonly Playlist[],
+  ownedChannelIds: ReadonlySet<ChannelId>,
+): readonly Playlist[] {
+  return playlists.filter((playlist) => ownedChannelIds.has(playlist.channelId));
+}
+
 export function UserProfilePageData({ client, userId, ...props }: UserProfilePageDataProps) {
   const profileQuery = useUserProfile(client, userId);
   const profile = profileQuery.data;
@@ -81,23 +97,25 @@ export function UserProfilePageData({ client, userId, ...props }: UserProfilePag
   const videoPages = videosQuery.data?.pages;
   const playlistPages = playlistsQuery.data?.pages;
 
-  const channelsById = useMemo(
+  const channelsById = useMemo(() => {
+    const entries: Array<[string, Channel]> = ownedChannels.map((channel) => [
+      channel.id,
+      channel,
+    ]);
+    return Object.fromEntries(entries);
+  }, [ownedChannels]);
+  const videos = useMemo(
     () =>
-      Object.fromEntries(ownedChannels.map((channel) => [channel.id, channel])) as Record<
-        string,
-        Channel
-      >,
-    [ownedChannels],
+      videosForOwnedChannels(
+        videoPages?.flatMap((page) => page.items) ?? [],
+        ownedChannelIds,
+        primaryChannelId,
+      ),
+    [ownedChannelIds, primaryChannelId, videoPages],
   );
-  const videos = useMemo(() => {
-    const items = videoPages?.flatMap((page) => page.items) ?? [];
-    return primaryChannelId ? items : items.filter((video) => ownedChannelIds.has(video.channelId));
-  }, [ownedChannelIds, primaryChannelId, videoPages]);
   const playlists = useMemo(
     () =>
-      (playlistPages?.flatMap((page) => page.items) ?? []).filter((playlist) =>
-        ownedChannelIds.has(playlist.channelId),
-      ),
+      playlistsForOwnedChannels(playlistPages?.flatMap((page) => page.items) ?? [], ownedChannelIds),
     [ownedChannelIds, playlistPages],
   );
   const videoCount = useMemo(
