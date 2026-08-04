@@ -6,7 +6,7 @@ import type {
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, sql } from 'drizzle-orm';
 import { CreatorVideoError } from './creator-video-errors';
 import type { W3dsDatabase } from './db/client';
 import { creatorChannels, mediaAssets, videos } from './db/schema';
@@ -66,6 +66,18 @@ export interface CreatorVideoStore {
    * ownership, createdAt, and media links.
    */
   unpublishOwnedVideo(videoId: string, ownerId: string): Promise<Video>;
+  /**
+   * Anonymous public detail lookup by opaque `publicVideoId`.
+   * Returns only when `status === 'published'` and visibility is `public` or
+   * `unlisted`. Drafts and `private` published rows are never returned.
+   */
+  getPublishedAccessibleByPublicVideoId(publicVideoId: string): Promise<Video | undefined>;
+  /**
+   * Anonymous discovery listing: `status === 'published'` and
+   * `visibility === 'public'` only. Ordered by `publishedAt` descending.
+   * Callers page with `limit` / `offset` (fetch `limit + 1` to detect a next page).
+   */
+  listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]>;
 }
 
 function toChannel(row: {
@@ -352,6 +364,35 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
     this.videosById.set(normalizedId, next);
     return cloneVideo(next);
   }
+
+  async getPublishedAccessibleByPublicVideoId(publicVideoId: string): Promise<Video | undefined> {
+    const normalized = publicVideoId.trim();
+    if (!normalized) return undefined;
+    const match = [...this.videosById.values()].find(
+      (video) =>
+        video.publicVideoId === normalized &&
+        video.status === 'published' &&
+        (video.visibility === 'public' || video.visibility === 'unlisted'),
+    );
+    return match ? cloneVideo(match) : undefined;
+  }
+
+  async listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]> {
+    const safeLimit = Math.max(0, Math.floor(limit));
+    const safeOffset = Math.max(0, Math.floor(offset));
+    if (safeLimit === 0) return [];
+    return [...this.videosById.values()]
+      .filter((video) => video.status === 'published' && video.visibility === 'public')
+      .sort((left, right) => {
+        const leftPublished = left.publishedAt ?? left.createdAt;
+        const rightPublished = right.publishedAt ?? right.createdAt;
+        const byPublished = rightPublished.localeCompare(leftPublished);
+        if (byPublished !== 0) return byPublished;
+        return right.id.localeCompare(left.id);
+      })
+      .slice(safeOffset, safeOffset + safeLimit)
+      .map(cloneVideo);
+  }
 }
 
 /** PostgreSQL-backed store shared across application instances. */
@@ -624,5 +665,36 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       if (again?.status === 'draft') return toVideo(again);
       throw new CreatorVideoError('Failed to unpublish video.', 'internal_error', 500);
     });
+  }
+
+  async getPublishedAccessibleByPublicVideoId(publicVideoId: string): Promise<Video | undefined> {
+    const normalized = publicVideoId.trim();
+    if (!normalized) return undefined;
+    const [row] = await this.db
+      .select()
+      .from(videos)
+      .where(
+        and(
+          eq(videos.publicVideoId, normalized),
+          eq(videos.status, 'published'),
+          inArray(videos.visibility, ['public', 'unlisted']),
+        ),
+      )
+      .limit(1);
+    return row ? toVideo(row) : undefined;
+  }
+
+  async listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]> {
+    const safeLimit = Math.max(0, Math.floor(limit));
+    const safeOffset = Math.max(0, Math.floor(offset));
+    if (safeLimit === 0) return [];
+    const rows = await this.db
+      .select()
+      .from(videos)
+      .where(and(eq(videos.status, 'published'), eq(videos.visibility, 'public')))
+      .orderBy(desc(videos.publishedAt), desc(videos.id))
+      .limit(safeLimit)
+      .offset(safeOffset);
+    return rows.map(toVideo);
   }
 }

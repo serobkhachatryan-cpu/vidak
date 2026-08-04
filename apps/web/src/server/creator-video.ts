@@ -3,6 +3,8 @@ import type { AuthUser } from '@w3ds/auth';
 import type {
   Channel,
   CreateVideoDraftInput,
+  CursorPage,
+  PaginationParams,
   UpdateVideoDraftInput,
   Video,
   VideoCategory,
@@ -111,7 +113,8 @@ export class CreatorVideoService {
   /**
    * Publishes an owned video when it has at least one ready media asset.
    * Idempotent when already published. Assigns a stable `publicVideoId` on
-   * first publish. Does not expose a public route.
+   * first publish. Lifecycle rules live in the store — routes must not
+   * re-validate them.
    */
   async publishVideo(accessToken: string, videoId: string): Promise<Video> {
     const user = await this.requireUser(accessToken);
@@ -133,6 +136,36 @@ export class CreatorVideoService {
       throw new CreatorVideoError('Video was not found.', 'not_found', 404);
     }
     return this.store.unpublishOwnedVideo(normalizedId, user.id);
+  }
+
+  /**
+   * Anonymous published-video detail by opaque `publicVideoId`.
+   * Resolves only `published` videos with `public` or `unlisted` visibility.
+   */
+  async getPublicVideo(publicVideoId: string): Promise<Video> {
+    const normalized = publicVideoId.trim();
+    if (!normalized) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    const video = await this.store.getPublishedAccessibleByPublicVideoId(normalized);
+    if (!video) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    return video;
+  }
+
+  /**
+   * Anonymous discovery page: only `published` + `public` videos.
+   * `unlisted`, `private`, and drafts are never included.
+   */
+  async listPublicVideos(params: PaginationParams = {}): Promise<CursorPage<Video>> {
+    const { offset, limit } = normalizePublicPagination(params);
+    const rows = await this.store.listPublishedPublicVideos(limit + 1, offset);
+    const items = rows.slice(0, limit);
+    return {
+      items,
+      ...(rows.length > limit ? { nextCursor: `offset:${offset + items.length}` } : {}),
+    };
   }
 
   private async requireUser(accessToken: string): Promise<AuthUser> {
@@ -366,4 +399,26 @@ function normalizeVisibility(value: unknown): VideoVisibility {
     throw new CreatorVideoError('Visibility is invalid.', 'validation_failed', 400);
   }
   return value as VideoVisibility;
+}
+
+const DEFAULT_PUBLIC_PAGE_SIZE = 20;
+const MAX_PUBLIC_PAGE_SIZE = 50;
+
+function normalizePublicPagination(params: PaginationParams): { offset: number; limit: number } {
+  const offset = parsePublicCursor(params.cursor);
+  let limit = DEFAULT_PUBLIC_PAGE_SIZE;
+  if (typeof params.limit === 'number' && Number.isFinite(params.limit)) {
+    const floored = Math.floor(params.limit);
+    if (floored >= 1) {
+      limit = Math.min(floored, MAX_PUBLIC_PAGE_SIZE);
+    }
+  }
+  return { offset, limit };
+}
+
+/** Opaque `offset:N` cursors; malformed values start at the beginning. */
+function parsePublicCursor(cursor: string | undefined): number {
+  if (!cursor) return 0;
+  const match = /^offset:(\d+)$/.exec(cursor.trim());
+  return match ? Number(match[1]) : 0;
 }

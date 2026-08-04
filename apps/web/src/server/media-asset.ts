@@ -238,28 +238,25 @@ export class MediaAssetService {
     if (asset.uploadState !== 'ready') {
       throw new MediaAssetError('Media asset is not ready for download.', 'not_found', 404);
     }
+    return this.openReadyAssetStream(asset);
+  }
 
-    let body: ReadableStream<Uint8Array>;
-    try {
-      body = await this.storage.openReadStream(asset.storageKey);
-    } catch (error) {
-      if (error instanceof MediaStorageError && error.code === 'not_found') {
-        throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
-      }
-      throw error;
+  /**
+   * Anonymous stream for a ready asset attached to an already-validated
+   * published public/unlisted video. Callers must resolve visibility first;
+   * this method does not accept auth and never returns storage keys.
+   */
+  async openPublishedDownload(videoId: string, assetId: string): Promise<MediaAssetDownload> {
+    const normalizedVideoId = videoId.trim();
+    const normalizedAssetId = assetId.trim();
+    if (!normalizedVideoId || !normalizedAssetId) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
     }
-
-    return {
-      asset: toPublicMediaAsset(asset),
-      body,
-      headers: {
-        'Content-Type': asset.contentType,
-        'Content-Length': String(asset.byteSize),
-        'Content-Disposition': contentDispositionHeader(asset.originalFilename),
-        'Cache-Control': 'private, no-store',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    };
+    const asset = await this.store.getReadyAssetForVideo(normalizedVideoId, normalizedAssetId);
+    if (!asset) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+    }
+    return this.openReadyAssetStream(asset);
   }
 
   /**
@@ -307,6 +304,30 @@ export class MediaAssetService {
       throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
     }
     return asset;
+  }
+
+  private async openReadyAssetStream(asset: MediaAsset): Promise<MediaAssetDownload> {
+    let body: ReadableStream<Uint8Array>;
+    try {
+      body = await this.storage.openReadStream(asset.storageKey);
+    } catch (error) {
+      if (error instanceof MediaStorageError && error.code === 'not_found') {
+        throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+      }
+      throw error;
+    }
+
+    return {
+      asset: toPublicMediaAsset(asset),
+      body,
+      headers: {
+        'Content-Type': asset.contentType,
+        'Content-Length': String(asset.byteSize),
+        'Content-Disposition': contentDispositionHeader(asset.originalFilename),
+        'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff',
+      },
+    };
   }
 
   private async cleanupFailedUpload(options: {

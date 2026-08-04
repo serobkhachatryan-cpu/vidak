@@ -50,9 +50,9 @@ export const creatorChannels = pgTable(
 /**
  * Creator videos with an explicit draft | published lifecycle.
  * Visibility (`private` | `unlisted` | `public`) is independent of lifecycle.
- * `public_video_id` is assigned on first publish for later public routes —
- * those routes are not exposed in this milestone. Binary media is tracked
- * separately via `media_assets` + the server-only MediaStorage adapter.
+ * `public_video_id` is assigned on first publish for anonymous public detail /
+ * discovery / media routes. Binary media is tracked separately via
+ * `media_assets` + the server-only MediaStorage adapter.
  */
 export const videos = pgTable(
   'videos',
@@ -93,8 +93,9 @@ export const videos = pgTable(
 );
 
 /**
- * Upload lifecycle for durable media attached to a creator video draft.
- * Suitable for later multipart / processing phases; no public playback yet.
+ * Upload lifecycle for durable media attached to a creator video.
+ * Owner transfer is draft-scoped; anonymous streaming is gated by published
+ * public/unlisted visibility on the linked video.
  */
 export type MediaUploadState = 'pending' | 'uploading' | 'ready' | 'failed';
 

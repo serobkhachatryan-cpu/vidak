@@ -65,6 +65,12 @@ export interface MediaAssetStore {
    * Returns undefined when the asset is missing or not owned by `ownerId`.
    */
   deleteOwnedAsset(assetId: string, ownerId: string): Promise<MediaAsset | undefined>;
+  /**
+   * Returns a ready asset linked to `videoId` without ownership checks.
+   * Used by anonymous published-media streaming after the video has already
+   * been validated as published + public/unlisted.
+   */
+  getReadyAssetForVideo(videoId: string, assetId: string): Promise<MediaAsset | undefined>;
 }
 
 function cloneAsset(asset: MediaAsset): MediaAsset {
@@ -247,6 +253,12 @@ export class InMemoryMediaAssetStore implements MediaAssetStore {
     this.storageKeys.delete(existing.storageKey);
     return cloneAsset(existing);
   }
+
+  async getReadyAssetForVideo(videoId: string, assetId: string): Promise<MediaAsset | undefined> {
+    const asset = this.assetsById.get(assetId);
+    if (!asset || asset.videoId !== videoId || asset.uploadState !== 'ready') return undefined;
+    return cloneAsset(asset);
+  }
 }
 
 /** PostgreSQL-backed store shared across application instances. */
@@ -341,6 +353,21 @@ export class PostgresMediaAssetStore implements MediaAssetStore {
       .delete(mediaAssets)
       .where(and(eq(mediaAssets.id, assetId), eq(mediaAssets.ownerId, ownerId)))
       .returning();
+    return row ? toMediaAsset(row) : undefined;
+  }
+
+  async getReadyAssetForVideo(videoId: string, assetId: string): Promise<MediaAsset | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(mediaAssets)
+      .where(
+        and(
+          eq(mediaAssets.id, assetId),
+          eq(mediaAssets.videoId, videoId),
+          eq(mediaAssets.uploadState, 'ready'),
+        ),
+      )
+      .limit(1);
     return row ? toMediaAsset(row) : undefined;
   }
 }

@@ -7,16 +7,18 @@ Platform backend capabilities are hosted as Next.js route handlers in
 sessions in PostgreSQL through Drizzle ORM. Authenticated creators can also
 persist local creator channels, video draft/published metadata, and private
 media assets on that store. The durable video model supports an explicit
-draft ↔ published lifecycle with visibility and publishing metadata; public
-discovery routes and public playback URLs are not exposed yet.
+draft ↔ published lifecycle with visibility and publishing metadata.
+Authenticated owners can publish/unpublish over HTTP, and anonymous callers
+can read published `public` / `unlisted` videos by opaque `publicVideoId`
+(with discovery limited to `published` + `public`).
 
 There is still no queue worker, video-processing pipeline, eVault sync, ACL
-layer, or public discovery/playback path.
+layer, search indexing, or creator/public UI for publishing.
 
 ```mermaid
 flowchart LR
-  Clients["Next.js applications"] --> Auth["apps/web API routes\nW3DS auth + drafts + media"]
-  Auth --> DB["PostgreSQL\nusers / sessions / channels / drafts / media_assets"]
+  Clients["Next.js applications"] --> Auth["apps/web API routes\nW3DS auth + drafts + publish + public + media"]
+  Auth --> DB["PostgreSQL\nusers / sessions / channels / videos / media_assets"]
   Auth --> Disk["LocalDiskMediaStorage\ndevelopment blobs"]
   Auth --> Platform["Registry + eVault\nserver-side verification"]
   Contracts["@w3ds/auth<br/>contracts and browser storage"] -. client-only boundary .-> Platform
@@ -100,9 +102,8 @@ local creator channel. Product responses reuse the existing `Video` and
    creator channel for the authenticated platform user (`owner_id` unique).
 4. Drafts are scoped to that owner/channel. Cross-user reads, updates, and
    deletes return `404` (`not_found`) so resource existence is not disclosed.
-5. Draft routes only operate on `status: "draft"` rows. Publish/unpublish is a
-   separate store/domain lifecycle (see below); public HTTP routes for that
-   lifecycle are not exposed in this phase.
+5. Draft routes only operate on `status: "draft"` rows. Publish/unpublish and
+   anonymous public routes are separate (see below).
 
 `CreatorVideoService` depends on a `CreatorVideoStore` interface:
 
@@ -128,22 +129,23 @@ cookie/bearer parsing or write ad-hoc SQL.
 Draft metadata routes do **not** implement:
 
 - Multipart `formData()` upload parsing that buffers whole files
-- Public playback URLs or `w3ds://file` protocol references
+- Public CDN / signed playback URLs or `w3ds://file` protocol references
 - Transcoding / processing pipelines
 - eVault writes, ontology mapping, ACLs, or Awareness
-- Public discovery / watch routes keyed by `publicVideoId`
-- Creator UI publish controls or Next.js publish HTTP endpoints
+- Creator UI publish controls or public watch UI
 - Changes to unrelated watch, channel, search, or public feed behavior
 - Changes to the development provider's mock `createVideo` / `publishVideo`
   semantics
 
-Private media bytes are transferred through the dedicated media routes below.
+Private media bytes are transferred through the dedicated owner media routes
+below. Anonymous published media uses the public stream route documented with
+publishing.
 
 ## Video publishing lifecycle (store / domain)
 
 The persisted `videos` model has an explicit product lifecycle and a separate
-visibility field. Publishing metadata is durable; public routes that would
-consume it are intentionally deferred.
+visibility field. Publishing metadata is durable and is consumed by the
+authenticated publish/unpublish routes and anonymous public routes below.
 
 ### Lifecycle states
 
@@ -163,9 +165,9 @@ field:
 
 | `visibility` | Meaning |
 | --- | --- |
-| `private` | Owner-intended private access only. |
-| `unlisted` | Reachable by opaque link later; not listed in public discovery. |
-| `public` | Intended for public discovery once public routes exist. |
+| `private` | Owner-intended private access only. Never exposed on anonymous routes. |
+| `unlisted` | Reachable by opaque `publicVideoId` when published; not listed in discovery. |
+| `public` | Listed in anonymous discovery when published; also resolvable by `publicVideoId`. |
 
 Publish and unpublish **do not** change visibility. A published video may remain
 `private` or `unlisted`.
@@ -175,7 +177,7 @@ Publish and unpublish **do not** change visibility. A published video may remain
 | Field | Meaning |
 | --- | --- |
 | `published_at` / `publishedAt` | Timestamp of the current publication. Set on transition into `published`; cleared on unpublish. |
-| `public_video_id` / `publicVideoId` | Opaque, stable public identifier (`pub_<id>`). Assigned on first publish; unique when set; **preserved** across unpublish/republish for later public routes. |
+| `public_video_id` / `publicVideoId` | Opaque, stable public identifier (`pub_<id>`). Assigned on first publish; unique when set; **preserved** across unpublish/republish for public routes. |
 
 ### Store / domain transitions
 
@@ -183,6 +185,8 @@ Publish and unpublish **do not** change visibility. A published video may remain
 
 - `publishOwnedVideo` / `publishVideo`
 - `unpublishOwnedVideo` / `unpublishVideo`
+- `getPublishedAccessibleByPublicVideoId` / `getPublicVideo`
+- `listPublishedPublicVideos` / `listPublicVideos`
 
 Rules:
 
@@ -206,8 +210,69 @@ Rules:
 6. **Integrity** — publish/unpublish never reassign `owner_id` / `channel_id`,
    never rewrite media asset rows, and never invent a second visibility field.
 
-No Next.js publish/unpublish route, public watch path, or feed ingestion is
-wired in this phase.
+Route handlers call these service methods and **do not** re-implement lifecycle
+validation.
+
+## Video publish / unpublish and public discovery routes
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| `POST` | `/api/videos/:videoId/publish` | Owner session (cookie or bearer) | Publish an owned video via `publishVideo`. |
+| `POST` | `/api/videos/:videoId/unpublish` | Owner session (cookie or bearer) | Unpublish an owned video via `unpublishVideo`. |
+| `GET` | `/api/videos/public` | Anonymous | Paginated discovery of `published` + `public` videos. |
+| `GET` | `/api/videos/public/:publicVideoId` | Anonymous | Published-video detail by opaque `publicVideoId`. |
+| `GET` | `/api/videos/public/:publicVideoId/media/:assetId/content` | Anonymous | Stream a ready asset for a published `public` or `unlisted` video. |
+
+Owner draft media routes under `/api/videos/drafts/.../media` stay authenticated
+and unchanged.
+
+### Owner publish / unpublish
+
+- Require a durable W3DS access session; anonymous callers receive `401`
+  (`invalid_session`).
+- Delegate entirely to `CreatorVideoService.publishVideo` /
+  `unpublishVideo` (store rules above).
+- Success responses return the product `Video` JSON (`200`).
+- Cross-user or missing ids → `404` (`not_found`).
+- Missing ready media → `409` (`precondition_failed`).
+- Invalid lifecycle state → `409` (`invalid_transition`).
+
+### Anonymous visibility guarantees
+
+| Caller intent | `draft` | `published` + `private` | `published` + `unlisted` | `published` + `public` |
+| --- | --- | --- | --- | --- |
+| `GET /api/videos/public` (discovery) | excluded | excluded | excluded | included |
+| `GET /api/videos/public/:publicVideoId` | `404` | `404` | `200` | `200` |
+| Public media stream for that video | `404` | `404` | `200` (ready asset) | `200` (ready asset) |
+
+Additional guarantees:
+
+1. After unpublish, the same `publicVideoId` detail and media stream return
+   `404`, and the video disappears from discovery, until republished.
+2. Responses never include storage keys, filesystem paths, session tokens, or
+   private account fields.
+3. Public media streaming resolves the video through `getPublicVideo` before any
+   storage read, then streams only a `ready` asset attached to that video id.
+4. Discovery ordering is `publishedAt` descending (stable tie-break on id).
+   Pagination uses opaque `cursor=offset:N` and optional `limit` (default 20,
+   max 50) and returns `{ items, nextCursor? }` (`CursorPage`).
+
+### Public media stream headers
+
+Same private-stream headers as owner download:
+
+- `Content-Type`, `Content-Length`
+- `Content-Disposition: attachment; filename="…"; filename*=UTF-8''…`
+- `Cache-Control: private, no-store`
+- `X-Content-Type-Options: nosniff`
+
+### Non-goals (this phase)
+
+- Creator or public watch/discovery UI
+- W3DS / eVault sync, ACL integration, Awareness
+- Search indexing or feed ranking beyond `publishedAt` order
+- Transcoding / processing pipelines
+- Changing owner media transfer routes or mock client publish semantics
 
 ## Media asset storage and protected transfer routes
 

@@ -1,0 +1,618 @@
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { NextRequest } from 'next/server';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as creatorVideo from '../../../server/creator-video';
+import {
+  CreatorVideoService,
+  type CreatorVideoStore,
+  InMemoryCreatorVideoStore,
+  resetCreatorVideoServiceForTests,
+} from '../../../server/creator-video';
+import * as mediaAssetModule from '../../../server/media-asset';
+import {
+  InMemoryMediaAssetStore,
+  LocalDiskMediaStorage,
+  MediaAssetService,
+  resetMediaAssetServiceForTests,
+} from '../../../server/media-asset';
+import * as w3dsAuth from '../../../server/w3ds-auth';
+import {
+  InMemoryW3dsAuthStore,
+  resetW3dsAuthServiceForTests,
+  type VerifiedW3dsIdentity,
+  W3dsAuthService,
+  type W3dsAuthStore,
+  type W3dsIdentityVerifier,
+} from '../../../server/w3ds-auth';
+import { POST as publishVideo } from './[videoId]/publish/route';
+import { POST as unpublishVideo } from './[videoId]/unpublish/route';
+import { POST as uploadMedia } from './drafts/[videoId]/media/route';
+import { POST as createDraft } from './drafts/route';
+import { GET as getPublicMediaContent } from './public/[publicVideoId]/media/[assetId]/content/route';
+import { GET as getPublicVideo } from './public/[publicVideoId]/route';
+import { GET as listPublicVideos } from './public/route';
+
+let rootDir = '';
+
+describe('video publishing and public discovery routes', () => {
+  afterEach(async () => {
+    resetMediaAssetServiceForTests();
+    resetCreatorVideoServiceForTests();
+    resetW3dsAuthServiceForTests();
+    vi.restoreAllMocks();
+    if (rootDir) {
+      await rm(rootDir, { recursive: true, force: true });
+      rootDir = '';
+    }
+  });
+
+  it('returns 401 for anonymous publish and unpublish', async () => {
+    await expect(
+      publishVideo(
+        new NextRequest('https://vidak.example/api/videos/v1/publish', { method: 'POST' }),
+        {
+          params: Promise.resolve({ videoId: 'v1' }),
+        },
+      ),
+    ).resolves.toMatchObject({ status: 401 });
+
+    await expect(
+      unpublishVideo(
+        new NextRequest('https://vidak.example/api/videos/v1/unpublish', { method: 'POST' }),
+        { params: Promise.resolve({ videoId: 'v1' }) },
+      ),
+    ).resolves.toMatchObject({ status: 401 });
+  });
+
+  it('publishes and unpublishes an owned video with ready media', async () => {
+    const ctx = await createPublishingContext();
+    const draft = await createOwnedDraft(ctx, { title: 'Publish me', visibility: 'public' });
+    ctx.videoStore.seedReadyMediaAsset(draft.id);
+
+    const published = await publishVideo(
+      new NextRequest(`https://vidak.example/api/videos/${draft.id}/publish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ctx.ownerToken}` },
+      }),
+      { params: Promise.resolve({ videoId: draft.id }) },
+    );
+    expect(published.status).toBe(200);
+    const publishedBody = (await published.json()) as {
+      id: string;
+      status: string;
+      visibility: string;
+      publicVideoId: string;
+      publishedAt: string;
+    };
+    expect(publishedBody).toMatchObject({
+      id: draft.id,
+      status: 'published',
+      visibility: 'public',
+    });
+    expect(publishedBody.publicVideoId).toMatch(/^pub_/);
+    expect(publishedBody.publishedAt).toEqual(expect.any(String));
+    expect(JSON.stringify(publishedBody)).not.toMatch(/storageKey|evault|jwt|session/i);
+
+    const unpublished = await unpublishVideo(
+      new NextRequest(`https://vidak.example/api/videos/${draft.id}/unpublish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ctx.ownerToken}` },
+      }),
+      { params: Promise.resolve({ videoId: draft.id }) },
+    );
+    expect(unpublished.status).toBe(200);
+    await expect(unpublished.json()).resolves.toMatchObject({
+      id: draft.id,
+      status: 'draft',
+      publicVideoId: publishedBody.publicVideoId,
+      visibility: 'public',
+    });
+  });
+
+  it('rejects publish without ready media', async () => {
+    const ctx = await createPublishingContext();
+    const draft = await createOwnedDraft(ctx, { title: 'No media' });
+
+    const response = await publishVideo(
+      new NextRequest(`https://vidak.example/api/videos/${draft.id}/publish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ctx.ownerToken}` },
+      }),
+      { params: Promise.resolve({ videoId: draft.id }) },
+    );
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'precondition_failed' },
+    });
+  });
+
+  it('returns 404 when another authenticated user tries to publish or unpublish', async () => {
+    const ctx = await createPublishingContext();
+    const draft = await createOwnedDraft(ctx, { title: 'Owner only', visibility: 'public' });
+    ctx.videoStore.seedReadyMediaAsset(draft.id);
+
+    const viewerToken = await loginAs(ctx.authStore, ctx.videoStore, {
+      eName: '@viewer.w3id',
+      eVaultId: 'evault-viewer',
+      eVaultUri: 'https://evault.example/viewer',
+    });
+
+    const publishAttempt = await publishVideo(
+      new NextRequest(`https://vidak.example/api/videos/${draft.id}/publish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${viewerToken}` },
+      }),
+      { params: Promise.resolve({ videoId: draft.id }) },
+    );
+    expect(publishAttempt.status).toBe(404);
+    await expect(publishAttempt.json()).resolves.toMatchObject({
+      error: { code: 'not_found' },
+    });
+
+    await publishVideo(
+      new NextRequest(`https://vidak.example/api/videos/${draft.id}/publish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ctx.ownerToken}` },
+      }),
+      { params: Promise.resolve({ videoId: draft.id }) },
+    );
+
+    const unpublishAttempt = await unpublishVideo(
+      new NextRequest(`https://vidak.example/api/videos/${draft.id}/unpublish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${viewerToken}` },
+      }),
+      { params: Promise.resolve({ videoId: draft.id }) },
+    );
+    expect(unpublishAttempt.status).toBe(404);
+    await expect(unpublishAttempt.json()).resolves.toMatchObject({
+      error: { code: 'not_found' },
+    });
+  });
+
+  it('resolves public and unlisted published videos by publicVideoId, but not private or drafts', async () => {
+    const ctx = await createPublishingContext();
+
+    const publicDraft = await createOwnedDraft(ctx, { title: 'Public clip', visibility: 'public' });
+    ctx.videoStore.seedReadyMediaAsset(publicDraft.id);
+    const publicPublished = await publishOwned(ctx, publicDraft.id);
+
+    const unlistedDraft = await createOwnedDraft(ctx, {
+      title: 'Unlisted clip',
+      visibility: 'unlisted',
+    });
+    ctx.videoStore.seedReadyMediaAsset(unlistedDraft.id);
+    const unlistedPublished = await publishOwned(ctx, unlistedDraft.id);
+
+    const privateDraft = await createOwnedDraft(ctx, {
+      title: 'Private clip',
+      visibility: 'private',
+    });
+    ctx.videoStore.seedReadyMediaAsset(privateDraft.id);
+    const privatePublished = await publishOwned(ctx, privateDraft.id);
+
+    const draftOnly = await createOwnedDraft(ctx, { title: 'Still a draft', visibility: 'public' });
+
+    const publicDetail = await getPublicVideo(
+      new NextRequest(`https://vidak.example/api/videos/public/${publicPublished.publicVideoId}`),
+      { params: Promise.resolve({ publicVideoId: publicPublished.publicVideoId }) },
+    );
+    expect(publicDetail.status).toBe(200);
+    await expect(publicDetail.json()).resolves.toMatchObject({
+      id: publicDraft.id,
+      title: 'Public clip',
+      status: 'published',
+      visibility: 'public',
+      publicVideoId: publicPublished.publicVideoId,
+    });
+
+    const unlistedDetail = await getPublicVideo(
+      new NextRequest(`https://vidak.example/api/videos/public/${unlistedPublished.publicVideoId}`),
+      { params: Promise.resolve({ publicVideoId: unlistedPublished.publicVideoId }) },
+    );
+    expect(unlistedDetail.status).toBe(200);
+    await expect(unlistedDetail.json()).resolves.toMatchObject({
+      id: unlistedDraft.id,
+      visibility: 'unlisted',
+      status: 'published',
+    });
+
+    const privateDetail = await getPublicVideo(
+      new NextRequest(`https://vidak.example/api/videos/public/${privatePublished.publicVideoId}`),
+      { params: Promise.resolve({ publicVideoId: privatePublished.publicVideoId }) },
+    );
+    expect(privateDetail.status).toBe(404);
+
+    const draftDetail = await getPublicVideo(
+      new NextRequest(`https://vidak.example/api/videos/public/${draftOnly.id}`),
+      { params: Promise.resolve({ publicVideoId: draftOnly.id }) },
+    );
+    expect(draftDetail.status).toBe(404);
+
+    const missing = await getPublicVideo(
+      new NextRequest('https://vidak.example/api/videos/public/pub_missing'),
+      { params: Promise.resolve({ publicVideoId: 'pub_missing' }) },
+    );
+    expect(missing.status).toBe(404);
+  });
+
+  it('lists only published public videos and paginates discovery', async () => {
+    const ctx = await createPublishingContext();
+
+    const publicIds: string[] = [];
+    for (const title of ['Alpha', 'Bravo', 'Charlie']) {
+      const draft = await createOwnedDraft(ctx, { title, visibility: 'public' });
+      ctx.videoStore.seedReadyMediaAsset(draft.id);
+      const published = await publishOwned(ctx, draft.id);
+      publicIds.push(published.publicVideoId);
+    }
+
+    const unlisted = await createOwnedDraft(ctx, { title: 'Hidden link', visibility: 'unlisted' });
+    ctx.videoStore.seedReadyMediaAsset(unlisted.id);
+    const unlistedPublished = await publishOwned(ctx, unlisted.id);
+
+    const privateDraft = await createOwnedDraft(ctx, {
+      title: 'Secret',
+      visibility: 'private',
+    });
+    ctx.videoStore.seedReadyMediaAsset(privateDraft.id);
+    await publishOwned(ctx, privateDraft.id);
+
+    await createOwnedDraft(ctx, { title: 'Draft stay', visibility: 'public' });
+
+    const firstPage = await listPublicVideos(
+      new NextRequest('https://vidak.example/api/videos/public?limit=2'),
+    );
+    expect(firstPage.status).toBe(200);
+    const firstBody = (await firstPage.json()) as {
+      items: Array<{ title: string; visibility: string; publicVideoId: string }>;
+      nextCursor?: string;
+    };
+    expect(firstBody.items).toHaveLength(2);
+    expect(firstBody.items.every((item) => item.visibility === 'public')).toBe(true);
+    expect(firstBody.items.map((item) => item.publicVideoId)).not.toContain(
+      unlistedPublished.publicVideoId,
+    );
+    expect(firstBody.nextCursor).toBe('offset:2');
+
+    const secondPage = await listPublicVideos(
+      new NextRequest(
+        `https://vidak.example/api/videos/public?limit=2&cursor=${firstBody.nextCursor}`,
+      ),
+    );
+    expect(secondPage.status).toBe(200);
+    const secondBody = (await secondPage.json()) as {
+      items: Array<{ title: string; publicVideoId: string }>;
+      nextCursor?: string;
+    };
+    expect(secondBody.items).toHaveLength(1);
+    expect(secondBody.nextCursor).toBeUndefined();
+
+    const allTitles = [...firstBody.items, ...secondBody.items].map((item) => item.title).sort();
+    expect(allTitles).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    expect(
+      [...firstBody.items, ...secondBody.items].map((item) => item.publicVideoId).sort(),
+    ).toEqual([...publicIds].sort());
+  });
+
+  it('streams ready media for published public and unlisted videos anonymously', async () => {
+    const ctx = await createPublishingContext({ withMedia: true });
+    const payload = new TextEncoder().encode('public-stream-bytes');
+
+    const publicDraft = await createOwnedDraft(ctx, {
+      title: 'Stream public',
+      visibility: 'public',
+    });
+    ctx.mediaStore.registerOwnedDraft(publicDraft.id, ctx.ownerId);
+    const publicAsset = await uploadReadyMedia(ctx, publicDraft.id, payload);
+    ctx.videoStore.seedReadyMediaAsset(publicDraft.id);
+    const publicPublished = await publishOwned(ctx, publicDraft.id);
+
+    const publicStream = await getPublicMediaContent(
+      new NextRequest(
+        `https://vidak.example/api/videos/public/${publicPublished.publicVideoId}/media/${publicAsset.id}/content`,
+      ),
+      {
+        params: Promise.resolve({
+          publicVideoId: publicPublished.publicVideoId,
+          assetId: publicAsset.id,
+        }),
+      },
+    );
+    expect(publicStream.status).toBe(200);
+    expect(publicStream.headers.get('Content-Type')).toBe('video/mp4');
+    expect(publicStream.headers.get('Cache-Control')).toBe('private, no-store');
+    expect(publicStream.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    await expect(publicStream.text()).resolves.toBe('public-stream-bytes');
+    expect(JSON.stringify(Object.fromEntries(publicStream.headers.entries()))).not.toContain(
+      rootDir,
+    );
+
+    const unlistedDraft = await createOwnedDraft(ctx, {
+      title: 'Stream unlisted',
+      visibility: 'unlisted',
+    });
+    ctx.mediaStore.registerOwnedDraft(unlistedDraft.id, ctx.ownerId);
+    const unlistedAsset = await uploadReadyMedia(ctx, unlistedDraft.id, payload);
+    ctx.videoStore.seedReadyMediaAsset(unlistedDraft.id);
+    const unlistedPublished = await publishOwned(ctx, unlistedDraft.id);
+
+    const unlistedStream = await getPublicMediaContent(
+      new NextRequest(
+        `https://vidak.example/api/videos/public/${unlistedPublished.publicVideoId}/media/${unlistedAsset.id}/content`,
+      ),
+      {
+        params: Promise.resolve({
+          publicVideoId: unlistedPublished.publicVideoId,
+          assetId: unlistedAsset.id,
+        }),
+      },
+    );
+    expect(unlistedStream.status).toBe(200);
+    await expect(unlistedStream.text()).resolves.toBe('public-stream-bytes');
+  });
+
+  it('denies public media for private published videos, drafts, and missing assets', async () => {
+    const ctx = await createPublishingContext({ withMedia: true });
+    const payload = new TextEncoder().encode('secret-bytes');
+
+    const privateDraft = await createOwnedDraft(ctx, {
+      title: 'Private media',
+      visibility: 'private',
+    });
+    ctx.mediaStore.registerOwnedDraft(privateDraft.id, ctx.ownerId);
+    const privateAsset = await uploadReadyMedia(ctx, privateDraft.id, payload);
+    ctx.videoStore.seedReadyMediaAsset(privateDraft.id);
+    const privatePublished = await publishOwned(ctx, privateDraft.id);
+
+    const privateStream = await getPublicMediaContent(
+      new NextRequest(
+        `https://vidak.example/api/videos/public/${privatePublished.publicVideoId}/media/${privateAsset.id}/content`,
+      ),
+      {
+        params: Promise.resolve({
+          publicVideoId: privatePublished.publicVideoId,
+          assetId: privateAsset.id,
+        }),
+      },
+    );
+    expect(privateStream.status).toBe(404);
+
+    const draft = await createOwnedDraft(ctx, { title: 'Draft media', visibility: 'public' });
+    ctx.mediaStore.registerOwnedDraft(draft.id, ctx.ownerId);
+    const draftAsset = await uploadReadyMedia(ctx, draft.id, payload);
+    const draftStream = await getPublicMediaContent(
+      new NextRequest(
+        `https://vidak.example/api/videos/public/pub_not_published/media/${draftAsset.id}/content`,
+      ),
+      {
+        params: Promise.resolve({
+          publicVideoId: 'pub_not_published',
+          assetId: draftAsset.id,
+        }),
+      },
+    );
+    expect(draftStream.status).toBe(404);
+
+    const publicDraft = await createOwnedDraft(ctx, {
+      title: 'Missing asset',
+      visibility: 'public',
+    });
+    ctx.videoStore.seedReadyMediaAsset(publicDraft.id);
+    const published = await publishOwned(ctx, publicDraft.id);
+    const missingAsset = await getPublicMediaContent(
+      new NextRequest(
+        `https://vidak.example/api/videos/public/${published.publicVideoId}/media/missing-asset/content`,
+      ),
+      {
+        params: Promise.resolve({
+          publicVideoId: published.publicVideoId,
+          assetId: 'missing-asset',
+        }),
+      },
+    );
+    expect(missingAsset.status).toBe(404);
+  });
+
+  it('makes public detail and media inaccessible after unpublish', async () => {
+    const ctx = await createPublishingContext({ withMedia: true });
+    const payload = new TextEncoder().encode('soon-private');
+    const draft = await createOwnedDraft(ctx, { title: 'Unpublish me', visibility: 'public' });
+    ctx.mediaStore.registerOwnedDraft(draft.id, ctx.ownerId);
+    const asset = await uploadReadyMedia(ctx, draft.id, payload);
+    ctx.videoStore.seedReadyMediaAsset(draft.id);
+    const published = await publishOwned(ctx, draft.id);
+
+    const beforeDetail = await getPublicVideo(
+      new NextRequest(`https://vidak.example/api/videos/public/${published.publicVideoId}`),
+      { params: Promise.resolve({ publicVideoId: published.publicVideoId }) },
+    );
+    expect(beforeDetail.status).toBe(200);
+
+    await unpublishVideo(
+      new NextRequest(`https://vidak.example/api/videos/${draft.id}/unpublish`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${ctx.ownerToken}` },
+      }),
+      { params: Promise.resolve({ videoId: draft.id }) },
+    );
+
+    const afterDetail = await getPublicVideo(
+      new NextRequest(`https://vidak.example/api/videos/public/${published.publicVideoId}`),
+      { params: Promise.resolve({ publicVideoId: published.publicVideoId }) },
+    );
+    expect(afterDetail.status).toBe(404);
+
+    const afterStream = await getPublicMediaContent(
+      new NextRequest(
+        `https://vidak.example/api/videos/public/${published.publicVideoId}/media/${asset.id}/content`,
+      ),
+      {
+        params: Promise.resolve({
+          publicVideoId: published.publicVideoId,
+          assetId: asset.id,
+        }),
+      },
+    );
+    expect(afterStream.status).toBe(404);
+
+    const discovery = await listPublicVideos(
+      new NextRequest('https://vidak.example/api/videos/public'),
+    );
+    const discoveryBody = (await discovery.json()) as {
+      items: Array<{ publicVideoId: string }>;
+    };
+    expect(discoveryBody.items.map((item) => item.publicVideoId)).not.toContain(
+      published.publicVideoId,
+    );
+  });
+});
+
+async function createPublishingContext(options?: { withMedia?: boolean }) {
+  const authStore = new InMemoryW3dsAuthStore();
+  const videoStore = new InMemoryCreatorVideoStore();
+  const mediaStore = new InMemoryMediaAssetStore();
+
+  const ownerToken = await loginAs(authStore, videoStore, {
+    eName: '@creator.w3id',
+    eVaultId: 'evault-creator',
+    eVaultUri: 'https://evault.example/creator',
+  });
+  const ownerId = (await w3dsAuth.getW3dsAuthService().getSession(ownerToken)).user.id;
+
+  if (options?.withMedia) {
+    rootDir = await mkdtemp(join(tmpdir(), 'vidak-publish-routes-'));
+    vi.spyOn(mediaAssetModule, 'getMediaAssetService').mockReturnValue(
+      new MediaAssetService({
+        store: mediaStore,
+        storage: new LocalDiskMediaStorage(rootDir),
+        limits: {
+          maxUploadBytes: 1024 * 1024,
+          allowedContentTypes: ['video/mp4', 'video/webm', 'video/quicktime'],
+        },
+        resolveUser: async (accessToken) =>
+          (await w3dsAuth.getW3dsAuthService().getSession(accessToken)).user,
+      }),
+    );
+  }
+
+  return { authStore, videoStore, mediaStore, ownerToken, ownerId };
+}
+
+async function createOwnedDraft(
+  ctx: {
+    ownerToken: string;
+  },
+  input: { title: string; visibility?: 'public' | 'unlisted' | 'private' },
+): Promise<{ id: string }> {
+  const created = await createDraft(
+    new NextRequest('https://vidak.example/api/videos/drafts', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: input.title,
+        ...(input.visibility ? { visibility: input.visibility } : {}),
+      }),
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${ctx.ownerToken}`,
+      },
+    }),
+  );
+  expect(created.status).toBe(201);
+  return (await created.json()) as { id: string };
+}
+
+async function publishOwned(
+  ctx: { ownerToken: string },
+  videoId: string,
+): Promise<{ publicVideoId: string }> {
+  const response = await publishVideo(
+    new NextRequest(`https://vidak.example/api/videos/${videoId}/publish`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${ctx.ownerToken}` },
+    }),
+    { params: Promise.resolve({ videoId }) },
+  );
+  expect(response.status).toBe(200);
+  return (await response.json()) as { publicVideoId: string };
+}
+
+async function uploadReadyMedia(
+  ctx: { ownerToken: string },
+  videoId: string,
+  payload: Uint8Array,
+): Promise<{ id: string }> {
+  const response = await uploadMedia(
+    new NextRequest(`https://vidak.example/api/videos/drafts/${videoId}/media`, {
+      method: 'POST',
+      body: chunkedBody(payload, 8),
+      duplex: 'half',
+      headers: {
+        'Content-Type': 'video/mp4',
+        'Content-Length': String(payload.byteLength),
+        'X-Original-Filename': 'clip.mp4',
+        Authorization: `Bearer ${ctx.ownerToken}`,
+      },
+    }),
+    { params: Promise.resolve({ videoId }) },
+  );
+  expect(response.status).toBe(201);
+  const asset = (await response.json()) as { id: string; storageKey?: string };
+  expect(asset).not.toHaveProperty('storageKey');
+  return asset;
+}
+
+function chunkedBody(bytes: Uint8Array, chunkSize: number): ReadableStream<Uint8Array> {
+  let offset = 0;
+  return new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (offset >= bytes.byteLength) {
+        controller.close();
+        return;
+      }
+      const end = Math.min(offset + chunkSize, bytes.byteLength);
+      controller.enqueue(bytes.slice(offset, end));
+      offset = end;
+    },
+  });
+}
+
+async function loginAs(
+  authStore: W3dsAuthStore,
+  videoStore: CreatorVideoStore,
+  identity: VerifiedW3dsIdentity,
+): Promise<string> {
+  const verifier: W3dsIdentityVerifier = {
+    verify: vi.fn().mockResolvedValue(identity),
+  };
+  const authService = new W3dsAuthService({
+    config: {
+      platformName: 'vidak',
+      registryBaseUrl: 'https://registry.example',
+      jwtSecret: 'a development-only test secret with at least 32 characters',
+    },
+    store: authStore,
+    identityVerifier: verifier,
+    now: () => 1_780_000_000_000,
+  });
+  vi.spyOn(w3dsAuth, 'getW3dsAuthService').mockReturnValue(authService);
+  vi.spyOn(creatorVideo, 'getCreatorVideoService').mockReturnValue(
+    new CreatorVideoService({
+      store: videoStore,
+      resolveUser: async (accessToken) => (await authService.getSession(accessToken)).user,
+    }),
+  );
+
+  const offer = await authService.createOffer('https://vidak.example');
+  await authService.completeOffer({
+    w3id: identity.eName,
+    session: offer.sessionId,
+    signature: 'signature',
+  });
+  const cookieSession = await authService.getOfferSessionForCookie(offer.offerId);
+  const accessToken = cookieSession.tokens.accessToken;
+  if (!accessToken) throw new Error('Expected access token');
+  return accessToken;
+}
