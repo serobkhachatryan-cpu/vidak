@@ -23,7 +23,7 @@ pnpm install
 pnpm dev
 pnpm lint
 pnpm typecheck
-pnpm test:unit
+pnpm test
 pnpm build
 pnpm storybook:build
 ```
