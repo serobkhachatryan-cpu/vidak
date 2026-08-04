@@ -5,6 +5,19 @@ import { Badge, Button, EmptyState, LoadingButton, Text } from '@w3ds/ui';
 import { videoCategoryLabels, videoLanguageLabels, visibilityLabels } from '../upload-constants';
 import type { VideoDetailsValue } from './video-details-step';
 
+export interface PublishConfirmationStepProps {
+  details: VideoDetailsValue;
+  visibility?: VideoVisibility | '';
+  thumbnailUrl?: string;
+  fileName?: string;
+  isPublishing?: boolean;
+  publishError?: string;
+  publishedVideo?: Video;
+  onPublish?: () => void;
+  onWatch?: (video: Video) => void;
+  onUploadAnother?: () => void;
+}
+
 export function PublishConfirmationStep({
   details,
   visibility,
@@ -16,18 +29,7 @@ export function PublishConfirmationStep({
   onPublish,
   onWatch,
   onUploadAnother,
-}: {
-  details: VideoDetailsValue;
-  visibility?: VideoVisibility | '';
-  thumbnailUrl?: string;
-  fileName?: string;
-  isPublishing?: boolean;
-  publishError?: string;
-  publishedVideo?: Video;
-  onPublish?: () => void;
-  onWatch?: (video: Video) => void;
-  onUploadAnother?: () => void;
-}) {
+}: PublishConfirmationStepProps) {
   if (publishedVideo) {
     return (
       <EmptyState

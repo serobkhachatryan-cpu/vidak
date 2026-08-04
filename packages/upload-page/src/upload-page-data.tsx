@@ -4,7 +4,12 @@ import type { VideoApiClient } from '@w3ds/api-client';
 import type { ChannelId, Video, VideoCategory, VideoLanguage, VideoVisibility } from '@w3ds/types';
 import { useEffect, useRef, useState } from 'react';
 import type { UploadProgressStatus, UploadProgressView } from './steps/upload-progress-step';
-import { titleFromFileName, type UploadStepId, uploadStepOrder } from './upload-constants';
+import {
+  nextUploadStep,
+  previousUploadStep,
+  titleFromFileName,
+  type UploadStepId,
+} from './upload-constants';
 import {
   emptyUploadDraft,
   type UploadDraft,
@@ -15,6 +20,7 @@ import {
   hasDetailsErrors,
   type UploadDetailsErrors,
   validateDetails,
+  validatePublishDraft,
   validateThumbnailFile,
   validateThumbnailSelection,
   validateVideoFile,
@@ -54,16 +60,6 @@ export interface UploadPageDataProps
   client: VideoApiClient;
   channelId: ChannelId;
   onWatchVideo?: (video: Video) => void;
-}
-
-function previousStep(step: UploadStepId): UploadStepId | undefined {
-  const index = uploadStepOrder.indexOf(step);
-  return index > 0 ? uploadStepOrder[index - 1] : undefined;
-}
-
-function nextStep(step: UploadStepId): UploadStepId | undefined {
-  const index = uploadStepOrder.indexOf(step);
-  return index >= 0 && index < uploadStepOrder.length - 1 ? uploadStepOrder[index + 1] : undefined;
 }
 
 export function UploadPageData({
@@ -254,34 +250,28 @@ export function UploadPageData({
   const onContinue = () => {
     if (!validateCurrentStep()) return;
     markCompleted(step);
-    const next = nextStep(step);
+    const next = nextUploadStep(step);
     if (next) setStep(next);
   };
 
   const onBack = () => {
-    const previous = previousStep(step);
+    const previous = previousUploadStep(step);
     if (previous) setStep(previous);
   };
 
   const onPublish = async () => {
-    if (!uploadId || !draft.category || !draft.language || !draft.visibility) {
-      setPublishError('Complete all required fields before publishing.');
-      return;
-    }
-    if (!validateCurrentStep()) return;
-    const detailsOk = !hasDetailsErrors(
-      validateDetails({
-        title: draft.title,
-        description: draft.description,
-        tags: draft.tags,
-        category: draft.category,
-        language: draft.language,
-      }),
-    );
-    const thumbnailOk = !validateThumbnailSelection({ thumbnailUrl: draft.thumbnailUrl });
-    const visibilityOk = !validateVisibility({ visibility: draft.visibility });
-    if (!detailsOk || !thumbnailOk || !visibilityOk) {
-      setPublishError('Complete all required fields before publishing.');
+    const error = validatePublishDraft({
+      uploadId,
+      title: draft.title,
+      description: draft.description,
+      tags: draft.tags,
+      category: draft.category,
+      language: draft.language,
+      thumbnailUrl: draft.thumbnailUrl,
+      visibility: draft.visibility,
+    });
+    if (error) {
+      setPublishError(error);
       return;
     }
 
@@ -290,7 +280,7 @@ export function UploadPageData({
     try {
       const video = await client.createVideo({
         channelId,
-        uploadId,
+        uploadId: uploadId as string,
         title: draft.title,
         description: draft.description,
         tags: draft.tags,

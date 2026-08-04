@@ -112,11 +112,39 @@ describe('UploadPage', () => {
     expect(markup).toContain('Your video is live');
     expect(markup).toContain('Watch video');
     expect(markup).toContain('Upload another');
+    expect(markup).toContain('aria-label="Publish confirmation"');
+    expect(markup).not.toContain('aria-label="Upload steps"');
+  });
+
+  it('renders cancelled upload recovery actions', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="progress"
+        fileName="demo.mp4"
+        uploadStatus="cancelled"
+        uploadError="Upload cancelled."
+        onRetryUpload={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Upload cancelled');
+    expect(markup).toContain('Retry upload');
+  });
+
+  it('scopes the step heading id per page instance', () => {
+    const markup = renderToStaticMarkup(
+      <>
+        <UploadPage step="details" />
+        <UploadPage step="visibility" />
+      </>,
+    );
+    expect(markup).toContain('aria-labelledby=');
+    expect(markup).not.toContain('id="upload-step-heading"');
   });
 
   it('supports dark theme attribute for Storybook and shell reuse', () => {
     const markup = renderToStaticMarkup(<UploadPage step="select" theme="dark" />);
     expect(markup).toContain('data-theme="dark"');
     expect(markup).toContain('Drag and drop a video to upload');
+    expect(markup).toContain('aria-label="Select a video file"');
   });
 });

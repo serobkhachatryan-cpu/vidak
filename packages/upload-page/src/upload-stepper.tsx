@@ -1,15 +1,22 @@
 import { cx, focusRing } from './styles';
-import { type UploadStepId, uploadStepLabels, uploadStepOrder } from './upload-constants';
+import {
+  canNavigateToUploadStep,
+  type UploadStepId,
+  uploadStepLabels,
+  uploadStepOrder,
+} from './upload-constants';
+
+export interface UploadStepperProps {
+  activeStep: UploadStepId;
+  completedSteps?: readonly UploadStepId[];
+  onStepSelect?: (step: UploadStepId) => void;
+}
 
 export function UploadStepper({
   activeStep,
   completedSteps = [],
   onStepSelect,
-}: {
-  activeStep: UploadStepId;
-  completedSteps?: readonly UploadStepId[];
-  onStepSelect?: (step: UploadStepId) => void;
-}) {
+}: UploadStepperProps) {
   const activeIndex = uploadStepOrder.indexOf(activeStep);
 
   return (
@@ -20,7 +27,9 @@ export function UploadStepper({
       {uploadStepOrder.map((step, index) => {
         const isActive = step === activeStep;
         const isComplete = completedSteps.includes(step) || index < activeIndex;
-        const canSelect = Boolean(onStepSelect) && (isComplete || isActive);
+        const canSelect =
+          Boolean(onStepSelect) &&
+          canNavigateToUploadStep({ target: step, activeStep, completedSteps });
 
         return (
           <li key={step} className="flex min-w-0 items-center gap-2 sm:gap-1">
@@ -48,7 +57,10 @@ export function UploadStepper({
               >
                 {isComplete && !isActive ? '✓' : index + 1}
               </span>
-              <span className="truncate">{uploadStepLabels[step]}</span>
+              <span className="truncate">
+                {uploadStepLabels[step]}
+                {isComplete && !isActive ? <span className="sr-only"> (completed)</span> : null}
+              </span>
             </button>
             {index < uploadStepOrder.length - 1 && (
               <span aria-hidden="true" className="hidden text-muted-foreground sm:inline">

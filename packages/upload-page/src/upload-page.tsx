@@ -2,7 +2,7 @@
 
 import type { Video, VideoCategory, VideoLanguage, VideoVisibility } from '@w3ds/types';
 import { AppShell, type AppShellProps, Button, Heading, Page } from '@w3ds/ui';
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useId, useState } from 'react';
 import { PublishConfirmationStep } from './steps/publish-confirmation-step';
 import { SelectVideoStep } from './steps/select-video-step';
 import { ThumbnailStep } from './steps/thumbnail-step';
@@ -14,11 +14,9 @@ import {
 import { VideoDetailsStep, type VideoDetailsValue } from './steps/video-details-step';
 import { VisibilityStep } from './steps/visibility-step';
 import { cx } from './styles';
-import { type UploadStepId, uploadStepLabels, uploadStepOrder } from './upload-constants';
+import { canNavigateToUploadStep, type UploadStepId, uploadStepLabels } from './upload-constants';
 import { UploadStepper } from './upload-stepper';
 import type { UploadDetailsErrors } from './upload-validation';
-
-export type UploadPagePhase = 'flow' | 'success';
 
 export interface UploadDraft {
   title: string;
@@ -91,13 +89,6 @@ function canGoBack(step: UploadStepId, uploadStatus?: UploadProgressStatus): boo
   return true;
 }
 
-function primaryActionLabel(step: UploadStepId, published?: Video): string {
-  if (published) return 'Done';
-  if (step === 'publish') return 'Publish video';
-  if (step === 'select' || step === 'progress') return 'Continue';
-  return 'Next';
-}
-
 export function UploadPage({
   step: controlledStep,
   defaultStep = 'select',
@@ -132,6 +123,7 @@ export function UploadPage({
   theme,
   className,
 }: UploadPageProps) {
+  const stepHeadingId = useId();
   const [uncontrolledStep, setUncontrolledStep] = useState<UploadStepId>(defaultStep);
   const [uncontrolledDraft, setUncontrolledDraft] = useState<UploadDraft>(emptyUploadDraft);
   const step = controlledStep ?? uncontrolledStep;
@@ -234,18 +226,20 @@ export function UploadPage({
               activeStep={step}
               completedSteps={completedSteps}
               onStepSelect={(next) => {
-                const nextIndex = uploadStepOrder.indexOf(next);
-                const activeIndex = uploadStepOrder.indexOf(step);
-                if (nextIndex <= activeIndex || completedSteps.includes(next)) setStep(next);
+                if (canNavigateToUploadStep({ target: next, activeStep: step, completedSteps })) {
+                  setStep(next);
+                }
               }}
             />
           )}
           <section
-            aria-labelledby="upload-step-heading"
+            {...(publishedVideo
+              ? { 'aria-label': 'Publish confirmation' }
+              : { 'aria-labelledby': stepHeadingId })}
             className="rounded-lg border border-border bg-surface p-4 sm:p-6"
           >
             {!publishedVideo && (
-              <Heading id="upload-step-heading" as="h2" size="sm" className="mb-5">
+              <Heading id={stepHeadingId} as="h2" size="sm" className="mb-5">
                 {uploadStepLabels[step]}
               </Heading>
             )}
@@ -263,7 +257,7 @@ export function UploadPage({
               <div className="flex flex-wrap gap-2">
                 {showContinue && onContinue && (
                   <Button type="button" onClick={onContinue}>
-                    {primaryActionLabel(step)}
+                    Next
                   </Button>
                 )}
               </div>

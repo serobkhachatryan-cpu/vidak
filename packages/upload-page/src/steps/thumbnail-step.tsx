@@ -2,7 +2,17 @@
 
 import { Button, Text } from '@w3ds/ui';
 import { type ChangeEvent, useId, useRef } from 'react';
-import { cx, focusRing } from '../styles';
+import { cx, focusWithinRing } from '../styles';
+import { thumbnailFileAccept } from '../upload-constants';
+
+export interface ThumbnailStepProps {
+  autoThumbnails?: readonly string[];
+  selectedUrl?: string;
+  customPreviewUrl?: string;
+  error?: string;
+  onSelectAuto?: (url: string) => void;
+  onCustomFileSelect?: (file: File) => void;
+}
 
 export function ThumbnailStep({
   autoThumbnails = [],
@@ -11,16 +21,10 @@ export function ThumbnailStep({
   error,
   onSelectAuto,
   onCustomFileSelect,
-}: {
-  autoThumbnails?: readonly string[];
-  selectedUrl?: string;
-  customPreviewUrl?: string;
-  error?: string;
-  onSelectAuto?: (url: string) => void;
-  onCustomFileSelect?: (file: File) => void;
-}) {
+}: ThumbnailStepProps) {
   const inputId = useId();
   const groupName = `${inputId}-thumbnail`;
+  const errorId = `${inputId}-error`;
   const inputRef = useRef<HTMLInputElement>(null);
 
   const onChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -46,7 +50,7 @@ export function ThumbnailStep({
                 htmlFor={optionId}
                 className={cx(
                   'cursor-pointer overflow-hidden rounded-md border-2 border-border bg-surface transition-colors duration-fast',
-                  focusRing,
+                  focusWithinRing,
                   selected && 'border-primary',
                 )}
               >
@@ -80,7 +84,8 @@ export function ThumbnailStep({
             ref={inputRef}
             id={inputId}
             type="file"
-            accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+            accept={thumbnailFileAccept}
+            aria-label="Upload a custom thumbnail"
             className="sr-only"
             onChange={onChange}
           />
@@ -93,7 +98,7 @@ export function ThumbnailStep({
             htmlFor={`${groupName}-custom`}
             className={cx(
               'block max-w-sm cursor-pointer overflow-hidden rounded-md border-2 border-border',
-              focusRing,
+              focusWithinRing,
               selectedUrl === customPreviewUrl && 'border-primary',
             )}
           >
@@ -116,7 +121,7 @@ export function ThumbnailStep({
       </div>
 
       {error && (
-        <Text size="sm" tone="danger" role="alert">
+        <Text id={errorId} size="sm" tone="danger" role="alert">
           {error}
         </Text>
       )}

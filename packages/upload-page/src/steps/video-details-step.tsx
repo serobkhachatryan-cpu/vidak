@@ -14,15 +14,13 @@ export interface VideoDetailsValue {
   language: VideoLanguage | '';
 }
 
-export function VideoDetailsStep({
-  value,
-  errors,
-  onChange,
-}: {
+export interface VideoDetailsStepProps {
   value: VideoDetailsValue;
   errors?: UploadDetailsErrors;
   onChange?: (patch: Partial<VideoDetailsValue>) => void;
-}) {
+}
+
+export function VideoDetailsStep({ value, errors, onChange }: VideoDetailsStepProps) {
   const titleId = useId();
   const descriptionId = useId();
   const tagsId = useId();

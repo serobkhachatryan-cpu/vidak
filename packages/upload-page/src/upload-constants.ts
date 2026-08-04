@@ -21,6 +21,31 @@ export const uploadStepLabels: Record<UploadStepId, string> = {
   publish: 'Publish',
 };
 
+export function previousUploadStep(step: UploadStepId): UploadStepId | undefined {
+  const index = uploadStepOrder.indexOf(step);
+  return index > 0 ? uploadStepOrder[index - 1] : undefined;
+}
+
+export function nextUploadStep(step: UploadStepId): UploadStepId | undefined {
+  const index = uploadStepOrder.indexOf(step);
+  return index >= 0 && index < uploadStepOrder.length - 1 ? uploadStepOrder[index + 1] : undefined;
+}
+
+/** Stepper may jump to the active step, any earlier step, or an explicitly completed step. */
+export function canNavigateToUploadStep({
+  target,
+  activeStep,
+  completedSteps,
+}: {
+  target: UploadStepId;
+  activeStep: UploadStepId;
+  completedSteps: readonly UploadStepId[];
+}): boolean {
+  const targetIndex = uploadStepOrder.indexOf(target);
+  const activeIndex = uploadStepOrder.indexOf(activeStep);
+  return targetIndex <= activeIndex || completedSteps.includes(target);
+}
+
 export const supportedVideoMimeTypes = ['video/mp4', 'video/webm', 'video/quicktime'] as const;
 
 export const supportedVideoExtensions = ['.mp4', '.webm', '.mov'] as const;
@@ -30,7 +55,16 @@ export const maxVideoFileSizeBytes = 2 * 1024 * 1024 * 1024;
 
 export const supportedThumbnailMimeTypes = ['image/jpeg', 'image/png', 'image/webp'] as const;
 
+export const supportedThumbnailExtensions = ['.jpg', '.jpeg', '.png', '.webp'] as const;
+
 export const maxThumbnailFileSizeBytes = 5 * 1024 * 1024;
+
+export const videoFileAccept = [...supportedVideoExtensions, ...supportedVideoMimeTypes].join(',');
+
+export const thumbnailFileAccept = [
+  ...supportedThumbnailMimeTypes,
+  ...supportedThumbnailExtensions,
+].join(',');
 
 export const videoCategoryLabels: Record<VideoCategory, string> = {
   entertainment: 'Entertainment',

@@ -97,3 +97,20 @@ export function validateVisibility(input: VisibilitySelectionInput): string | un
   if (!input.visibility) return 'Choose a visibility option.';
   return undefined;
 }
+
+export interface PublishDraftInput extends UploadDetailsInput, ThumbnailSelectionInput {
+  visibility: VideoVisibility | '';
+  uploadId?: string | undefined;
+}
+
+/** Final gate before createVideo — details, thumbnail, visibility, and a finished upload. */
+export function validatePublishDraft(input: PublishDraftInput): string | undefined {
+  if (!input.uploadId) return 'Complete all required fields before publishing.';
+  if (hasDetailsErrors(validateDetails(input))) {
+    return 'Complete all required fields before publishing.';
+  }
+  if (validateThumbnailSelection(input) || validateVisibility(input)) {
+    return 'Complete all required fields before publishing.';
+  }
+  return undefined;
+}

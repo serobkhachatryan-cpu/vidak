@@ -95,11 +95,36 @@ export const UploadFailed: Story = {
   },
 };
 
+export const UploadCancelled: Story = {
+  args: {
+    step: 'progress',
+    fileName: 'design-system.mp4',
+    uploadStatus: 'cancelled',
+    uploadError: 'Upload cancelled.',
+    completedSteps: ['select'],
+    onRetryUpload: () => undefined,
+  },
+};
+
 export const VideoDetails: Story = {
   args: {
     step: 'details',
     fileName: 'design-system.mp4',
     draft,
+    completedSteps: ['select', 'progress'],
+  },
+};
+
+export const VideoDetailsInvalid: Story = {
+  args: {
+    step: 'details',
+    fileName: 'design-system.mp4',
+    draft: emptyUploadDraft(),
+    detailsErrors: {
+      title: 'Title is required.',
+      category: 'Category is required.',
+      language: 'Language is required.',
+    },
     completedSteps: ['select', 'progress'],
   },
 };

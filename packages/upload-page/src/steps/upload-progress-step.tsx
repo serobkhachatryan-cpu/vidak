@@ -13,6 +13,15 @@ export interface UploadProgressView {
   remainingSeconds: number;
 }
 
+export interface UploadProgressStepProps {
+  fileName?: string;
+  status?: UploadProgressStatus;
+  progress?: UploadProgressView;
+  error?: string;
+  onCancel?: () => void;
+  onRetry?: () => void;
+}
+
 export function UploadProgressStep({
   fileName,
   status = 'uploading',
@@ -20,14 +29,7 @@ export function UploadProgressStep({
   error,
   onCancel,
   onRetry,
-}: {
-  fileName?: string;
-  status?: UploadProgressStatus;
-  progress?: UploadProgressView;
-  error?: string;
-  onCancel?: () => void;
-  onRetry?: () => void;
-}) {
+}: UploadProgressStepProps) {
   if (status === 'error' || status === 'cancelled') {
     return (
       <ErrorState

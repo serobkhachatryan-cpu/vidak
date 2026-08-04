@@ -1,18 +1,62 @@
 import { describe, expect, it } from 'vitest';
 import {
+  canNavigateToUploadStep,
   formatBytes,
   formatRemainingTime,
   formatSpeed,
+  nextUploadStep,
+  previousUploadStep,
   titleFromFileName,
 } from './upload-constants';
 import {
   hasDetailsErrors,
   validateDetails,
+  validatePublishDraft,
   validateThumbnailFile,
   validateThumbnailSelection,
   validateVideoFile,
   validateVisibility,
 } from './upload-validation';
+
+describe('upload step navigation', () => {
+  it('resolves previous and next steps along the ordered flow', () => {
+    expect(previousUploadStep('select')).toBeUndefined();
+    expect(previousUploadStep('details')).toBe('progress');
+    expect(nextUploadStep('visibility')).toBe('publish');
+    expect(nextUploadStep('publish')).toBeUndefined();
+  });
+
+  it('allows navigation to the active step, earlier steps, or completed later steps', () => {
+    expect(
+      canNavigateToUploadStep({
+        target: 'details',
+        activeStep: 'details',
+        completedSteps: ['select', 'progress'],
+      }),
+    ).toBe(true);
+    expect(
+      canNavigateToUploadStep({
+        target: 'select',
+        activeStep: 'details',
+        completedSteps: ['select', 'progress'],
+      }),
+    ).toBe(true);
+    expect(
+      canNavigateToUploadStep({
+        target: 'thumbnail',
+        activeStep: 'details',
+        completedSteps: ['select', 'progress', 'thumbnail'],
+      }),
+    ).toBe(true);
+    expect(
+      canNavigateToUploadStep({
+        target: 'publish',
+        activeStep: 'details',
+        completedSteps: ['select', 'progress'],
+      }),
+    ).toBe(false);
+  });
+});
 
 describe('upload validation', () => {
   it('rejects missing, unsupported, empty, and oversized video files', () => {
@@ -32,7 +76,7 @@ describe('upload validation', () => {
     expect(validateVideoFile({ name: 'clip.mov', size: 1_024, type: '' })).toBeUndefined();
   });
 
-  it('validates required details fields', () => {
+  it('validates required details fields and length limits', () => {
     const errors = validateDetails({
       title: '',
       description: '',
@@ -44,6 +88,20 @@ describe('upload validation', () => {
     expect(errors.category).toMatch(/required/i);
     expect(errors.language).toMatch(/required/i);
     expect(hasDetailsErrors(errors)).toBe(true);
+
+    expect(
+      validateDetails({
+        title: 'x'.repeat(101),
+        description: 'y'.repeat(5001),
+        tags: Array.from({ length: 21 }, (_, index) => `tag-${index}`),
+        category: 'education',
+        language: 'en',
+      }),
+    ).toEqual({
+      title: 'Title must be 100 characters or fewer.',
+      description: 'Description must be 5,000 characters or fewer.',
+      tags: 'You can add up to 20 tags.',
+    });
 
     expect(
       hasDetailsErrors(
@@ -69,6 +127,24 @@ describe('upload validation', () => {
       /unsupported thumbnail/i,
     );
     expect(validateThumbnailFile({ name: 'a.jpg', size: 10, type: 'image/jpeg' })).toBeUndefined();
+  });
+
+  it('gates publishing until the upload and draft are complete', () => {
+    const ready = {
+      uploadId: 'upload-1',
+      title: 'Design systems',
+      description: 'A practical tour',
+      tags: ['design'],
+      category: 'education' as const,
+      language: 'en' as const,
+      thumbnailUrl: 'https://example.com/a.jpg',
+      visibility: 'public' as const,
+    };
+    expect(validatePublishDraft(ready)).toBeUndefined();
+    expect(validatePublishDraft({ ...ready, uploadId: undefined })).toMatch(/required fields/i);
+    expect(validatePublishDraft({ ...ready, title: '' })).toMatch(/required fields/i);
+    expect(validatePublishDraft({ ...ready, thumbnailUrl: '' })).toMatch(/required fields/i);
+    expect(validatePublishDraft({ ...ready, visibility: '' })).toMatch(/required fields/i);
   });
 });
 

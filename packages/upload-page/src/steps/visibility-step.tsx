@@ -6,15 +6,13 @@ import { useId } from 'react';
 import { cx } from '../styles';
 import { visibilityOptions } from '../upload-constants';
 
-export function VisibilityStep({
-  value,
-  error,
-  onChange,
-}: {
+export interface VisibilityStepProps {
   value?: VideoVisibility | '';
   error?: string;
   onChange?: (visibility: VideoVisibility) => void;
-}) {
+}
+
+export function VisibilityStep({ value, error, onChange }: VisibilityStepProps) {
   const groupId = useId();
 
   return (

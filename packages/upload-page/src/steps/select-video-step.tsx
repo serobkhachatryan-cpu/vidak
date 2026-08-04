@@ -3,26 +3,27 @@
 import { Button, Text } from '@w3ds/ui';
 import { type ChangeEvent, type DragEvent, useId, useRef, useState } from 'react';
 import { cx } from '../styles';
-import { formatBytes, maxVideoFileSizeBytes, supportedVideoExtensions } from '../upload-constants';
+import {
+  formatBytes,
+  maxVideoFileSizeBytes,
+  supportedVideoExtensions,
+  videoFileAccept,
+} from '../upload-constants';
 
-export function SelectVideoStep({
-  fileName,
-  fileSize,
-  error,
-  onFileSelect,
-}: {
+export interface SelectVideoStepProps {
   fileName?: string;
   fileSize?: number;
   error?: string;
   onFileSelect?: (file: File) => void;
-}) {
-  const inputId = useId();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [isDragging, setIsDragging] = useState(false);
+}
 
-  const accept = [...supportedVideoExtensions, 'video/mp4', 'video/webm', 'video/quicktime'].join(
-    ',',
-  );
+export function SelectVideoStep({ fileName, fileSize, error, onFileSelect }: SelectVideoStepProps) {
+  const inputId = useId();
+  const hintId = `${inputId}-hint`;
+  const errorId = `${inputId}-error`;
+  const inputRef = useRef<HTMLInputElement>(null);
+  const dropzoneRef = useRef<HTMLFormElement>(null);
+  const [isDragging, setIsDragging] = useState(false);
 
   const handleFiles = (files: FileList | null) => {
     const file = files?.[0];
@@ -40,10 +41,19 @@ export function SelectVideoStep({
     handleFiles(event.dataTransfer.files);
   };
 
+  const onDragLeave = (event: DragEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const nextTarget = event.relatedTarget;
+    if (nextTarget instanceof Node && dropzoneRef.current?.contains(nextTarget)) return;
+    setIsDragging(false);
+  };
+
   return (
     <div className="space-y-4">
       <form
-        aria-describedby={error ? `${inputId}-error` : `${inputId}-hint`}
+        ref={dropzoneRef}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errorId : hintId}
         onSubmit={(event) => event.preventDefault()}
         onDragEnter={(event) => {
           event.preventDefault();
@@ -53,10 +63,7 @@ export function SelectVideoStep({
           event.preventDefault();
           setIsDragging(true);
         }}
-        onDragLeave={(event) => {
-          event.preventDefault();
-          setIsDragging(false);
-        }}
+        onDragLeave={onDragLeave}
         onDrop={onDrop}
         className={cx(
           'flex min-h-56 flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-border bg-surface px-6 py-10 text-center transition-colors duration-fast',
@@ -77,12 +84,13 @@ export function SelectVideoStep({
           ref={inputRef}
           id={inputId}
           type="file"
-          accept={accept}
+          accept={videoFileAccept}
+          aria-label="Select a video file"
           className="sr-only"
           onChange={onChange}
         />
       </form>
-      <Text id={`${inputId}-hint`} size="sm" tone="muted">
+      <Text id={hintId} size="sm" tone="muted">
         Supported formats: {supportedVideoExtensions.join(', ')}. Max size{' '}
         {Math.round(maxVideoFileSizeBytes / (1024 * 1024 * 1024))} GB.
       </Text>
@@ -93,7 +101,7 @@ export function SelectVideoStep({
         </Text>
       )}
       {error && (
-        <Text id={`${inputId}-error`} size="sm" tone="danger" role="alert">
+        <Text id={errorId} size="sm" tone="danger" role="alert">
           {error}
         </Text>
       )}
