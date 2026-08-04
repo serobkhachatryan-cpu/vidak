@@ -1,14 +1,24 @@
 export type {
   AuthApi,
+  AuthClient,
+  AuthProviderCapabilities,
+  AuthProviderId,
   AuthSession,
   AuthTokens,
   AuthUser,
+  AuthUserPermissions,
+  AuthUserProfile,
+  BeginLoginOptions,
+  LoginChallenge,
   LoginInput,
+  LoginOfferStatus,
+  LoginResult,
   RegisterInput,
   Role,
   StoredAuthSession,
   TokenStorage,
   UpdateAuthProfileInput,
+  W3dsAuthChallengeApi,
 } from './types';
 
 import type { AuthUser, Role, StoredAuthSession, TokenStorage } from './types';
@@ -20,7 +30,9 @@ export type AuthenticationErrorCode =
   | 'invalid_password'
   | 'weak_password'
   | 'confirmation_mismatch'
-  | 'validation_failed';
+  | 'validation_failed'
+  | 'unsupported_capability'
+  | 'provider_unavailable';
 
 export class AuthenticationError extends Error {
   constructor(
@@ -91,5 +103,21 @@ export const hasRole = (user: AuthUser | undefined, role: Role) =>
 
 export const hasAnyRole = (user: AuthUser | undefined, roles: readonly Role[]) =>
   roles.some((role) => hasRole(user, role));
+
+export type { CreateAuthUserInput } from './provider';
+export {
+  authProviderCapabilities,
+  capabilitiesFromRoles,
+  createAuthUser,
+  createSyntheticEName,
+  createSyntheticEVaultId,
+  getAuthProviderCapabilities,
+  isDevAuthProvider,
+  isW3dsAuthProvider,
+  parseAuthProviderId,
+  permissionsFromRoles,
+  readAuthProviderEnv,
+  resolveAuthProviderId,
+} from './provider';
 
 export { restoreStoredSession, storeSession } from './session';

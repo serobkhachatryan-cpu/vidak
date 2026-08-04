@@ -9,8 +9,14 @@ export async function restoreStoredSession(
   const storedSession = tokenStorage.read();
   if (!storedSession) return null;
 
+  const refreshToken = storedSession.tokens.refreshToken;
+  if (!refreshToken) {
+    tokenStorage.clear();
+    return null;
+  }
+
   try {
-    const refreshedSession = await authApi.refresh(storedSession.tokens.refreshToken);
+    const refreshedSession = await authApi.refresh(refreshToken);
     tokenStorage.write({ ...refreshedSession, remember: storedSession.remember });
     return refreshedSession;
   } catch {

@@ -1,8 +1,11 @@
 import {
-  type AuthApi,
+  type AuthClient,
   AuthenticationError,
+  type AuthProviderCapabilities,
   type AuthSession,
   type AuthUser,
+  createAuthUser,
+  getAuthProviderCapabilities,
   type LoginInput,
   type RegisterInput,
   type UpdateAuthProfileInput,
@@ -20,8 +23,20 @@ export interface MockAuthApiClientOptions {
   users?: readonly MockAuthUser[];
 }
 
-export interface MockAuthUser extends AuthUser {
+/**
+ * In-memory user record for the development auth provider.
+ * Password stays local to the mock store and is never part of {@link AuthUser}.
+ */
+export interface MockAuthUser {
+  id: string;
+  email: string;
+  displayName: string;
+  avatarUrl?: string;
+  roles: AuthUser['roles'];
   password: string;
+  eName?: string;
+  eVaultId?: string;
+  handle?: string;
 }
 
 interface MockDeviceSession extends AuthDeviceSession {
@@ -36,24 +51,37 @@ const defaultUsers: readonly MockAuthUser[] = [
     displayName: 'Demo Creator',
     roles: ['creator'],
     password: 'password123',
+    eName: '@demo.w3id',
+    eVaultId: 'evault-demo',
+    handle: 'demo',
   },
 ];
 
 function toAuthUser(user: MockAuthUser): AuthUser {
-  return {
+  return createAuthUser({
     id: user.id,
     email: user.email,
     displayName: user.displayName,
     roles: user.roles,
     ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
-  };
+    ...(user.handle ? { handle: user.handle } : {}),
+    ...(user.eName ? { eName: user.eName } : {}),
+    ...(user.eVaultId ? { eVaultId: user.eVaultId } : {}),
+  });
 }
 
 function isStrongPassword(password: string): boolean {
   return password.length >= 8;
 }
 
-export class MockAuthApiClient implements AuthApi {
+/**
+ * Development authentication provider (email/password, in-memory).
+ * Also exported as {@link DevAuthClient}.
+ */
+export class MockAuthApiClient implements AuthClient {
+  readonly provider = 'dev' as const;
+  readonly capabilities: AuthProviderCapabilities = getAuthProviderCapabilities('dev');
+
   private readonly delayMs: number;
   private users: MockAuthUser[];
   private sessions = new Map<string, AuthUser>();
@@ -273,6 +301,7 @@ export class MockAuthApiClient implements AuthApi {
 
     return {
       user: authUser,
+      provider: this.provider,
       tokens: {
         accessToken,
         refreshToken,
@@ -320,6 +349,9 @@ export class MockAuthApiClient implements AuthApi {
     return user ? toAuthUser(user) : undefined;
   }
 }
+
+/** Development auth provider — alias of {@link MockAuthApiClient}. */
+export { MockAuthApiClient as DevAuthClient };
 
 function toPublicSession(session: MockDeviceSession): AuthDeviceSession {
   return {
