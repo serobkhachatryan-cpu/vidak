@@ -561,7 +561,7 @@ export class RegistryW3dsIdentityVerifier implements W3dsIdentityVerifier {
       ),
     );
     const payload = toArrayBuffer(encoder.encode(input.session));
-    const signature = decodeSignature(input.signature);
+    const signature = normalizeEcdsaSignature(decodeSignature(input.signature));
     const verified = await Promise.any(
       certificatesForIdentity.map(async (certificate) => {
         const publicKey = await importW3dsPublicKey(certificate.publicKey);
@@ -824,19 +824,87 @@ async function importW3dsPublicKey(encodedKey: string): Promise<CryptoKey> {
 }
 
 function decodeSignature(signature: string): Uint8Array {
-  if (signature.startsWith('z')) return decodeBase58(signature.slice(1));
+  // Software wallet signatures are base64 and may legitimately begin with
+  // `z`. Prefer a valid base64 form before treating that prefix as multibase.
+  let base64: Uint8Array | undefined;
+  try {
+    base64 = decodeBase64(signature);
+  } catch {
+    // A base58 or explicitly prefixed encoding is handled below.
+  }
+
+  let base58: Uint8Array | undefined;
+  if (
+    signature.startsWith('z') &&
+    /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]+$/.test(signature.slice(1))
+  ) {
+    try {
+      base58 = decodeBase58(signature.slice(1));
+    } catch {
+      // Report the normal validation failure if no supported form succeeds.
+    }
+  }
+
+  if (base58 && looksLikeDerEcdsaSignature(base58)) return base58;
+  if (base64 && looksLikeDerEcdsaSignature(base64)) return base64;
+  if (base64) return base64;
+  if (base58) return base58;
+
   if (signature.startsWith('m')) return decodeBase64(signature.slice(1));
   if (signature.startsWith('f')) return hexDecode(signature.slice(1));
-  return decodeBase64(signature);
+  throw new Error('Unsupported signature encoding.');
 }
 
 function decodeMultibase(value: string): Uint8Array {
   const prefix = value[0];
   const content = value.slice(1);
-  if (prefix === 'z') return decodeBase58(content);
+  // The reference eID software wallet writes public keys as `z` followed by
+  // hex-encoded SPKI bytes, while standard multibase uses base58btc. Support
+  // both representations before importing the P-256 public key.
+  if (prefix === 'z')
+    return /^[a-f\d]+$/i.test(content) ? hexDecode(content) : decodeBase58(content);
   if (prefix === 'm') return decodeBase64(content);
   if (prefix === 'f') return hexDecode(content);
   throw new Error('Unsupported public key encoding.');
+}
+
+/** Web Crypto expects the IEEE P1363 `r || s` signature form for P-256. */
+function normalizeEcdsaSignature(signature: Uint8Array): Uint8Array {
+  return looksLikeDerEcdsaSignature(signature) ? derEcdsaToRaw(signature, 32) : signature;
+}
+
+function looksLikeDerEcdsaSignature(bytes: Uint8Array): boolean {
+  if (bytes.length < 8 || bytes[0] !== 0x30 || bytes[1] !== bytes.length - 2) return false;
+  if (bytes[2] !== 0x02) return false;
+  const rLength = bytes[3] ?? 0;
+  const sTagIndex = 4 + rLength;
+  if (sTagIndex + 2 > bytes.length || bytes[sTagIndex] !== 0x02) return false;
+  const sLength = bytes[sTagIndex + 1] ?? 0;
+  return sTagIndex + 2 + sLength === bytes.length;
+}
+
+function derEcdsaToRaw(bytes: Uint8Array, scalarLength: number): Uint8Array {
+  if (!looksLikeDerEcdsaSignature(bytes)) throw new Error('Invalid DER ECDSA signature.');
+  const rLength = bytes[3] ?? 0;
+  const r = bytes.slice(4, 4 + rLength);
+  const sLengthIndex = 5 + rLength;
+  const sLength = bytes[sLengthIndex] ?? 0;
+  const s = bytes.slice(sLengthIndex + 1, sLengthIndex + 1 + sLength);
+  const raw = new Uint8Array(scalarLength * 2);
+
+  const writeScalar = (value: Uint8Array, offset: number) => {
+    let firstSignificant = 0;
+    while (firstSignificant < value.length - 1 && value[firstSignificant] === 0) {
+      firstSignificant += 1;
+    }
+    const normalized = value.slice(firstSignificant);
+    if (normalized.length > scalarLength) throw new Error('Invalid ECDSA scalar length.');
+    raw.set(normalized, offset + scalarLength - normalized.length);
+  };
+
+  writeScalar(r, 0);
+  writeScalar(s, scalarLength);
+  return raw;
 }
 
 function decodeBase64(value: string): Uint8Array {

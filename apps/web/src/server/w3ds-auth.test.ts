@@ -443,7 +443,9 @@ describe('W3dsAuthService', () => {
       { alg: 'ES256', kid: 'registry-key' },
       {
         ename: '@creator.w3id',
-        publicKey: `m${Buffer.from(userSpki).toString('base64url')}`,
+        // The eID software wallet emits a `z` prefix followed by hexadecimal
+        // SPKI bytes, not standard base58 multibase content.
+        publicKey: `z${Buffer.from(userSpki).toString('hex')}`,
         iat: now,
         exp: now + 60 * 60,
       },
@@ -472,11 +474,19 @@ describe('W3dsAuthService', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     try {
+      const verifier = new RegistryW3dsIdentityVerifier('https://registry.example');
       await expect(
-        new RegistryW3dsIdentityVerifier('https://registry.example').verify({
+        verifier.verify({
           eName: '@creator.w3id',
           session,
           signature: Buffer.from(signature).toString('base64'),
+        }),
+      ).resolves.toEqual(verifiedIdentity);
+      await expect(
+        verifier.verify({
+          eName: '@creator.w3id',
+          session,
+          signature: Buffer.from(rawEcdsaToDer(new Uint8Array(signature))).toString('base64'),
         }),
       ).resolves.toEqual(verifiedIdentity);
     } finally {
@@ -511,4 +521,31 @@ async function signJsonWebToken(
     new TextEncoder().encode(signingInput),
   );
   return `${signingInput}.${Buffer.from(signature).toString('base64url')}`;
+}
+
+function rawEcdsaToDer(signature: Uint8Array): Uint8Array {
+  const scalarLength = signature.length / 2;
+  if (!Number.isInteger(scalarLength)) throw new Error('Expected an ECDSA r || s signature.');
+  const encodeInteger = (value: Uint8Array) => {
+    let firstSignificant = 0;
+    while (firstSignificant < value.length - 1 && value[firstSignificant] === 0) {
+      firstSignificant += 1;
+    }
+    const normalized = value.slice(firstSignificant);
+    const needsPadding = (normalized[0] ?? 0) >= 0x80;
+    const output = new Uint8Array(normalized.length + (needsPadding ? 1 : 0));
+    output.set(normalized, needsPadding ? 1 : 0);
+    return output;
+  };
+  const r = encodeInteger(signature.slice(0, scalarLength));
+  const s = encodeInteger(signature.slice(scalarLength));
+  const body = new Uint8Array(4 + r.length + s.length);
+  body.set([0x02, r.length], 0);
+  body.set(r, 2);
+  body.set([0x02, s.length], 2 + r.length);
+  body.set(s, 4 + r.length);
+  const der = new Uint8Array(2 + body.length);
+  der.set([0x30, body.length], 0);
+  der.set(body, 2);
+  return der;
 }
