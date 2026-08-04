@@ -4,8 +4,8 @@
 
 This repository does not yet implement a backend service. There are no API
 route handlers, server actions, database models, persistence adapters, queue
-workers, storage integrations, authentication flows, or video-processing
-pipelines in the current source tree.
+workers, storage integrations, production authentication flows, or
+video-processing pipelines in the current source tree.
 
 The platform description and package names establish intended domains, but they
 do not constitute implemented runtime capabilities.
@@ -13,8 +13,8 @@ do not constitute implemented runtime capabilities.
 ```mermaid
 flowchart LR
   Clients["Next.js applications"] -. no application API boundary yet .-> Platform["Backend platform"]
-  Auth["@w3ds/auth<br/>empty export"] -. reserved boundary .-> Platform
-  API["@w3ds/api-client<br/>empty export"] -. reserved boundary .-> Platform
+  Auth["@w3ds/auth<br/>contracts and browser storage"] -. client-only boundary .-> Platform
+  API["@w3ds/api-client<br/>typed mock clients"] -. client-only boundary .-> Platform
   SDK["@w3ds/sdk<br/>empty export"] -. reserved boundary .-> Platform
   Player["@w3ds/player<br/>empty export"] -. reserved boundary .-> Platform
 ```
@@ -41,8 +41,8 @@ concerns:
 
 | Package | Current implementation |
 | --- | --- |
-| `@w3ds/auth` | Empty module. |
-| `@w3ds/api-client` | Empty module. |
+| `@w3ds/auth` | Authentication contracts, role helpers, and browser token-storage adapters. |
+| `@w3ds/api-client` | Typed in-memory mock clients, including `MockAuthApiClient`. |
 | `@w3ds/sdk` | Empty module. |
 | `@w3ds/player` | Empty module. |
 | `@w3ds/types` | Empty module. |

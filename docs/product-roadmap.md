@@ -180,11 +180,11 @@ flowchart TB
     Tokens["@w3ds/design-tokens"]
     UI["@w3ds/ui"]
     Api["@w3ds/api-client"]
+    Auth["@w3ds/auth"]
     Hooks["@w3ds/hooks"]
   end
 
   subgraph Reserved_packages["Reserved packages — no implementation yet"]
-    Auth["@w3ds/auth"]
     Player["@w3ds/player"]
     SDK["@w3ds/sdk"]
     Icons["@w3ds/icons"]
