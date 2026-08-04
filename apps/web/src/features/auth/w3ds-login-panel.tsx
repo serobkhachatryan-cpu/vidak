@@ -88,7 +88,7 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
         if (next.kind === 'completed' && !completedRef.current) {
           completedRef.current = true;
           clearPoll();
-          acceptSessionRef.current(next.session);
+          await acceptSessionRef.current(next.session);
           router.replace(returnTo);
           return;
         }
