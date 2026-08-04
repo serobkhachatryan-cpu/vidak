@@ -1,9 +1,10 @@
+import { platformName } from '@w3ds/config';
 import type { Metadata } from 'next';
 import './globals.css';
 import { Providers } from './providers';
 
 export const metadata: Metadata = {
-  title: 'W3DS Video',
+  title: platformName,
   description: 'Decentralized video hosting',
 };
 

@@ -3,26 +3,17 @@
 import { useChannel, useInfiniteVideos } from '@w3ds/hooks';
 import type { Video } from '@w3ds/types';
 import {
-  AppShell,
-  Button,
   EmptyState,
   ErrorState,
   Grid,
-  Header,
   Page,
-  Sidebar,
   Spinner,
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
+import { ApplicationShell } from '../../components/application-shell';
 import { videoApiClient } from '../../lib/video-api-client';
-
-const navigation = [
-  { label: 'Home', href: '/', current: true, icon: '⌂' },
-  { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
-  { label: 'Library', href: '/library', icon: '▣' },
-];
 
 function FeedVideoCard({ video }: { video: Video }) {
   const { data: channel } = useChannel(videoApiClient, video.channelId);
@@ -40,18 +31,9 @@ function FeedGridSkeleton() {
 }
 
 export function HomeFeed() {
-  const [darkMode, setDarkMode] = useState(false);
-  const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, isPending, refetch } =
     useInfiniteVideos(videoApiClient, { status: 'published', visibility: 'public' }, 1);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
-    return () => {
-      delete document.documentElement.dataset.theme;
-    };
-  }, [darkMode]);
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -70,37 +52,7 @@ export function HomeFeed() {
   const videos = data?.pages.flatMap((page) => page.items) ?? [];
 
   return (
-    <AppShell
-      header={
-        <Header
-          brand={
-            <a
-              href="/"
-              className="rounded font-sans text-lg font-bold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-            >
-              W3DS Video
-            </a>
-          }
-          onMenuClick={() => setMobileNavigationOpen(true)}
-          actions={
-            <Button
-              size="sm"
-              variant="ghost"
-              aria-pressed={darkMode}
-              aria-label={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
-              onClick={() => setDarkMode((current) => !current)}
-            >
-              {darkMode ? 'Light mode' : 'Dark mode'}
-            </Button>
-          }
-        />
-      }
-      sidebar={<Sidebar items={navigation} />}
-      mobileNavigation={<Sidebar items={navigation} />}
-      mobileNavigationOpen={mobileNavigationOpen}
-      onMobileNavigationClose={() => setMobileNavigationOpen(false)}
-      mobileNavigationTitle="Browse"
-    >
+    <ApplicationShell currentHref="/">
       <Page title="Home" description="Fresh videos from the W3DS community." containerSize="full">
         {isPending ? (
           <FeedGridSkeleton />
@@ -138,6 +90,6 @@ export function HomeFeed() {
           </>
         )}
       </Page>
-    </AppShell>
+    </ApplicationShell>
   );
 }

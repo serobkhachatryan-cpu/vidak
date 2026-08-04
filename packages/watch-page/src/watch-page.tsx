@@ -1,3 +1,5 @@
+'use client';
+
 import type { VideoApiClient } from '@w3ds/api-client';
 import { useChannel, useVideo, useVideos } from '@w3ds/hooks';
 import type { Channel, Video, VideoId } from '@w3ds/types';
@@ -322,11 +324,11 @@ export function WatchPage({
       />
     );
 
+  const page = <Page containerSize="full">{content}</Page>;
+
   return (
     <div data-theme={theme} className={cx(theme === 'dark' && 'dark', className)}>
-      <AppShell {...shell}>
-        <Page containerSize="full">{content}</Page>
-      </AppShell>
+      {shell ? <AppShell {...shell}>{page}</AppShell> : page}
     </div>
   );
 }
@@ -335,9 +337,12 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
   const videoQuery = useVideo(client, videoId);
   const video = videoQuery.data;
   const channelQuery = useChannel(client, video?.channelId ?? '', { enabled: Boolean(video) });
+  const relatedFilters = video
+    ? { channelId: video.channelId, status: 'published' as const, visibility: 'public' as const }
+    : { status: 'published' as const, visibility: 'public' as const };
   const relatedVideosQuery = useVideos(
     client,
-    { status: 'published', visibility: 'public' },
+    relatedFilters,
     { limit: 8 },
     { enabled: Boolean(video) },
   );
