@@ -366,7 +366,7 @@ export interface AvatarProps extends Omit<HTMLAttributes<HTMLDivElement>, 'child
   src?: string | undefined;
   alt?: string;
   name?: string;
-  size?: Size;
+  size?: Size | 'xl';
 }
 export function Avatar({ src, alt = '', name, size = 'md', className, ...props }: AvatarProps) {
   const initials =
@@ -383,7 +383,12 @@ export function Avatar({ src, alt = '', name, size = 'md', className, ...props }
       aria-label={alt || name || 'Avatar'}
       className={cx(
         'inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted font-semibold text-muted-foreground',
-        { sm: 'h-8 w-8 text-xs', md: 'h-10 w-10 text-sm', lg: 'h-12 w-12 text-base' }[size],
+        {
+          sm: 'h-8 w-8 text-xs',
+          md: 'h-10 w-10 text-sm',
+          lg: 'h-12 w-12 text-base',
+          xl: 'h-20 w-20 text-xl',
+        }[size],
         className,
       )}
       {...props}

@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "@w3ds/design-tokens/styles.css";
 
+@source "../../../../packages/channel-page/src";
 @source "../../../../packages/ui/src";
 @source "../../../../packages/watch-page/src";
 @source "../features";
