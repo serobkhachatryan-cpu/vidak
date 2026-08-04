@@ -16,7 +16,12 @@ describe('MockAuthApiClient', () => {
       email: 'demo@w3ds.video',
     });
     await client.logout(refreshed.tokens.refreshToken);
-    await expect(client.refresh(refreshed.tokens.refreshToken)).rejects.toBeInstanceOf(AuthenticationError);
+    await expect(client.refresh(refreshed.tokens.refreshToken)).rejects.toBeInstanceOf(
+      AuthenticationError,
+    );
+    await expect(client.getCurrentUser(refreshed.tokens.accessToken)).rejects.toBeInstanceOf(
+      AuthenticationError,
+    );
   });
 
   it('creates accounts and reports authentication errors', async () => {

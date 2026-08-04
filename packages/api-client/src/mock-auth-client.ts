@@ -1,6 +1,6 @@
 import {
-  AuthenticationError,
   type AuthApi,
+  AuthenticationError,
   type AuthSession,
   type AuthUser,
   type LoginInput,
@@ -30,6 +30,7 @@ export class MockAuthApiClient implements AuthApi {
   private readonly delayMs: number;
   private users: MockAuthUser[];
   private sessions = new Map<string, AuthUser>();
+  private accessTokensByRefreshToken = new Map<string, Set<string>>();
   private revokedRefreshTokens = new Set<string>();
   private sequence = 0;
 
@@ -40,7 +41,9 @@ export class MockAuthApiClient implements AuthApi {
 
   async login(input: LoginInput): Promise<AuthSession> {
     await this.wait();
-    const user = this.users.find((candidate) => candidate.email.toLocaleLowerCase() === input.email.trim().toLocaleLowerCase());
+    const user = this.users.find(
+      (candidate) => candidate.email.toLocaleLowerCase() === input.email.trim().toLocaleLowerCase(),
+    );
     if (!user || user.password !== input.password) {
       throw new AuthenticationError('Email or password is incorrect.', 'invalid_credentials');
     }
@@ -76,7 +79,7 @@ export class MockAuthApiClient implements AuthApi {
 
   async getCurrentUser(accessToken: string): Promise<AuthUser> {
     await this.wait();
-    const user = this.sessions.get(accessToken) ?? this.userFromToken(accessToken, 'access.');
+    const user = this.sessions.get(accessToken);
     if (!user) throw new AuthenticationError('Your session has expired.', 'invalid_session');
     return user;
   }
@@ -85,6 +88,10 @@ export class MockAuthApiClient implements AuthApi {
     await this.wait();
     if (refreshToken) {
       this.sessions.delete(refreshToken);
+      for (const accessToken of this.accessTokensByRefreshToken.get(refreshToken) ?? []) {
+        this.sessions.delete(accessToken);
+      }
+      this.accessTokensByRefreshToken.delete(refreshToken);
       this.revokedRefreshTokens.add(refreshToken);
     }
   }
@@ -93,10 +100,20 @@ export class MockAuthApiClient implements AuthApi {
     const nonce = ++this.sequence;
     const refreshToken = existingRefreshToken ?? `refresh.${user.id}.${nonce}`;
     const accessToken = `access.${user.id}.${nonce}`;
-    this.sessions.set(refreshToken, user);
-    this.sessions.set(accessToken, user);
+    const authUser: AuthUser = {
+      id: user.id,
+      email: user.email,
+      displayName: user.displayName,
+      roles: user.roles,
+      ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
+    };
+    this.sessions.set(refreshToken, authUser);
+    this.sessions.set(accessToken, authUser);
+    const accessTokens = this.accessTokensByRefreshToken.get(refreshToken) ?? new Set<string>();
+    accessTokens.add(accessToken);
+    this.accessTokensByRefreshToken.set(refreshToken, accessTokens);
     return {
-      user,
+      user: authUser,
       tokens: {
         accessToken,
         refreshToken,

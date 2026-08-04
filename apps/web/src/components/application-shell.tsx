@@ -2,7 +2,7 @@
 
 import { platformName } from '@w3ds/config';
 import { AppShell, Button, Header, SearchInput, Sidebar } from '@w3ds/ui';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useAuthentication, useUserProfile } from '../features/auth/auth-provider';
 
@@ -18,8 +18,13 @@ export interface ApplicationShellProps {
   searchValue?: string;
 }
 
-export function ApplicationShell({ children, currentHref, searchValue = '' }: ApplicationShellProps) {
+export function ApplicationShell({
+  children,
+  currentHref,
+  searchValue = '',
+}: ApplicationShellProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const { isLoading, logout } = useAuthentication();
   const user = useUserProfile();
   const [darkMode, setDarkMode] = useState(false);
@@ -83,7 +88,12 @@ export function ApplicationShell({ children, currentHref, searchValue = '' }: Ap
           }
           onMenuClick={() => setMobileNavigationOpen(true)}
           navigation={
-            <form action="/search" method="get" onSubmit={submitSearch} className="mx-auto max-w-xl">
+            <form
+              action="/search"
+              method="get"
+              onSubmit={submitSearch}
+              className="mx-auto max-w-xl"
+            >
               <SearchInput
                 ref={searchRef}
                 name="q"
@@ -122,7 +132,11 @@ export function ApplicationShell({ children, currentHref, searchValue = '' }: Ap
                     </Button>
                   </>
                 ) : (
-                  <Button size="sm" variant="secondary" onClick={() => router.push('/login')}>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => router.push(`/login?returnTo=${encodeURIComponent(pathname)}`)}
+                  >
                     Sign in
                   </Button>
                 ))}

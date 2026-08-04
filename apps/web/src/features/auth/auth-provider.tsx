@@ -1,5 +1,6 @@
 'use client';
 
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   type AuthSession,
   type AuthUser,
@@ -10,14 +11,17 @@ import {
   type RegisterInput,
   type Role,
 } from '@w3ds/auth';
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { Skeleton } from '@w3ds/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { createContext, type ReactNode, useContext, useEffect } from 'react';
-import { Skeleton } from '@w3ds/ui';
 import { authApiClient } from '../../lib/auth-api-client';
 
 const authQueryKey = ['auth', 'session'] as const;
 const tokenStorage = createBrowserTokenStorage();
+
+export function getSafeReturnTo(returnTo: string | null): string {
+  return returnTo?.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/';
+}
 
 interface AuthenticationContextValue {
   user: AuthUser | undefined;
@@ -56,7 +60,6 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
   const persist = (session: AuthSession, remember: boolean) => {
     tokenStorage.write({ ...session, remember });
     queryClient.setQueryData(authQueryKey, session);
-    queryClient.setQueryData(['auth', 'current-user'], session.user);
     return session;
   };
 
@@ -81,7 +84,9 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
       } finally {
         tokenStorage.clear();
         queryClient.setQueryData(authQueryKey, null);
-        queryClient.removeQueries({ queryKey: ['auth', 'current-user'] });
+        queryClient.removeQueries({
+          predicate: (query) => query.queryKey[0] !== 'auth',
+        });
       }
     },
   };
@@ -93,18 +98,6 @@ export function useAuthentication() {
   const context = useContext(AuthenticationContext);
   if (!context) throw new Error('useAuthentication must be used inside AuthenticationProvider.');
   return context;
-}
-
-export function useCurrentUser() {
-  const { session } = useAuthentication();
-  return useQuery({
-    queryKey: ['auth', 'current-user'],
-    queryFn: () => authApiClient.getCurrentUser(session?.tokens.accessToken ?? ''),
-    enabled: Boolean(session),
-    initialData: session?.user,
-    staleTime: Number.POSITIVE_INFINITY,
-    retry: false,
-  });
 }
 
 export function usePermission(role: Role | readonly Role[]) {
@@ -119,13 +112,25 @@ export function useUserProfile() {
 export function SessionLoadingSkeleton() {
   return (
     <div className="mx-auto flex min-h-screen w-full max-w-md items-center px-6">
-      <div className="w-full space-y-4" aria-label="Loading session">
-        <Skeleton className="h-8 w-40" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-28" />
+      <div role="status" aria-busy="true" aria-label="Loading session" className="w-full space-y-4">
+        <Skeleton aria-hidden="true" className="h-8 w-40" />
+        <Skeleton aria-hidden="true" className="h-10 w-full" />
+        <Skeleton aria-hidden="true" className="h-10 w-full" />
+        <Skeleton aria-hidden="true" className="h-10 w-28" />
       </div>
     </div>
+  );
+}
+
+function RedirectingSkeleton() {
+  return (
+    <main
+      className="flex min-h-screen items-center justify-center"
+      aria-busy="true"
+      aria-label="Redirecting"
+    >
+      <span role="status">Redirecting</span>
+    </main>
   );
 }
 
@@ -144,7 +149,8 @@ export function AuthenticationGuard({ children }: { children: ReactNode }) {
     if (!isLoading && !user) router.replace(`/login?returnTo=${encodeURIComponent(returnTo)}`);
   }, [isLoading, returnTo, router, user]);
 
-  if (isLoading || !user) return <SessionLoadingSkeleton />;
+  if (isLoading) return <SessionLoadingSkeleton />;
+  if (!user) return <RedirectingSkeleton />;
   return <>{children}</>;
 }
 
@@ -152,12 +158,13 @@ export function AnonymousRoute({ children }: { children: ReactNode }) {
   const { user, isLoading } = useAuthentication();
   const router = useRouter();
   const searchParams = useSearchParams();
-  const returnTo = searchParams.get('returnTo') || '/';
+  const returnTo = getSafeReturnTo(searchParams.get('returnTo'));
 
   useEffect(() => {
     if (!isLoading && user) router.replace(returnTo);
   }, [isLoading, returnTo, router, user]);
 
-  if (isLoading || user) return <SessionLoadingSkeleton />;
+  if (isLoading) return <SessionLoadingSkeleton />;
+  if (user) return <RedirectingSkeleton />;
   return <>{children}</>;
 }

@@ -124,7 +124,9 @@ export class MockVideoApiClient implements VideoApiClient {
       .filter(
         (comment) =>
           comment.videoId === videoId &&
-          (filters.parentId === undefined ? !comment.parentId : comment.parentId === filters.parentId),
+          (filters.parentId === undefined
+            ? !comment.parentId
+            : comment.parentId === filters.parentId),
       )
       .sort((first, second) => {
         if (filters.sort === 'newest') {
@@ -155,26 +157,22 @@ export class MockVideoApiClient implements VideoApiClient {
     return comment;
   }
 
-  async reactToComment(
-    id: CommentId,
-    reaction: CommentReaction | undefined,
-  ): Promise<Comment> {
+  async reactToComment(id: CommentId, reaction: CommentReaction | undefined): Promise<Comment> {
     await this.wait();
     const comment = this.comments.find((item) => item.id === id);
     if (!comment) throw new Error(`Comment ${id} was not found`);
     const previousReaction = comment.viewerReaction;
-    const next = {
+    const next: Comment = {
       ...comment,
-      viewerReaction: reaction,
       likeCount:
-        comment.likeCount +
-        (reaction === 'like' ? 1 : 0) -
-        (previousReaction === 'like' ? 1 : 0),
+        comment.likeCount + (reaction === 'like' ? 1 : 0) - (previousReaction === 'like' ? 1 : 0),
       dislikeCount:
         (comment.dislikeCount ?? 0) +
         (reaction === 'dislike' ? 1 : 0) -
         (previousReaction === 'dislike' ? 1 : 0),
     };
+    if (reaction) next.viewerReaction = reaction;
+    else delete next.viewerReaction;
     this.comments = this.comments.map((item) => (item.id === id ? next : item));
     return next;
   }
