@@ -1,4 +1,4 @@
-import type { AuthApi, AuthSession, StoredAuthSession, TokenStorage } from './index';
+import type { AuthApi, AuthSession, StoredAuthSession, TokenStorage } from './types';
 
 type SessionRefreshApi = Pick<AuthApi, 'refresh'>;
 

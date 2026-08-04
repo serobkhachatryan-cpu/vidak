@@ -10,7 +10,6 @@
     "clean": "rm -rf .next"
   },
   "dependencies": {
-    "@w3ds/config": "workspace:*",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest"

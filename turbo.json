@@ -2,10 +2,10 @@
   "$schema": "https://turborepo.com/schema.json",
   "ui": "tui",
   "tasks": {
-    "build": { "dependsOn": ["^build"], "outputs": [".next/**", "dist/**", "storybook-static/**"] },
+    "build": { "dependsOn": ["^build"], "outputs": [".next/**"] },
     "typecheck": { "dependsOn": ["^typecheck"], "outputs": [] },
     "lint": { "dependsOn": ["^lint"], "outputs": [] },
-    "test": { "dependsOn": ["^build"], "outputs": ["coverage/**"] },
+    "test": { "dependsOn": ["^build"], "outputs": [] },
     "dev": { "cache": false, "persistent": true },
     "clean": { "cache": false }
   }

@@ -5,11 +5,8 @@ import {
   type AuthSession,
   type AuthUser,
   createBrowserTokenStorage,
-  hasAnyRole,
-  hasRole,
   type LoginInput,
   type RegisterInput,
-  type Role,
   restoreStoredSession,
   storeSession,
 } from '@w3ds/auth';
@@ -97,11 +94,6 @@ export function useAuthentication() {
   const context = useContext(AuthenticationContext);
   if (!context) throw new Error('useAuthentication must be used inside AuthenticationProvider.');
   return context;
-}
-
-export function usePermission(role: Role | readonly Role[]) {
-  const { user } = useAuthentication();
-  return typeof role === 'string' ? hasRole(user, role) : hasAnyRole(user, role);
 }
 
 export function useCurrentUser() {
