@@ -197,6 +197,10 @@ importers:
         version: 6.0.3
 
   packages/ui:
+    dependencies:
+      '@w3ds/design-tokens':
+        specifier: workspace:*
+        version: link:../design-tokens
     devDependencies:
       '@storybook/react-vite':
         specifier: latest
