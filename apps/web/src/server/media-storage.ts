@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
+import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { dirname, resolve, sep } from 'node:path';
+import { Readable } from 'node:stream';
 
 /**
  * Opaque storage-key pattern: UUID (with optional `media_` prefix).
@@ -11,6 +13,20 @@ const SAFE_STORAGE_KEY =
   /^(?:media_)?[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 /**
+ * Streaming upload handle: bytes land in private temporary storage until
+ * `finalize` atomically promotes them to a durable object key.
+ */
+export interface MediaUploadSession {
+  readonly tempKey: string;
+  readonly bytesWritten: number;
+  write(chunk: Uint8Array): Promise<void>;
+  /** Atomically promote the temporary object to `storageKey`. */
+  finalize(storageKey: string): Promise<void>;
+  /** Discard the temporary object without promoting it. */
+  abort(): Promise<void>;
+}
+
+/**
  * Server-only blob storage adapter. Implementations map opaque storage keys
  * to durable bytes; keys must never be treated as user-supplied paths.
  */
@@ -19,6 +35,10 @@ export interface MediaStorage {
   createStorageKey(): string;
   write(storageKey: string, data: Uint8Array): Promise<void>;
   read(storageKey: string): Promise<Uint8Array>;
+  /** Opens a private temporary upload that must be finalized or aborted. */
+  openUpload(): Promise<MediaUploadSession>;
+  /** Streams object bytes without loading the whole object into memory. */
+  openReadStream(storageKey: string): Promise<ReadableStream<Uint8Array>>;
   delete(storageKey: string): Promise<void>;
   exists(storageKey: string): Promise<boolean>;
 }
@@ -54,7 +74,8 @@ export function assertSafeStorageKey(storageKey: string): void {
 
 /**
  * Private local-disk MediaStorage for development and unit tests.
- * Objects are stored as flat files under `rootDir` named by the opaque key.
+ * Final objects are flat files under `rootDir` named by the opaque key.
+ * In-flight uploads use a private `.uploads/` staging directory.
  */
 export class LocalDiskMediaStorage implements MediaStorage {
   private readonly rootDir: string;
@@ -90,6 +111,65 @@ export class LocalDiskMediaStorage implements MediaStorage {
     }
   }
 
+  async openUpload(): Promise<MediaUploadSession> {
+    const tempKey = this.createStorageKey();
+    const tempPath = this.resolveTempPath(tempKey);
+    await mkdir(dirname(tempPath), { recursive: true });
+    const handle = await open(tempPath, 'w');
+    let bytesWritten = 0;
+    let settled = false;
+
+    return {
+      tempKey,
+      get bytesWritten() {
+        return bytesWritten;
+      },
+      write: async (chunk: Uint8Array) => {
+        if (settled) {
+          throw new MediaStorageError('Upload session is already closed.', 'internal_error');
+        }
+        if (chunk.byteLength === 0) return;
+        await handle.write(chunk);
+        bytesWritten += chunk.byteLength;
+      },
+      finalize: async (storageKey: string) => {
+        if (settled) {
+          throw new MediaStorageError('Upload session is already closed.', 'internal_error');
+        }
+        settled = true;
+        try {
+          await handle.close();
+          const finalPath = this.resolveObjectPath(storageKey);
+          await mkdir(dirname(finalPath), { recursive: true });
+          await rename(tempPath, finalPath);
+        } catch (error) {
+          await rm(tempPath, { force: true }).catch(() => undefined);
+          throw error;
+        }
+      },
+      abort: async () => {
+        if (settled) return;
+        settled = true;
+        await handle.close().catch(() => undefined);
+        await rm(tempPath, { force: true }).catch(() => undefined);
+      },
+    };
+  }
+
+  async openReadStream(storageKey: string): Promise<ReadableStream<Uint8Array>> {
+    const path = this.resolveObjectPath(storageKey);
+    try {
+      await stat(path);
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        throw new MediaStorageError('Media object was not found.', 'not_found');
+      }
+      throw error;
+    }
+    const nodeStream = createReadStream(path);
+    return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
+  }
+
   async delete(storageKey: string): Promise<void> {
     const path = this.resolveObjectPath(storageKey);
     try {
@@ -113,6 +193,25 @@ export class LocalDiskMediaStorage implements MediaStorage {
 
   /** Absolute path for a validated key; exported for tests only via resolve. */
   resolveObjectPath(storageKey: string): string {
+    return this.resolveUnderRoot(storageKey);
+  }
+
+  /** Absolute path for a validated temporary upload key (staging area). */
+  resolveTempPath(tempKey: string): string {
+    assertSafeStorageKey(tempKey);
+    const uploadsRoot = resolve(this.rootDir, '.uploads');
+    const resolvedUploadsRoot = uploadsRoot.endsWith(sep) ? uploadsRoot : `${uploadsRoot}${sep}`;
+    const resolved = resolve(uploadsRoot, tempKey);
+    if (resolved !== uploadsRoot && !resolved.startsWith(resolvedUploadsRoot)) {
+      throw new MediaStorageError(
+        'Storage key must be an opaque identifier and cannot contain path segments.',
+        'invalid_storage_key',
+      );
+    }
+    return resolved;
+  }
+
+  private resolveUnderRoot(storageKey: string): string {
     assertSafeStorageKey(storageKey);
     const resolvedRoot = this.rootDir.endsWith(sep) ? this.rootDir : `${this.rootDir}${sep}`;
     const resolved = resolve(this.rootDir, storageKey);

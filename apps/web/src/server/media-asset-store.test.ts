@@ -241,4 +241,37 @@ describe('LocalDiskMediaStorage', () => {
     await expect(disk.exists(key)).resolves.toBe(false);
     await expect(disk.read(key)).rejects.toMatchObject({ code: 'not_found' });
   });
+
+  it('streams uploads through temporary storage then finalizes', async () => {
+    const disk = await createTempStorage();
+    const upload = await disk.openUpload();
+    await upload.write(new TextEncoder().encode('hello '));
+    await upload.write(new TextEncoder().encode('world'));
+    expect(upload.bytesWritten).toBe(11);
+
+    const finalKey = disk.createStorageKey();
+    await upload.finalize(finalKey);
+    await expect(disk.exists(finalKey)).resolves.toBe(true);
+    await expect(disk.read(finalKey)).resolves.toEqual(new TextEncoder().encode('hello world'));
+
+    const stream = await disk.openReadStream(finalKey);
+    const reader = stream.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) chunks.push(value);
+    }
+    const merged = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
+    expect(merged.toString('utf8')).toBe('hello world');
+  });
+
+  it('aborts temporary uploads without leaving final objects', async () => {
+    const disk = await createTempStorage();
+    const upload = await disk.openUpload();
+    await upload.write(new Uint8Array([1, 2, 3]));
+    await upload.abort();
+    const finalKey = disk.createStorageKey();
+    await expect(disk.exists(finalKey)).resolves.toBe(false);
+  });
 });

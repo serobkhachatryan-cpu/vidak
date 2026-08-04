@@ -5,16 +5,16 @@
 Platform backend capabilities are hosted as Next.js route handlers in
 `apps/web`. W3DS authentication persists platform users, login offers, and
 sessions in PostgreSQL through Drizzle ORM. Authenticated creators can also
-persist local creator channels and video draft metadata on that store. Durable
-media asset metadata and a local-disk blob adapter exist as a server-only
-foundation; upload HTTP APIs and public playback are not exposed yet.
+persist local creator channels, video draft metadata, and private draft media
+assets on that store. Protected media transfer routes stream uploads and
+downloads through private storage; public playback URLs are not exposed yet.
 
 There is still no queue worker, video-processing pipeline, eVault sync, ACL
 layer, or public publish path.
 
 ```mermaid
 flowchart LR
-  Clients["Next.js applications"] --> Auth["apps/web API routes\nW3DS auth + drafts"]
+  Clients["Next.js applications"] --> Auth["apps/web API routes\nW3DS auth + drafts + media"]
   Auth --> DB["PostgreSQL\nusers / sessions / channels / drafts / media_assets"]
   Auth --> Disk["LocalDiskMediaStorage\ndevelopment blobs"]
   Auth --> Platform["Registry + eVault\nserver-side verification"]
@@ -70,6 +70,8 @@ Configure the flow with the root `.env.example` values:
 - `W3DS_AUTH_PLATFORM_NAME` (optional; defaults to `vidak`)
 - `W3DS_AUTH_MIN_WALLET_VERSION` (optional temporary compatibility gate)
 - `MEDIA_STORAGE_ROOT` (optional; local-disk MediaStorage root, defaults to `.data/media`)
+- `MEDIA_MAX_UPLOAD_BYTES` (optional; raw upload body limit, defaults to `104857600` / 100 MiB)
+- `MEDIA_ALLOWED_CONTENT_TYPES` (optional; comma-separated MIME allowlist, defaults to `video/mp4,video/webm,video/quicktime`)
 
 If W3DS auth is enabled without `DATABASE_URL`, route handlers return a clear
 `configuration_error` (HTTP 503). Development email/password auth does not use
@@ -121,9 +123,9 @@ cookie/bearer parsing or write ad-hoc SQL.
 
 ### Non-goals (explicit)
 
-This milestone does **not** implement:
+Draft metadata routes do **not** implement:
 
-- File upload HTTP routes, multipart handling, or streaming download endpoints
+- Multipart `formData()` upload parsing that buffers whole files
 - Public playback URLs or `w3ds://file` protocol references
 - Transcoding / processing pipelines
 - eVault writes, ontology mapping, ACLs, or Awareness
@@ -132,10 +134,99 @@ This milestone does **not** implement:
 - Changes to the development provider's mock `createVideo` / `publishVideo`
   semantics
 
-## Media asset storage foundation
+Private media bytes are transferred through the dedicated media routes below.
 
-Server-only durable media metadata and a private blob adapter prepare later
-upload phases. No Next.js route handlers expose these APIs yet.
+## Media asset storage and protected transfer routes
+
+Server-only durable media metadata, a private blob adapter, and authenticated
+transfer routes let creators upload, inspect, download, and delete media for
+their own video drafts. Bytes never leave private storage as public URLs.
+
+### Routes
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/videos/drafts/:videoId/media` | Stream-upload a raw media body into an owned draft. |
+| `GET` | `/api/videos/drafts/:videoId/media/:assetId` | Read owned asset metadata (no storage key / path). |
+| `GET` | `/api/videos/drafts/:videoId/media/:assetId/content` | Stream owned asset bytes from private storage. |
+| `DELETE` | `/api/videos/drafts/:videoId/media/:assetId` | Delete the owned asset row and private blob. |
+
+Every route requires a durable W3DS access session via `Authorization: Bearer`
+or the `w3ds_access` HttpOnly cookie (same helper as auth/draft routes).
+
+### Upload contract (`POST …/media`)
+
+Raw body upload — **not** multipart. Request headers:
+
+| Header | Required | Rules |
+| --- | --- | --- |
+| `Content-Type` | yes | Must be in the allowlist (default `video/mp4`, `video/webm`, `video/quicktime`). Parameters after `;` are ignored. |
+| `Content-Length` | yes | Non-negative integer. Rejected when greater than `MEDIA_MAX_UPLOAD_BYTES` (default 100 MiB). |
+| `X-Original-Filename` | yes | Client filename metadata. Path segments are stripped; max 512 characters. |
+| Body | yes | Raw media bytes streamed by the server (never fully buffered via `formData()`). |
+
+Successful response: `201` with public asset JSON:
+
+```json
+{
+  "id": "…",
+  "ownerId": "…",
+  "videoId": "…",
+  "originalFilename": "clip.mp4",
+  "contentType": "video/mp4",
+  "byteSize": 1234,
+  "uploadState": "ready",
+  "createdAt": "…",
+  "updatedAt": "…"
+}
+```
+
+Responses never include `storageKey`, filesystem paths, or public playback URLs.
+
+Atomic create lifecycle:
+
+1. Authenticate and validate draft ownership, content type, and declared size.
+2. Create an `uploading` `media_assets` row with an opaque storage key.
+3. Stream body bytes into private temporary storage, enforcing max size and
+   `Content-Length` while reading chunks.
+4. Finalize (promote temp → durable object) and mark the asset `ready`.
+5. On any failure: abort temporary storage, delete any final object, and remove
+   the incomplete database row.
+
+### Metadata / download / delete
+
+- `GET …/media/:assetId` returns the public asset projection above (`200`).
+- `GET …/media/:assetId/content` streams bytes with:
+  - `Content-Type` from the asset
+  - `Content-Length` from the asset
+  - `Content-Disposition: attachment; filename="…"; filename*=UTF-8''…`
+  - `Cache-Control: private, no-store`
+  - `X-Content-Type-Options: nosniff`
+  - Only `uploadState: ready` assets are downloadable; otherwise `404`.
+- `DELETE …/media/:assetId` removes the database row then best-effort deletes
+  the private blob (`204`). Storage cleanup failures do not resurrect the row.
+
+### Error responses
+
+All errors use `{ "error": { "code", "message" } }`:
+
+| Status | Code | When |
+| --- | --- | --- |
+| `401` | `invalid_session` | Missing/invalid cookie or bearer session. |
+| `404` | `not_found` | Missing draft/asset, cross-user access, or not-ready download. |
+| `400` | `validation_failed` | Missing/invalid headers, size mismatch vs `Content-Length`. |
+| `413` | `payload_too_large` | Declared or streamed size exceeds limit / `Content-Length`. |
+| `415` | `unsupported_media_type` | `Content-Type` outside the allowlist. |
+| `500` | `internal_error` | Unexpected storage/stream failure (failed uploads are cleaned up). |
+
+### Private-access guarantees
+
+1. Anonymous callers receive `401`; cross-user callers receive `404` (no
+   existence disclosure).
+2. Ownership is checked before any storage read or write.
+3. Clients never receive storage keys, absolute filesystem paths, signed URLs,
+   or public CDN/playback URLs from these routes.
+4. Downloads are authenticated streams from private MediaStorage only.
 
 ### `media_assets` model
 
@@ -144,14 +235,14 @@ upload phases. No Next.js route handlers expose these APIs yet.
 | `id` | Opaque asset identifier. |
 | `owner_id` | Platform user that owns the asset (FK → `w3ds_platform_users`). |
 | `video_id` | Creator video draft the asset belongs to (FK → `videos`, `ON DELETE CASCADE`). |
-| `storage_key` | Opaque MediaStorage object key (unique). Never a user-supplied path. |
+| `storage_key` | Opaque MediaStorage object key (unique). Never a user-supplied path; never returned on the wire. |
 | `original_filename` | Client-provided filename retained as metadata only. |
 | `content_type` | MIME type metadata. |
 | `byte_size` | Declared object size in bytes (non-negative integer). |
 | `upload_state` | Lifecycle: `pending` → `uploading` → `ready` / `failed`. |
 | `created_at` / `updated_at` | Timestamps with time zone. |
 
-Ownership is enforced at the store layer:
+Ownership is enforced at the store and service layers:
 
 1. `createAsset` succeeds only when `video_id` is a draft owned by the same
    `owner_id`.
@@ -165,6 +256,9 @@ Ownership is enforced at the store layer:
 - **Unit tests only:** `InMemoryMediaAssetStore` injected explicitly — never
   used as a production fallback
 
+`MediaAssetService` (`getMediaAssetService()`) composes the store with
+`LocalDiskMediaStorage` and the configured upload limits for route handlers.
+
 ### `MediaStorage` contract
 
 ```ts
@@ -172,6 +266,8 @@ interface MediaStorage {
   createStorageKey(): string;
   write(storageKey: string, data: Uint8Array): Promise<void>;
   read(storageKey: string): Promise<Uint8Array>;
+  openUpload(): Promise<MediaUploadSession>; // temp write → finalize/abort
+  openReadStream(storageKey: string): Promise<ReadableStream<Uint8Array>>;
   delete(storageKey: string): Promise<void>;
   exists(storageKey: string): Promise<boolean>;
 }
@@ -181,16 +277,16 @@ Rules:
 
 - Storage keys are opaque (`media_<uuid>`). Path separators, `..`, and other
   traversal forms are rejected before any filesystem resolve.
-- `LocalDiskMediaStorage` is the development implementation: flat files under a
-  private root directory (`MEDIA_STORAGE_ROOT`, or `.data/media` under the
-  process cwd by default).
+- `LocalDiskMediaStorage` is the development implementation: final objects are
+  flat files under a private root (`MEDIA_STORAGE_ROOT`, or `.data/media`), and
+  in-flight uploads stage under a private `.uploads/` directory before finalize.
 - Object bytes are never stored in PostgreSQL; only metadata and the opaque key
   are durable in `media_assets`.
 - Callers that delete an asset row should also `MediaStorage.delete` the
   returned `storageKey` so orphaned blobs are cleaned up.
 
-This foundation intentionally stops short of upload routes, signed URLs,
-transcoding, and eVault file envelopes.
+This layer intentionally stops short of multipart buffering, signed/public URLs,
+transcoding, and eVault file envelopes. Upload UI / client flows are unchanged.
 
 ## Persistence model
 
