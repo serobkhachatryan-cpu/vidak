@@ -1,8 +1,9 @@
+import { toBrowserAuthSession } from '@w3ds/auth';
 import { type NextRequest, NextResponse } from 'next/server';
 import {
+  applyW3dsSessionCookies,
   getW3dsAuthService,
   W3dsAuthError,
-  w3dsAccessCookieName,
   w3dsRefreshCookieName,
 } from '../../../../server/w3ds-auth';
 
@@ -14,25 +15,8 @@ export async function POST(request: NextRequest) {
     if (!refreshToken)
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const session = await getW3dsAuthService().refreshSession(refreshToken);
-    const { refreshToken: _refreshToken, ...publicTokens } = session.tokens;
-    const response = NextResponse.json({ ...session, tokens: publicTokens });
-    const secure = process.env.NODE_ENV === 'production';
-    response.cookies.set(w3dsAccessCookieName, session.tokens.accessToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure,
-      path: '/',
-      maxAge: 15 * 60,
-    });
-    if (session.tokens.refreshToken) {
-      response.cookies.set(w3dsRefreshCookieName, session.tokens.refreshToken, {
-        httpOnly: true,
-        sameSite: 'lax',
-        secure,
-        path: '/',
-        maxAge: 7 * 24 * 60 * 60,
-      });
-    }
+    const response = NextResponse.json(toBrowserAuthSession(session));
+    applyW3dsSessionCookies(response.cookies, session);
     return response;
   } catch (error) {
     if (error instanceof W3dsAuthError) {

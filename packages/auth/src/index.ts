@@ -115,4 +115,10 @@ export {
   resolveAuthProviderId,
 } from './provider';
 
-export { restoreStoredSession, storeSession } from './session';
+export {
+  persistAuthSession,
+  restoreStoredSession,
+  shouldPersistAuthSessionToBrowserStorage,
+  storeSession,
+  toBrowserAuthSession,
+} from './session';

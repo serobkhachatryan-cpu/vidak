@@ -10,9 +10,12 @@ import {
   hasRole,
   parseAuthProviderId,
   permissionsFromRoles,
+  persistAuthSession,
   restoreStoredSession,
   type StoredAuthSession,
+  shouldPersistAuthSessionToBrowserStorage,
   storeSession,
+  toBrowserAuthSession,
 } from './index';
 
 const session: StoredAuthSession = {
@@ -122,5 +125,37 @@ describe('authentication utilities', () => {
     expect(user.permissions).toEqual(permissionsFromRoles(['creator']));
     expect(user.capabilities).toEqual(capabilitiesFromRoles(['creator']));
     expect(user.displayName).toBe('Demo Creator');
+  });
+
+  it('strips W3DS JWTs from browser session projections and never writes them to storage', () => {
+    const w3dsSession: AuthSession = {
+      user: session.user,
+      provider: 'w3ds',
+      tokens: {
+        accessToken: 'access.jwt.should-not-serialize',
+        refreshToken: 'refresh.jwt.should-not-serialize',
+        expiresAt: '2026-08-04T12:20:00.000Z',
+      },
+    };
+
+    const browserSession = toBrowserAuthSession(w3dsSession);
+    expect(browserSession.tokens).toEqual({ expiresAt: w3dsSession.tokens.expiresAt });
+    expect(JSON.stringify(browserSession)).not.toMatch(
+      /refresh\.jwt|access\.jwt|refreshToken|accessToken/,
+    );
+    expect(shouldPersistAuthSessionToBrowserStorage(w3dsSession)).toBe(false);
+
+    const storage = createMemoryTokenStorage();
+    expect(persistAuthSession(storage, w3dsSession, true)).toEqual(browserSession);
+    expect(storage.read()).toBeUndefined();
+  });
+
+  it('keeps development-provider token storage behavior unchanged', () => {
+    expect(shouldPersistAuthSessionToBrowserStorage(session)).toBe(true);
+    const storage = createMemoryTokenStorage();
+    expect(persistAuthSession(storage, session, true)).toEqual(session);
+    expect(storage.read()).toEqual({ ...session, remember: true });
+    expect(storage.read()?.tokens.refreshToken).toBe('refresh-1');
+    expect(storage.read()?.tokens.accessToken).toBe('access-1');
   });
 });

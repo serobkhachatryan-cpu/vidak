@@ -31,19 +31,19 @@ describe('MockAuthApiClient', () => {
       },
     });
 
-    expect(session.tokens.refreshToken).toBeDefined();
+    expect(session.tokens.accessToken).toEqual(expect.any(String));
+    expect(session.tokens.refreshToken).toEqual(expect.any(String));
     const refreshToken = session.tokens.refreshToken as string;
     const refreshed = await client.refresh(refreshToken);
+    const accessToken = refreshed.tokens.accessToken as string;
 
-    await expect(client.getCurrentUser(refreshed.tokens.accessToken)).resolves.toMatchObject({
+    await expect(client.getCurrentUser(accessToken)).resolves.toMatchObject({
       email: 'demo@w3ds.video',
       eName: '@demo.w3id',
     });
     await client.logout(refreshed.tokens.refreshToken);
     await expect(client.refresh(refreshToken)).rejects.toBeInstanceOf(AuthenticationError);
-    await expect(client.getCurrentUser(refreshed.tokens.accessToken)).rejects.toBeInstanceOf(
-      AuthenticationError,
-    );
+    await expect(client.getCurrentUser(accessToken)).rejects.toBeInstanceOf(AuthenticationError);
   });
 
   it('creates accounts and reports authentication errors', async () => {
@@ -78,7 +78,7 @@ describe('MockAuthApiClient', () => {
       password: 'password123',
       remember: true,
     });
-    const accessToken = session.tokens.accessToken;
+    const accessToken = session.tokens.accessToken as string;
 
     const updated = await client.updateProfile(accessToken, { displayName: 'Demo Updated' });
     expect(updated.displayName).toBe('Demo Updated');

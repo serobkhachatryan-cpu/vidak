@@ -27,7 +27,6 @@ const session = {
     eVaultId: 'evault-1',
   }),
   tokens: {
-    accessToken: 'access-1',
     expiresAt: '2026-08-04T12:20:00.000Z',
   },
   provider: 'w3ds' as const,

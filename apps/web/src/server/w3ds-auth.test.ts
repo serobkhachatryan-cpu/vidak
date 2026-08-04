@@ -61,10 +61,22 @@ describe('W3dsAuthService', () => {
       provider: 'w3ds',
       user: verifiedIdentity,
     });
+    expect(status.session.tokens.accessToken).toBeUndefined();
     expect(status.session.tokens.refreshToken).toBeUndefined();
-    await expect(service.getSession(status.session.tokens.accessToken)).resolves.toMatchObject({
+    expect(status.session.tokens.expiresAt).toEqual(expect.any(String));
+
+    const cookieSession = await service.getOfferSessionForCookie(offer.offerId);
+    expect(cookieSession.tokens.accessToken).toEqual(expect.any(String));
+    expect(cookieSession.tokens.refreshToken).toEqual(expect.any(String));
+    const accessToken = cookieSession.tokens.accessToken;
+    if (!accessToken) throw new Error('Expected an access token for cookies.');
+    await expect(service.getSession(accessToken)).resolves.toMatchObject({
       user: verifiedIdentity,
+      tokens: { expiresAt: expect.any(String) },
     });
+    const publicSession = await service.getSession(accessToken);
+    expect(publicSession.tokens.accessToken).toBeUndefined();
+    expect(publicSession.tokens.refreshToken).toBeUndefined();
 
     await expect(
       service.completeOffer({
@@ -83,15 +95,15 @@ describe('W3dsAuthService', () => {
       session: offer.sessionId,
       signature: 'signature',
     });
-    const completed = await service.getOfferStatus(offer.offerId);
-    if (completed.status !== 'completed') throw new Error('Expected a completed offer.');
-    const refreshToken = (await service.getOfferSessionForCookie(offer.offerId)).tokens
-      .refreshToken;
-    if (!refreshToken) throw new Error('Expected a refresh token.');
+    const cookieSession = await service.getOfferSessionForCookie(offer.offerId);
+    const accessToken = cookieSession.tokens.accessToken;
+    const refreshToken = cookieSession.tokens.refreshToken;
+    if (!accessToken || !refreshToken) throw new Error('Expected cookie credentials.');
 
     const refreshed = await service.refreshSession(refreshToken);
     expect(refreshed.tokens.refreshToken).not.toBe(refreshToken);
-    await expect(service.getSession(completed.session.tokens.accessToken)).rejects.toMatchObject({
+    expect(refreshed.tokens.accessToken).toEqual(expect.any(String));
+    await expect(service.getSession(accessToken)).rejects.toMatchObject({
       code: 'invalid_session',
     });
     await expect(service.refreshSession(refreshToken)).rejects.toMatchObject({

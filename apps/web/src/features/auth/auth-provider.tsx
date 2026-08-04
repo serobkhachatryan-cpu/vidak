@@ -10,9 +10,11 @@ import {
   type LoginChallenge,
   type LoginChallengeStatus,
   type LoginInput,
+  persistAuthSession,
   type RegisterInput,
   restoreStoredSession,
   storeSession,
+  toBrowserAuthSession,
 } from '@w3ds/auth';
 import { Skeleton } from '@w3ds/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
@@ -61,14 +63,10 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
   });
 
   const persist = (session: AuthSession, remember: boolean) => {
-    if (session.provider === 'w3ds') {
-      // W3DS credentials live in HttpOnly cookies; keep React Query hydrated.
-      queryClient.setQueryData(authSessionQueryKey, session);
-      return session;
-    }
-    storeSession(tokenStorage, session, remember);
-    queryClient.setQueryData(authSessionQueryKey, session);
-    return session;
+    // W3DS credentials live in HttpOnly cookies only — never browser storage.
+    const next = persistAuthSession(tokenStorage, session, remember);
+    queryClient.setQueryData(authSessionQueryKey, next);
+    return next;
   };
 
   const loginMutation = useMutation({
@@ -103,7 +101,10 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
       updateSessionUser: (user) => {
         const current = queryClient.getQueryData<AuthSession | null>(authSessionQueryKey);
         if (!current) return;
-        const next = { ...current, user };
+        const next =
+          current.provider === 'w3ds'
+            ? toBrowserAuthSession({ ...current, user })
+            : { ...current, user };
         if (current.provider !== 'w3ds') {
           const stored = tokenStorage.read();
           storeSession(tokenStorage, next, stored?.remember ?? false);

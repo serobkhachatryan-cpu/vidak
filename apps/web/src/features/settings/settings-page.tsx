@@ -20,7 +20,7 @@ export function SettingsPageFeature() {
       <SettingsPageData
         authClient={authApiClient}
         videoClient={videoApiClient}
-        accessToken={session.tokens.accessToken}
+        accessToken={session.tokens.accessToken ?? ''}
         userId={session.user.id}
         email={session.user.email ?? ''}
         displayName={session.user.displayName}

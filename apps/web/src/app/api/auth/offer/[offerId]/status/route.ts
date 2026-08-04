@@ -1,9 +1,9 @@
+import { toBrowserAuthSession } from '@w3ds/auth';
 import { NextResponse } from 'next/server';
 import {
+  applyW3dsSessionCookies,
   getW3dsAuthService,
   W3dsAuthError,
-  w3dsAccessCookieName,
-  w3dsRefreshCookieName,
 } from '../../../../../../server/w3ds-auth';
 
 export const runtime = 'nodejs';
@@ -12,10 +12,16 @@ export async function GET(_request: Request, { params }: { params: Promise<{ off
   try {
     const { offerId } = await params;
     const result = await getW3dsAuthService().getOfferStatus(offerId);
-    const response = NextResponse.json(result);
-    if (result.status === 'completed') {
-      setSessionCookies(response, await getW3dsAuthService().getOfferSessionForCookie(offerId));
+    if (result.status !== 'completed') {
+      return NextResponse.json(result);
     }
+
+    const cookieSession = await getW3dsAuthService().getOfferSessionForCookie(offerId);
+    const response = NextResponse.json({
+      status: 'completed' as const,
+      session: toBrowserAuthSession(cookieSession),
+    });
+    applyW3dsSessionCookies(response.cookies, cookieSession);
     return response;
   } catch (error) {
     if (error instanceof W3dsAuthError) {
@@ -28,32 +34,5 @@ export async function GET(_request: Request, { params }: { params: Promise<{ off
       { error: { code: 'internal_error', message: 'Authentication is unavailable.' } },
       { status: 500 },
     );
-  }
-}
-
-function setSessionCookies(
-  response: NextResponse,
-  session: { tokens: { accessToken: string; refreshToken?: string; expiresAt: string } },
-) {
-  const secure = process.env.NODE_ENV === 'production';
-  const accessMaxAge = Math.max(
-    0,
-    Math.floor((new Date(session.tokens.expiresAt).getTime() - Date.now()) / 1000),
-  );
-  response.cookies.set(w3dsAccessCookieName, session.tokens.accessToken, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure,
-    path: '/',
-    maxAge: accessMaxAge,
-  });
-  if (session.tokens.refreshToken) {
-    response.cookies.set(w3dsRefreshCookieName, session.tokens.refreshToken, {
-      httpOnly: true,
-      sameSite: 'lax',
-      secure,
-      path: '/',
-      maxAge: 7 * 24 * 60 * 60,
-    });
   }
 }

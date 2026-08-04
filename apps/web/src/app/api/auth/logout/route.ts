@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import {
+  clearW3dsSessionCookies,
   getBearerToken,
   getW3dsAuthService,
   w3dsAccessCookieName,
@@ -18,7 +19,6 @@ export async function POST(request: NextRequest) {
     // Logout remains idempotent; all browser credentials are cleared below.
   }
   const response = new NextResponse(null, { status: 204 });
-  response.cookies.set(w3dsAccessCookieName, '', { httpOnly: true, path: '/', maxAge: 0 });
-  response.cookies.set(w3dsRefreshCookieName, '', { httpOnly: true, path: '/', maxAge: 0 });
+  clearW3dsSessionCookies(response.cookies);
   return response;
 }

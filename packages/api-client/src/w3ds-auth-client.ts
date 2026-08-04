@@ -35,6 +35,11 @@ interface ApiErrorBody {
   error?: { code?: string; message?: string };
 }
 
+interface RequestOptions {
+  /** When false, a 401 does not trigger cookie refresh + retry. */
+  allowRefresh?: boolean;
+}
+
 /**
  * W3DS authentication provider — same-origin HTTP client for Vidak `/api/auth/*`.
  *
@@ -71,13 +76,8 @@ export class W3dsAuthClient implements AuthClient {
   async restoreSession(): Promise<AuthSession | null> {
     try {
       return await this.requestJson<AuthSession>('/api/auth/session');
-    } catch (error) {
-      if (!isInvalidSession(error)) return null;
-      try {
-        return await this.refreshWithCookies();
-      } catch {
-        return null;
-      }
+    } catch {
+      return null;
     }
   }
 
@@ -101,7 +101,7 @@ export class W3dsAuthClient implements AuthClient {
 
   async logout(_refreshToken?: string): Promise<void> {
     try {
-      await this.request('/api/auth/logout', { method: 'POST' });
+      await this.request('/api/auth/logout', { method: 'POST' }, { allowRefresh: false });
     } catch {
       // Local logout still clears client state even if the network call fails.
     }
@@ -136,21 +136,32 @@ export class W3dsAuthClient implements AuthClient {
 
   private refreshWithCookies(): Promise<AuthSession> {
     if (!this.refreshInFlight) {
-      this.refreshInFlight = this.requestJson<AuthSession>('/api/auth/refresh', {
-        method: 'POST',
-      }).finally(() => {
+      this.refreshInFlight = this.requestJson<AuthSession>(
+        '/api/auth/refresh',
+        { method: 'POST' },
+        { allowRefresh: false },
+      ).finally(() => {
         this.refreshInFlight = undefined;
       });
     }
     return this.refreshInFlight;
   }
 
-  private async requestJson<T>(path: string, init?: RequestInit): Promise<T> {
-    const response = await this.request(path, init);
+  private async requestJson<T>(
+    path: string,
+    init?: RequestInit,
+    options?: RequestOptions,
+  ): Promise<T> {
+    const response = await this.request(path, init, options);
     return (await response.json()) as T;
   }
 
-  private async request(path: string, init?: RequestInit): Promise<Response> {
+  private async request(
+    path: string,
+    init?: RequestInit,
+    options: RequestOptions = {},
+  ): Promise<Response> {
+    const allowRefresh = options.allowRefresh ?? true;
     const response = await this.fetchImpl(this.url(path), {
       ...init,
       credentials: 'include',
@@ -162,6 +173,15 @@ export class W3dsAuthClient implements AuthClient {
 
     if (response.ok || response.status === 204) return response;
 
+    if (response.status === 401 && allowRefresh && canAttemptRefresh(path)) {
+      try {
+        await this.refreshWithCookies();
+      } catch {
+        throw new AuthenticationError('Authentication session is invalid.', 'invalid_session');
+      }
+      return this.request(path, init, { allowRefresh: false });
+    }
+
     const body = await readErrorBody(response);
     const code = mapAuthErrorCode(body.error?.code, response.status);
     throw new AuthenticationError(body.error?.message ?? 'Authentication request failed.', code);
@@ -170,6 +190,10 @@ export class W3dsAuthClient implements AuthClient {
   private url(path: string): string {
     return `${this.baseUrl}${path}`;
   }
+}
+
+function canAttemptRefresh(path: string): boolean {
+  return !path.endsWith('/api/auth/refresh') && !path.endsWith('/api/auth/logout');
 }
 
 function trimTrailingSlash(value: string): string {
@@ -182,10 +206,6 @@ function unsupported(message: string): AuthenticationError {
 
 function unavailable(message: string): AuthenticationError {
   return new AuthenticationError(message, 'provider_unavailable');
-}
-
-function isInvalidSession(error: unknown): boolean {
-  return error instanceof AuthenticationError && error.code === 'invalid_session';
 }
 
 async function readErrorBody(response: Response): Promise<ApiErrorBody> {

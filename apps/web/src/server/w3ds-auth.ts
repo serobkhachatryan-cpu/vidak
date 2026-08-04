@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { type AuthSession, type AuthUser, createAuthUser } from '@w3ds/auth';
+import { type AuthSession, type AuthUser, createAuthUser, toBrowserAuthSession } from '@w3ds/auth';
 
 const crypto = globalThis.crypto;
 const encoder = new TextEncoder();
@@ -234,14 +234,18 @@ export class W3dsAuthService {
             error: { code: 'invalid_session', message: 'Authentication session is unavailable.' },
           };
         }
-        return { status: 'completed', session: await this.toAuthSession(session, false) };
+        // Browser JSON must not include JWTs; cookies are set separately.
+        return {
+          status: 'completed',
+          session: toBrowserAuthSession(await this.toAuthSession(session, true)),
+        };
       }
     }
   }
 
   /**
-   * Returns the refresh credential for a same-origin route handler to set as
-   * an HTTP-only cookie. It must never be serialized into an API response.
+   * Returns access + refresh credentials for a same-origin route handler to set
+   * as HTTP-only cookies. It must never be serialized into an API response.
    */
   async getOfferSessionForCookie(offerId: string): Promise<AuthSession> {
     const offer = this.offersById.get(offerId);
@@ -256,9 +260,13 @@ export class W3dsAuthService {
 
   async getSession(accessToken: string): Promise<AuthSession> {
     const platformSession = await this.getActiveSession(accessToken, 'access');
-    return this.toAuthSession(platformSession, false);
+    return toBrowserAuthSession(await this.toAuthSession(platformSession, false));
   }
 
+  /**
+   * Rotates the platform session. The returned credentials are for cookie
+   * setters only — route handlers must strip tokens before JSON serialization.
+   */
   async refreshSession(refreshToken: string): Promise<AuthSession> {
     const platformSession = await this.getActiveSession(refreshToken, 'refresh');
     if (platformSession.refreshExpiresAt <= this.now()) {
@@ -787,4 +795,64 @@ export function getBearerToken(headers: Headers): string | undefined {
   if (!authorization?.startsWith('Bearer ')) return undefined;
   const token = authorization.slice('Bearer '.length).trim();
   return token || undefined;
+}
+
+export interface W3dsCookieOptions {
+  httpOnly: true;
+  sameSite: 'lax';
+  secure: boolean;
+  path: '/';
+  maxAge: number;
+}
+
+/** Cookie attribute defaults for W3DS session credentials. */
+export function w3dsCookieOptions(
+  maxAge: number,
+  secure = process.env.NODE_ENV === 'production',
+): W3dsCookieOptions {
+  return {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure,
+    path: '/',
+    maxAge,
+  };
+}
+
+/**
+ * Applies HttpOnly session cookies from a credential-bearing AuthSession.
+ * Callers must not put `session.tokens` into the JSON body.
+ */
+export function applyW3dsSessionCookies(
+  cookies: {
+    set(name: string, value: string, options: W3dsCookieOptions): void;
+  },
+  session: AuthSession,
+  secure = process.env.NODE_ENV === 'production',
+): void {
+  const accessToken = session.tokens.accessToken;
+  if (!accessToken) {
+    throw new W3dsAuthError('Authentication session is unavailable.', 'invalid_session', 401);
+  }
+  const accessMaxAge = Math.max(
+    0,
+    Math.floor((new Date(session.tokens.expiresAt).getTime() - Date.now()) / 1000),
+  );
+  cookies.set(w3dsAccessCookieName, accessToken, w3dsCookieOptions(accessMaxAge, secure));
+  if (session.tokens.refreshToken) {
+    cookies.set(
+      w3dsRefreshCookieName,
+      session.tokens.refreshToken,
+      w3dsCookieOptions(refreshTokenLifetimeSeconds, secure),
+    );
+  }
+}
+
+/** Clears W3DS session cookies on logout. */
+export function clearW3dsSessionCookies(cookies: {
+  set(name: string, value: string, options: W3dsCookieOptions): void;
+}): void {
+  const secure = process.env.NODE_ENV === 'production';
+  cookies.set(w3dsAccessCookieName, '', w3dsCookieOptions(0, secure));
+  cookies.set(w3dsRefreshCookieName, '', w3dsCookieOptions(0, secure));
 }

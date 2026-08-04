@@ -78,8 +78,13 @@ export interface AuthUser {
 }
 
 export interface AuthTokens {
-  accessToken: string;
-  /** Omitted from JS when HTTP-only cookies are used in production. */
+  /**
+   * Platform access credential.
+   * Present for the development provider and Bearer API clients.
+   * Omitted from browser-facing W3DS cookie sessions (HttpOnly cookie).
+   */
+  accessToken?: string;
+  /** Omitted from JS when HTTP-only cookies are used (W3DS production). */
   refreshToken?: string;
   /** ISO timestamp for access token expiry. */
   expiresAt: string;
