@@ -47,12 +47,12 @@ Implemented:
 
 - Home Feed
 - Responsive UI
+- Watch Page
+- Search
 
 Planned for this release:
 
-- Watch Page
 - Channel Page
-- Search
 
 ### v0.2 — Create
 
@@ -125,9 +125,9 @@ Production-ready decentralized platform.
 | --- | --- | --- | --- |
 | Home Feed | Complete | High | v0.1 |
 | Responsive UI | Complete | High | v0.1 |
-| Watch Page | Planned | High | v0.1 |
+| Watch Page | Complete | High | v0.1 |
 | Channel Page | Planned | High | v0.1 |
-| Search | Planned | High | v0.1 |
+| Search | Complete | High | v0.1 |
 | Authentication | In Progress — mock frontend flow | High | v0.2 |
 | Upload and processing | Planned | High | v0.2 |
 | Creator Studio and video management | Planned | High | v0.2 |
