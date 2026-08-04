@@ -20,7 +20,7 @@ import {
   hasDetailsErrors,
   type UploadDetailsErrors,
   validateDetails,
-  validatePublishDraft,
+  validateSaveDraft,
   validateThumbnailFile,
   validateThumbnailSelection,
   validateVideoFile,
@@ -64,12 +64,14 @@ export interface UploadPageDataProps
 
 export function UploadPageData({
   client,
-  channelId,
+  channelId: _channelId,
   onWatchVideo,
   onWatch,
   onUploadAnother,
   ...pageProps
 }: UploadPageDataProps) {
+  // Channel ownership is resolved by the draft API for W3DS; retained for callers/mock context.
+  void _channelId;
   const [step, setStep] = useState<UploadStepId>('select');
   const [completedSteps, setCompletedSteps] = useState<UploadStepId[]>([]);
   const [file, setFile] = useState<File | undefined>();
@@ -78,7 +80,6 @@ export function UploadPageData({
   const [progress, setProgress] = useState<UploadProgressView | undefined>();
   const [uploadError, setUploadError] = useState<string | undefined>();
   const [uploadId, setUploadId] = useState<string | undefined>();
-  const [durationSeconds, setDurationSeconds] = useState<number | undefined>();
   const [autoThumbnails, setAutoThumbnails] = useState<readonly string[]>([]);
   const [customThumbnailUrl, setCustomThumbnailUrl] = useState<string | undefined>();
   const [draft, setDraft] = useState<UploadDraft>(emptyUploadDraft);
@@ -123,7 +124,6 @@ export function UploadPageData({
     setProgress(undefined);
     setUploadError(undefined);
     setUploadId(undefined);
-    setDurationSeconds(undefined);
     setAutoThumbnails([]);
     setCustomThumbnailUrl(undefined);
     setDraft(emptyUploadDraft());
@@ -160,7 +160,6 @@ export function UploadPageData({
       );
       if (controller.signal.aborted) return;
       setUploadId(result.uploadId);
-      setDurationSeconds(result.durationSeconds);
       setAutoThumbnails(result.autoThumbnails);
       setUploadStatus('complete');
       setProgress((current) =>
@@ -260,7 +259,7 @@ export function UploadPageData({
   };
 
   const onPublish = async () => {
-    const error = validatePublishDraft({
+    const error = validateSaveDraft({
       uploadId,
       title: draft.title,
       description: draft.description,
@@ -278,9 +277,7 @@ export function UploadPageData({
     setIsPublishing(true);
     setPublishError(undefined);
     try {
-      const video = await client.createVideo({
-        channelId,
-        uploadId: uploadId as string,
+      const video = await client.createDraft({
         title: draft.title,
         description: draft.description,
         tags: draft.tags,
@@ -288,8 +285,6 @@ export function UploadPageData({
         language: draft.language as VideoLanguage,
         visibility: draft.visibility as VideoVisibility,
         thumbnailUrl: draft.thumbnailUrl,
-        ...(durationSeconds !== undefined ? { durationSeconds } : {}),
-        status: 'published',
       });
       markCompleted('details');
       markCompleted('thumbnail');
@@ -297,7 +292,7 @@ export function UploadPageData({
       markCompleted('publish');
       setPublishedVideo(video);
     } catch (reason) {
-      setPublishError(reason instanceof Error ? reason.message : 'Could not publish this video.');
+      setPublishError(reason instanceof Error ? reason.message : 'Could not save this draft.');
     } finally {
       setIsPublishing(false);
     }

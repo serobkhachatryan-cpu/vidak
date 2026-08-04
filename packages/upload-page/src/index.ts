@@ -38,6 +38,7 @@ export {
   hasDetailsErrors,
   validateDetails,
   validatePublishDraft,
+  validateSaveDraft,
   validateThumbnailFile,
   validateThumbnailSelection,
   validateVideoFile,

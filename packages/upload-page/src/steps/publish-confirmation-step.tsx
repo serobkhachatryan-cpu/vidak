@@ -12,6 +12,7 @@ export interface PublishConfirmationStepProps {
   fileName?: string;
   isPublishing?: boolean;
   publishError?: string;
+  /** Saved draft or (legacy) published video from the final step. */
   publishedVideo?: Video;
   onPublish?: () => void;
   onWatch?: (video: Video) => void;
@@ -31,16 +32,21 @@ export function PublishConfirmationStep({
   onUploadAnother,
 }: PublishConfirmationStepProps) {
   if (publishedVideo) {
+    const isDraft = publishedVideo.status === 'draft';
     return (
       <EmptyState
         icon="✓"
-        title="Your video is live"
-        description={`${publishedVideo.title} has been published as ${visibilityLabels[publishedVideo.visibility].toLocaleLowerCase()}.`}
+        title={isDraft ? 'Draft saved' : 'Your video is live'}
+        description={
+          isDraft
+            ? `${publishedVideo.title} is saved as a draft. It is not published and is not available on the public feed.`
+            : `${publishedVideo.title} has been published as ${visibilityLabels[publishedVideo.visibility].toLocaleLowerCase()}.`
+        }
         action={
           <div className="flex flex-wrap justify-center gap-2">
-            <Button onClick={() => onWatch?.(publishedVideo)}>Watch video</Button>
+            {!isDraft && <Button onClick={() => onWatch?.(publishedVideo)}>Watch video</Button>}
             {onUploadAnother && (
-              <Button variant="secondary" onClick={onUploadAnother}>
+              <Button variant={isDraft ? 'primary' : 'secondary'} onClick={onUploadAnother}>
                 Upload another
               </Button>
             )}
@@ -53,7 +59,8 @@ export function PublishConfirmationStep({
   return (
     <div className="space-y-5">
       <Text size="sm" tone="muted">
-        Review your upload, then publish when everything looks right.
+        Review your details, then save a draft. Publishing is not available yet — this item will
+        remain a draft and will not appear on the public feed.
       </Text>
       <div className="grid gap-5 lg:grid-cols-[minmax(0,16rem)_minmax(0,1fr)]">
         {thumbnailUrl && (
@@ -71,6 +78,7 @@ export function PublishConfirmationStep({
                 File: {fileName}
               </Text>
             )}
+            <Badge tone="muted">Draft</Badge>
           </div>
           {details.description && (
             <Text size="sm" tone="muted" className="whitespace-pre-wrap">
@@ -98,8 +106,8 @@ export function PublishConfirmationStep({
           {publishError}
         </Text>
       )}
-      <LoadingButton loading={isPublishing} loadingText="Publishing" onClick={onPublish}>
-        Publish video
+      <LoadingButton loading={isPublishing} loadingText="Saving draft" onClick={onPublish}>
+        Save draft
       </LoadingButton>
     </div>
   );

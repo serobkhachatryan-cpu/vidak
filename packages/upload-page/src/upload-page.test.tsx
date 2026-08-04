@@ -91,27 +91,32 @@ describe('UploadPage', () => {
       <UploadPage step="publish" draft={draft} fileName="cache.mp4" />,
     );
     expect(publish).toContain('Caching server state');
-    expect(publish).toContain('Publish video');
+    expect(publish).toContain('Save draft');
+    expect(publish).toContain('Publishing is not available yet');
     expect(publish).toContain('Unlisted');
   });
 
-  it('renders the published success state', () => {
+  it('renders the draft saved success state', () => {
+    const { publishedAt: _publishedAt, ...draftVideoBase } = publishedVideo;
+    void _publishedAt;
+    const draftVideo: Video = { ...draftVideoBase, status: 'draft' };
     const markup = renderToStaticMarkup(
       <UploadPage
         step="publish"
         draft={{
           ...emptyUploadDraft(),
-          title: publishedVideo.title,
+          title: draftVideo.title,
           visibility: 'public',
         }}
-        publishedVideo={publishedVideo}
+        publishedVideo={draftVideo}
         onWatch={() => undefined}
         onUploadAnother={() => undefined}
       />,
     );
-    expect(markup).toContain('Your video is live');
-    expect(markup).toContain('Watch video');
+    expect(markup).toContain('Draft saved');
+    expect(markup).toContain('not published');
     expect(markup).toContain('Upload another');
+    expect(markup).not.toContain('Watch video');
     expect(markup).toContain('aria-label="Publish confirmation"');
     expect(markup).not.toContain('aria-label="Upload steps"');
   });

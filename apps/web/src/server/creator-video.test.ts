@@ -1,0 +1,155 @@
+import { createAuthUser } from '@w3ds/auth';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CreatorVideoService, InMemoryCreatorVideoStore } from './creator-video';
+import { W3dsAuthError } from './w3ds-auth';
+
+const owner = createAuthUser({
+  id: 'user-owner',
+  displayName: 'Owner',
+  roles: ['creator'],
+  eName: '@owner.w3id',
+  eVaultId: 'evault-owner',
+  handle: 'owner',
+});
+
+const other = createAuthUser({
+  id: 'user-other',
+  displayName: 'Other',
+  roles: ['creator'],
+  eName: '@other.w3id',
+  eVaultId: 'evault-other',
+  handle: 'other',
+});
+
+describe('CreatorVideoService', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('provisions a creator channel idempotently for the same owner', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    const service = new CreatorVideoService({
+      store,
+      resolveUser: async () => owner,
+      createId: (() => {
+        let n = 0;
+        return () => `id-${++n}`;
+      })(),
+    });
+
+    const first = await service.ensureCreatorChannel('token');
+    const second = await service.ensureCreatorChannel('token');
+
+    expect(first.id).toBe(second.id);
+    expect(first.ownerId).toBe(owner.id);
+    expect(first.handle).toContain('owner');
+    expect(await store.findChannelByOwnerId(owner.id)).toMatchObject({ id: first.id });
+  });
+
+  it('creates, lists, reads, updates, and deletes owned drafts', async () => {
+    const service = new CreatorVideoService({
+      store: new InMemoryCreatorVideoStore(),
+      resolveUser: async () => owner,
+      createId: (() => {
+        let n = 0;
+        return () => `id-${++n}`;
+      })(),
+    });
+
+    const created = await service.createDraft('token', {
+      title: 'Draft one',
+      description: 'Editable metadata',
+      tags: ['one'],
+      category: 'education',
+      language: 'en',
+      visibility: 'unlisted',
+      thumbnailUrl: 'https://example.com/a.jpg',
+    });
+    expect(created).toMatchObject({
+      title: 'Draft one',
+      status: 'draft',
+      visibility: 'unlisted',
+      category: 'education',
+      language: 'en',
+    });
+    expect(created.publishedAt).toBeUndefined();
+
+    await expect(service.listDrafts('token')).resolves.toEqual([created]);
+    await expect(service.getDraft('token', created.id)).resolves.toMatchObject({
+      id: created.id,
+      title: 'Draft one',
+    });
+
+    const updated = await service.updateDraft('token', created.id, {
+      title: 'Draft one updated',
+      visibility: 'private',
+    });
+    expect(updated).toMatchObject({
+      title: 'Draft one updated',
+      visibility: 'private',
+      status: 'draft',
+    });
+
+    await service.deleteDraft('token', created.id);
+    await expect(service.listDrafts('token')).resolves.toEqual([]);
+    await expect(service.getDraft('token', created.id)).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+  });
+
+  it('rejects anonymous callers with 401', async () => {
+    const service = new CreatorVideoService({
+      store: new InMemoryCreatorVideoStore(),
+      resolveUser: async () => {
+        throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+      },
+    });
+
+    await expect(service.listDrafts('')).rejects.toMatchObject({
+      code: 'invalid_session',
+      status: 401,
+    });
+    await expect(service.createDraft('bad', { title: 'Nope' })).rejects.toMatchObject({
+      code: 'invalid_session',
+      status: 401,
+    });
+  });
+
+  it('returns 404 for cross-user draft access without disclosing ownership', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    let sequence = 0;
+    const createId = () => `id-${++sequence}`;
+    const ownerService = new CreatorVideoService({
+      store,
+      resolveUser: async () => owner,
+      createId,
+    });
+    const otherService = new CreatorVideoService({
+      store,
+      resolveUser: async () => other,
+      createId,
+    });
+
+    const draft = await ownerService.createDraft('owner-token', { title: 'Private draft' });
+
+    await expect(otherService.getDraft('other-token', draft.id)).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+    await expect(
+      otherService.updateDraft('other-token', draft.id, { title: 'Hijack' }),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+    await expect(otherService.deleteDraft('other-token', draft.id)).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+    await expect(otherService.listDrafts('other-token')).resolves.toEqual([]);
+    await expect(ownerService.getDraft('owner-token', draft.id)).resolves.toMatchObject({
+      id: draft.id,
+    });
+  });
+});

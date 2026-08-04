@@ -39,7 +39,9 @@ export {
   supportedAvatarMimeTypes,
 } from './user-settings';
 export type {
+  CreateVideoDraftInput,
   CreateVideoInput,
+  UpdateVideoDraftInput,
   UpdateVideoInput,
   UploadVideoInput,
   UploadVideoOptions,

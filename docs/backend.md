@@ -2,22 +2,21 @@
 
 ## Current state
 
-The first platform backend capability is native W3DS authentication, hosted as
-Next.js route handlers in `apps/web`. There is still no general-purpose API,
-queue worker, storage integration, or video-processing pipeline.
+Platform backend capabilities are hosted as Next.js route handlers in
+`apps/web`. W3DS authentication persists platform users, login offers, and
+sessions in PostgreSQL through Drizzle ORM. Authenticated creators can also
+persist local creator channels and video draft metadata on that store.
 
-W3DS authentication now persists platform users, login offers, and sessions in
-PostgreSQL through Drizzle ORM, and exposes protected account profile and
-session-management routes on that store. Other product domains remain
-mock/client-side.
+There is still no media storage, queue worker, video-processing pipeline,
+eVault sync, ACL layer, or public publish path.
 
 ```mermaid
 flowchart LR
-  Clients["Next.js applications"] --> Auth["apps/web API routes\nW3DS authentication"]
-  Auth --> DB["PostgreSQL\nusers / offers / sessions"]
+  Clients["Next.js applications"] --> Auth["apps/web API routes\nW3DS auth + drafts"]
+  Auth --> DB["PostgreSQL\nusers / sessions / channels / drafts"]
   Auth --> Platform["Registry + eVault\nserver-side verification"]
   Contracts["@w3ds/auth<br/>contracts and browser storage"] -. client-only boundary .-> Platform
-  API["@w3ds/api-client<br/>typed mock clients"] -. client-only boundary .-> Platform
+  API["@w3ds/api-client<br/>mock + W3DS cookie clients"] -. client-only boundary .-> Platform
   SDK["@w3ds/sdk<br/>empty export"] -. reserved boundary .-> Platform
   Player["@w3ds/player<br/>empty export"] -. reserved boundary .-> Platform
 ```
@@ -72,6 +71,62 @@ If W3DS auth is enabled without `DATABASE_URL`, route handlers return a clear
 `configuration_error` (HTTP 503). Development email/password auth does not use
 PostgreSQL and remains unaffected.
 
+## Creator video drafts
+
+Authenticated W3DS users can persist editable video draft metadata owned by a
+local creator channel. Product responses reuse the existing `Video` and
+`Channel` shapes from `@w3ds/types` — there is no parallel protocol-shaped model.
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/videos/drafts` | Create a draft for the authenticated user (auto-provisions their channel). |
+| `GET` | `/api/videos/drafts` | List the authenticated user's own drafts. |
+| `GET` | `/api/videos/drafts/:videoId` | Read one owned draft. |
+| `PATCH` | `/api/videos/drafts/:videoId` | Update owned draft metadata. |
+| `DELETE` | `/api/videos/drafts/:videoId` | Delete one owned draft. |
+
+### Ownership model
+
+1. Every draft route requires a durable W3DS access session (cookie or bearer).
+2. Anonymous requests return `401` (`invalid_session`).
+3. On first draft write, the service idempotently finds or creates one local
+   creator channel for the authenticated platform user (`owner_id` unique).
+4. Drafts are scoped to that owner/channel. Cross-user reads, updates, and
+   deletes return `404` (`not_found`) so resource existence is not disclosed.
+5. Draft rows always use product `status: "draft"`. Publishing is intentionally
+   unavailable in this milestone.
+
+`CreatorVideoService` depends on a `CreatorVideoStore` interface:
+
+- **Production / runtime:** `PostgresCreatorVideoStore` via `DATABASE_URL`
+- **Unit tests only:** `InMemoryCreatorVideoStore` injected explicitly — never
+  used as a production fallback
+
+Session validation reuses the existing W3DS auth helpers (`getBearerToken`,
+access cookie, `W3dsAuthService.getSession`). Route handlers do not duplicate
+cookie/bearer parsing or write ad-hoc SQL.
+
+### Client wiring
+
+- `AUTH_PROVIDER=w3ds` selects `W3dsVideoApiClient`, a same-origin cookie client
+  (`credentials: 'include'`) for draft CRUD. It never reads or stores tokens in
+  the browser.
+- `AUTH_PROVIDER=dev` keeps `MockVideoApiClient` unchanged for development.
+- The upload UI saves editable draft metadata only and labels the result as a
+  draft that is not published.
+
+### Non-goals (explicit)
+
+This milestone does **not** implement:
+
+- File upload, blob/object storage, or `w3ds://file` references
+- Transcoding / processing pipelines
+- eVault writes, ontology mapping, ACLs, or Awareness
+- Marking a draft as published / public feed ingestion
+- Changes to unrelated watch, channel, search, or public feed behavior
+- Changes to the development provider's mock `createVideo` / `publishVideo`
+  semantics
+
 ## Persistence model
 
 Server-only tables (Drizzle schema in `apps/web/src/server/db/schema.ts`):
@@ -81,6 +136,8 @@ Server-only tables (Drizzle schema in `apps/web/src/server/db/schema.ts`):
 | `w3ds_platform_users` | Platform users unique by `e_name`, with eVault metadata and product profile projection. |
 | `w3ds_login_offers` | One-time login offers with expiry, status (`pending` / `verifying` / `completed` / `expired` / `failed`), and failure codes. |
 | `w3ds_platform_sessions` | Platform sessions with user id, access/refresh `jti` identifiers, expiry timestamps, and revocation. |
+| `creator_channels` | Local creator channel per platform user (`owner_id` unique); product `Channel` projection. |
+| `videos` | Creator video drafts (`status = draft`) with title, description, visibility, tags, language/category, and timestamps. |
 
 `W3dsAuthService` depends on a `W3dsAuthStore` interface:
 
@@ -131,9 +188,10 @@ Package scripts:
 2. Set `DATABASE_URL`, `W3DS_REGISTRY_BASE_URL`, and `W3DS_AUTH_JWT_SECRET` in the
    server environment only — never `NEXT_PUBLIC_*` for these values.
 3. Run `pnpm db:migrate` (or the equivalent release job) before or as part of
-   deploying application instances that speak W3DS auth.
-4. Prefer multiple Node instances behind a load balancer; session/offer state is
-   shared through PostgreSQL, so process-local maps must not be reintroduced.
+   deploying application instances that speak W3DS auth / drafts.
+4. Prefer multiple Node instances behind a load balancer; session/offer/draft
+   state is shared through PostgreSQL, so process-local maps must not be
+   reintroduced.
 5. Rotate `W3DS_AUTH_JWT_SECRET` only with a planned invalidation of existing
    sessions (changing the secret invalidates outstanding JWTs).
 6. Keep Registry and eVault base URLs server-side; do not expose them to the
@@ -154,9 +212,6 @@ server runtime:
   on port 3000 with `NODE_ENV=production`, and optionally starts PostgreSQL via
   the `postgres` profile.
 
-Other than W3DS authentication, no custom request handling, API contract, or
-external service connection is defined in the applications.
-
 ## Package boundaries
 
 The monorepo already reserves packages that can host future backend-facing
@@ -165,10 +220,10 @@ concerns:
 | Package | Current implementation |
 | --- | --- |
 | `@w3ds/auth` | Authentication contracts, role helpers, and browser token-storage adapters. |
-| `@w3ds/api-client` | Typed in-memory mock clients, including `MockAuthApiClient`. |
+| `@w3ds/api-client` | Typed mock clients plus W3DS cookie clients for auth and video drafts. |
 | `@w3ds/sdk` | Empty module. |
 | `@w3ds/player` | Empty module. |
-| `@w3ds/types` | Empty module. |
+| `@w3ds/types` | Product domain types including `Video`, `Channel`, and draft inputs. |
 | `@w3ds/utils` | Exports a generic `identity` helper only. |
 | `@w3ds/config` | Exports the `platformName` constant only. |
 
@@ -184,7 +239,8 @@ Backend-oriented infrastructure is limited to the repository tooling:
 - Docker supports production builds for a selected app through the `APP` build
   argument.
 - pnpm workspaces and Turborepo manage dependency ordering and task execution.
-- Drizzle migrations under `apps/web/drizzle/` version the W3DS auth schema.
+- Drizzle migrations under `apps/web/drizzle/` version the W3DS auth and
+  creator-draft schema.
 
 When additional backend domains are introduced, document their API versioning,
 authorization model, persistence strategy, storage lifecycle, observability,

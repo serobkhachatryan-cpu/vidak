@@ -104,3 +104,29 @@ export interface UpdateVideoInput {
   thumbnailUrl?: string;
   status?: VideoStatus;
 }
+
+/**
+ * Editable metadata for a durable creator video draft.
+ * Channel ownership is resolved server-side from the authenticated user.
+ * Media upload / publish fields are intentionally omitted.
+ */
+export interface CreateVideoDraftInput {
+  title: string;
+  description?: string;
+  tags?: readonly string[];
+  category?: VideoCategory;
+  language?: VideoLanguage;
+  visibility?: VideoVisibility;
+  thumbnailUrl?: string;
+}
+
+/** Partial metadata update for an owned video draft. Cannot publish. */
+export interface UpdateVideoDraftInput {
+  title?: string;
+  description?: string;
+  tags?: readonly string[];
+  category?: VideoCategory;
+  language?: VideoLanguage;
+  visibility?: VideoVisibility;
+  thumbnailUrl?: string;
+}

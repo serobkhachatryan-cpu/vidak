@@ -1,5 +1,6 @@
 import type { AuthUserPermissions, Role } from '@w3ds/auth';
-import { boolean, index, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import type { VideoCategory, VideoLanguage, VideoStatus, VideoVisibility } from '@w3ds/types';
+import { boolean, index, integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
 
 /**
  * Durable W3DS platform identity. One row per global eName.
@@ -20,6 +21,67 @@ export const w3dsPlatformUsers = pgTable('w3ds_platform_users', {
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
 });
+
+/**
+ * Local creator channel owned by a platform user.
+ * One channel per owner for this milestone; product `Channel` projection.
+ */
+export const creatorChannels = pgTable(
+  'creator_channels',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => w3dsPlatformUsers.id)
+      .unique(),
+    handle: text('handle').notNull().unique(),
+    name: text('name').notNull(),
+    description: text('description'),
+    avatarUrl: text('avatar_url'),
+    bannerUrl: text('banner_url'),
+    subscriberCount: integer('subscriber_count').notNull().default(0),
+    videoCount: integer('video_count').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('creator_channels_owner_id_idx').on(table.ownerId)],
+);
+
+/**
+ * Creator video drafts. Product `Video` rows with draft lifecycle only —
+ * no media blobs, eVault sync, or published catalog in this milestone.
+ */
+export const videos = pgTable(
+  'videos',
+  {
+    id: text('id').primaryKey(),
+    channelId: text('channel_id')
+      .notNull()
+      .references(() => creatorChannels.id),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => w3dsPlatformUsers.id),
+    title: text('title').notNull(),
+    description: text('description').notNull().default(''),
+    thumbnailUrl: text('thumbnail_url').notNull().default(''),
+    durationSeconds: integer('duration_seconds').notNull().default(0),
+    status: text('status').$type<VideoStatus>().notNull(),
+    visibility: text('visibility').$type<VideoVisibility>().notNull(),
+    category: text('category').$type<VideoCategory>(),
+    language: text('language').$type<VideoLanguage>(),
+    tags: jsonb('tags').$type<string[]>().notNull(),
+    viewCount: integer('view_count').notNull().default(0),
+    likeCount: integer('like_count').notNull().default(0),
+    commentCount: integer('comment_count').notNull().default(0),
+    publishedAt: timestamp('published_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    index('videos_owner_id_status_idx').on(table.ownerId, table.status),
+    index('videos_channel_id_idx').on(table.channelId),
+  ],
+);
 
 /**
  * One-time login offers for w3ds://auth.
@@ -72,3 +134,5 @@ export const w3dsPlatformSessions = pgTable(
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
 export type W3dsPlatformSessionRow = typeof w3dsPlatformSessions.$inferSelect;
+export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
+export type VideoRow = typeof videos.$inferSelect;

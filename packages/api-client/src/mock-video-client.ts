@@ -8,6 +8,7 @@ import type {
   ConnectedAccount,
   ConnectedAccountProvider,
   CreateCommentInput,
+  CreateVideoDraftInput,
   CreateVideoInput,
   CursorPage,
   PaginationParams,
@@ -16,6 +17,7 @@ import type {
   SearchFilters,
   UpdateProfileInput,
   UpdateUserPreferencesInput,
+  UpdateVideoDraftInput,
   UpdateVideoInput,
   UploadAvatarInput,
   UploadVideoInput,
@@ -457,6 +459,85 @@ export class MockVideoApiClient implements VideoApiClient {
     };
     this.videos = this.videos.map((item) => (item.id === id ? next : item));
     return next;
+  }
+
+  async createDraft(input: CreateVideoDraftInput): Promise<Video> {
+    await this.wait();
+    const channelId = this.channels[0]?.id;
+    if (!channelId) throw new Error('No channel is available for drafts');
+    const now = new Date().toISOString();
+    const video: Video = {
+      id: `video-draft-${this.videos.length + 1}`,
+      channelId,
+      title: input.title.trim(),
+      description: (input.description ?? '').trim(),
+      thumbnailUrl: input.thumbnailUrl?.trim() ?? '',
+      durationSeconds: 0,
+      status: 'draft',
+      visibility: input.visibility ?? 'private',
+      ...(input.category ? { category: input.category } : {}),
+      ...(input.language ? { language: input.language } : {}),
+      createdAt: now,
+      updatedAt: now,
+      viewCount: 0,
+      likeCount: 0,
+      commentCount: 0,
+      tags: (input.tags ?? []).map((tag) => tag.trim()).filter(Boolean),
+    };
+    this.videos = [video, ...this.videos];
+    this.channels = this.channels.map((channel) =>
+      channel.id === channelId ? { ...channel, videoCount: channel.videoCount + 1 } : channel,
+    );
+    return video;
+  }
+
+  async listDrafts(): Promise<readonly Video[]> {
+    await this.wait();
+    return this.videos
+      .filter((video) => video.status === 'draft')
+      .slice()
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
+  async getDraft(id: VideoId): Promise<Video> {
+    await this.wait();
+    const video = this.videos.find((item) => item.id === id && item.status === 'draft');
+    if (!video) throw new Error(`Draft ${id} was not found`);
+    return video;
+  }
+
+  async updateDraft(id: VideoId, input: UpdateVideoDraftInput): Promise<Video> {
+    await this.wait();
+    const video = this.videos.find((item) => item.id === id && item.status === 'draft');
+    if (!video) throw new Error(`Draft ${id} was not found`);
+    const next: Video = {
+      ...video,
+      ...(input.title !== undefined ? { title: input.title.trim() } : {}),
+      ...(input.description !== undefined ? { description: input.description.trim() } : {}),
+      ...(input.tags !== undefined
+        ? { tags: input.tags.map((tag) => tag.trim()).filter(Boolean) }
+        : {}),
+      ...(input.category !== undefined ? { category: input.category } : {}),
+      ...(input.language !== undefined ? { language: input.language } : {}),
+      ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+      ...(input.thumbnailUrl !== undefined ? { thumbnailUrl: input.thumbnailUrl } : {}),
+      status: 'draft',
+      updatedAt: new Date().toISOString(),
+    };
+    this.videos = this.videos.map((item) => (item.id === id ? next : item));
+    return next;
+  }
+
+  async deleteDraft(id: VideoId): Promise<void> {
+    await this.wait();
+    const video = this.videos.find((item) => item.id === id && item.status === 'draft');
+    if (!video) throw new Error(`Draft ${id} was not found`);
+    this.videos = this.videos.filter((item) => item.id !== id);
+    this.channels = this.channels.map((channel) =>
+      channel.id === video.channelId
+        ? { ...channel, videoCount: Math.max(0, channel.videoCount - 1) }
+        : channel,
+    );
   }
 
   private filterVideos(filters: VideoListFilters): readonly Video[] {

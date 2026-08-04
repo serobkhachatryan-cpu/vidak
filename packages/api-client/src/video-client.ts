@@ -8,6 +8,7 @@ import type {
   ConnectedAccount,
   ConnectedAccountProvider,
   CreateCommentInput,
+  CreateVideoDraftInput,
   CreateVideoInput,
   CursorPage,
   PaginationParams,
@@ -16,6 +17,7 @@ import type {
   SearchFilters,
   UpdateProfileInput,
   UpdateUserPreferencesInput,
+  UpdateVideoDraftInput,
   UpdateVideoInput,
   UploadAvatarInput,
   UploadVideoInput,
@@ -70,4 +72,10 @@ export interface VideoApiClient {
   createVideo(input: CreateVideoInput): Promise<Video>;
   updateVideo(id: VideoId, input: UpdateVideoInput): Promise<Video>;
   publishVideo(id: VideoId): Promise<Video>;
+  /** Persist editable draft metadata for the authenticated creator. */
+  createDraft(input: CreateVideoDraftInput): Promise<Video>;
+  listDrafts(): Promise<readonly Video[]>;
+  getDraft(id: VideoId): Promise<Video>;
+  updateDraft(id: VideoId, input: UpdateVideoDraftInput): Promise<Video>;
+  deleteDraft(id: VideoId): Promise<void>;
 }

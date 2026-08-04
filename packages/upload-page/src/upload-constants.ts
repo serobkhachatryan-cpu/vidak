@@ -18,7 +18,7 @@ export const uploadStepLabels: Record<UploadStepId, string> = {
   details: 'Details',
   thumbnail: 'Thumbnail',
   visibility: 'Visibility',
-  publish: 'Publish',
+  publish: 'Save draft',
 };
 
 export function previousUploadStep(step: UploadStepId): UploadStepId | undefined {

@@ -12,6 +12,7 @@ import {
   hasDetailsErrors,
   validateDetails,
   validatePublishDraft,
+  validateSaveDraft,
   validateThumbnailFile,
   validateThumbnailSelection,
   validateVideoFile,
@@ -145,6 +146,22 @@ describe('upload validation', () => {
     expect(validatePublishDraft({ ...ready, title: '' })).toMatch(/required fields/i);
     expect(validatePublishDraft({ ...ready, thumbnailUrl: '' })).toMatch(/required fields/i);
     expect(validatePublishDraft({ ...ready, visibility: '' })).toMatch(/required fields/i);
+  });
+
+  it('gates draft saves on metadata without requiring a durable upload id', () => {
+    const ready = {
+      title: 'Design systems',
+      description: 'A practical tour',
+      tags: ['design'],
+      category: 'education' as const,
+      language: 'en' as const,
+      thumbnailUrl: 'https://example.com/a.jpg',
+      visibility: 'public' as const,
+    };
+    expect(validateSaveDraft(ready)).toBeUndefined();
+    expect(validateSaveDraft({ ...ready, uploadId: undefined })).toBeUndefined();
+    expect(validateSaveDraft({ ...ready, title: '' })).toMatch(/saving this draft/i);
+    expect(validateSaveDraft({ ...ready, thumbnailUrl: '' })).toMatch(/saving this draft/i);
   });
 });
 

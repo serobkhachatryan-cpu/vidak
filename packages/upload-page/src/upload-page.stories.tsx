@@ -20,18 +20,17 @@ const draft = {
   thumbnailUrl: autoThumbnails[0],
 };
 
-const publishedVideo: Video = {
+const savedDraft: Video = {
   id: 'video-design-system',
   channelId: 'channel-studio',
   title: draft.title,
   description: draft.description,
   thumbnailUrl: draft.thumbnailUrl,
-  durationSeconds: 742,
-  status: 'published',
+  durationSeconds: 0,
+  status: 'draft',
   visibility: 'public',
   category: 'education',
   language: 'en',
-  publishedAt: '2026-08-04T10:00:00.000Z',
   createdAt: '2026-08-04T09:30:00.000Z',
   updatedAt: '2026-08-04T10:00:00.000Z',
   viewCount: 0,
@@ -147,7 +146,7 @@ export const Visibility: Story = {
   },
 };
 
-export const PublishReview: Story = {
+export const DraftReview: Story = {
   args: {
     step: 'publish',
     fileName: 'design-system.mp4',
@@ -157,13 +156,12 @@ export const PublishReview: Story = {
   },
 };
 
-export const PublishedSuccess: Story = {
+export const DraftSaved: Story = {
   args: {
     step: 'publish',
     draft,
-    publishedVideo,
+    publishedVideo: savedDraft,
     completedSteps: ['select', 'progress', 'details', 'thumbnail', 'visibility', 'publish'],
-    onWatch: () => undefined,
     onUploadAnother: () => undefined,
   },
 };

@@ -103,6 +103,50 @@ describe('MockVideoApiClient', () => {
     await expect(uploadPromise).rejects.toMatchObject({ name: 'AbortError' });
   });
 
+  it('creates and manages draft videos without changing createVideo publish behavior', async () => {
+    const draftClient = new MockVideoApiClient({ delayMs: 0 });
+    const draft = await draftClient.createDraft({
+      title: 'Untitled draft',
+      description: 'Metadata only',
+      tags: ['draft'],
+      category: 'education',
+      language: 'en',
+      visibility: 'private',
+    });
+    expect(draft.status).toBe('draft');
+    expect(draft.publishedAt).toBeUndefined();
+
+    const listed = await draftClient.listDrafts();
+    expect(listed.some((item) => item.id === draft.id)).toBe(true);
+
+    const updated = await draftClient.updateDraft(draft.id, { title: 'Named draft' });
+    expect(updated.title).toBe('Named draft');
+    expect(updated.status).toBe('draft');
+
+    await draftClient.deleteDraft(draft.id);
+    await expect(draftClient.getDraft(draft.id)).rejects.toThrow(/was not found/i);
+
+    const upload = await draftClient.uploadVideo({
+      name: 'clip.mp4',
+      size: 1_024,
+      type: 'video/mp4',
+    });
+    const published = await draftClient.createVideo({
+      channelId: 'channel-studio',
+      uploadId: upload.uploadId,
+      title: 'Still publishable',
+      description: 'Mock createVideo unchanged',
+      tags: [],
+      category: 'education',
+      language: 'en',
+      visibility: 'public',
+      thumbnailUrl: 'https://example.com/a.jpg',
+      status: 'published',
+    });
+    expect(published.status).toBe('published');
+    expect(published.publishedAt).toBeTruthy();
+  });
+
   it('updates profile preferences and connected accounts', async () => {
     const profile = await client.updateUserProfile('user-demo', {
       displayName: 'Demo Creator',

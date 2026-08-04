@@ -114,3 +114,14 @@ export function validatePublishDraft(input: PublishDraftInput): string | undefin
   }
   return undefined;
 }
+
+/** Final gate before saving editable draft metadata (not publishing). */
+export function validateSaveDraft(input: PublishDraftInput): string | undefined {
+  if (hasDetailsErrors(validateDetails(input))) {
+    return 'Complete all required fields before saving this draft.';
+  }
+  if (validateThumbnailSelection(input) || validateVisibility(input)) {
+    return 'Complete all required fields before saving this draft.';
+  }
+  return undefined;
+}
