@@ -12,8 +12,21 @@ const nextConfig: NextConfig = {
   allowedDevOrigins: ['127.0.0.1'],
   serverExternalPackages: ['pg', 'drizzle-orm'],
   env: {
-    // Expose AUTH_PROVIDER to the client bundle as NEXT_PUBLIC_AUTH_PROVIDER.
+    // Expose only the provider id to the client bundle — never secrets or origins.
     [authProviderEnvVars.public]: authProvider,
+  },
+  // No Access-Control-Allow-* headers: same-origin cookie clients only.
+  // Credentialed cross-origin browser access is intentionally unsupported.
+  async headers() {
+    return [
+      {
+        source: '/api/:path*',
+        headers: [
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'same-origin' },
+        ],
+      },
+    ];
   },
   transpilePackages: [
     '@w3ds/api-client',

@@ -55,6 +55,7 @@ describe('protected media transfer routes', () => {
             'Content-Type': 'video/mp4',
             'Content-Length': '3',
             'X-Original-Filename': 'anon.mp4',
+            Origin: 'https://vidak.example',
           },
         }),
         { params: Promise.resolve({ videoId: 'draft-1' }) },
@@ -78,6 +79,7 @@ describe('protected media transfer routes', () => {
       deleteAsset(
         new NextRequest('https://vidak.example/api/videos/drafts/draft-1/media/a1', {
           method: 'DELETE',
+          headers: { Origin: 'https://vidak.example' },
         }),
         { params: Promise.resolve({ videoId: 'draft-1', assetId: 'a1' }) },
       ),
@@ -98,6 +100,7 @@ describe('protected media transfer routes', () => {
           'Content-Length': String(payload.byteLength),
           'X-Original-Filename': 'clip.mp4',
           Cookie: `${w3dsAccessCookieName}=${ctx.ownerToken}`,
+          Origin: 'https://vidak.example',
         },
       }),
       { params: Promise.resolve({ videoId: ctx.draftId }) },

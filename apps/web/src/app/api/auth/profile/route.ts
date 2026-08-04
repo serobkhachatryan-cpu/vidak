@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
+import { assertTrustedMutationOrigin } from '../../../../server/request-security';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -10,6 +11,7 @@ export const runtime = 'nodejs';
 
 export async function PATCH(request: NextRequest) {
   try {
+    assertTrustedMutationOrigin(request);
     const accessToken =
       getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
     if (!accessToken) {

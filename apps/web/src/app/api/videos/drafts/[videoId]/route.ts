@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { CreatorVideoError, getCreatorVideoService } from '../../../../../server/creator-video';
+import { assertTrustedMutationOrigin } from '../../../../../server/request-security';
 import {
   getBearerToken,
   W3dsAuthError,
@@ -43,6 +44,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
 
 export async function PATCH(request: NextRequest, context: RouteContext) {
   try {
+    assertTrustedMutationOrigin(request);
     const accessToken = accessTokenFrom(request);
     if (!accessToken) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
@@ -71,6 +73,7 @@ export async function PATCH(request: NextRequest, context: RouteContext) {
 
 export async function DELETE(request: NextRequest, context: RouteContext) {
   try {
+    assertTrustedMutationOrigin(request);
     const accessToken = accessTokenFrom(request);
     if (!accessToken) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);

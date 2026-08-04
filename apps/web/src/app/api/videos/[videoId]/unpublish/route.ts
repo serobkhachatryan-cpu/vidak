@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { CreatorVideoError, getCreatorVideoService } from '../../../../../server/creator-video';
+import { assertTrustedMutationOrigin } from '../../../../../server/request-security';
 import {
   getBearerToken,
   W3dsAuthError,
@@ -33,6 +34,7 @@ function errorResponse(error: unknown): NextResponse {
  */
 export async function POST(request: NextRequest, context: RouteContext) {
   try {
+    assertTrustedMutationOrigin(request);
     const accessToken = accessTokenFrom(request);
     if (!accessToken) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);

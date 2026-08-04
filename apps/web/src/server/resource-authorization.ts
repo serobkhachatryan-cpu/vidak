@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { type AuthProviderId, type AuthUser, resolveAuthProviderId } from '@w3ds/auth';
 import type { VideoStatus, VideoVisibility } from '@w3ds/types';
 import { ResourceAuthorizationError } from './resource-authorization-errors';
+import { isW3dsAuthConfigured } from './server-config';
 import { resolveW3dsAuthorizationOfficialClient } from './w3ds-authorization-official-client';
 
 export type { ResourceAuthorizationErrorCode } from './resource-authorization-errors';
@@ -575,10 +576,8 @@ function resolveAuthorizationProviderId(
 }
 
 function isW3dsAuthorizationConfigured(env: Record<string, string | undefined>): boolean {
-  const registryBaseUrl = env.W3DS_REGISTRY_BASE_URL?.trim();
-  const jwtSecret = env.W3DS_AUTH_JWT_SECRET;
-  const databaseUrl = env.DATABASE_URL?.trim();
-  return Boolean(registryBaseUrl && jwtSecret && jwtSecret.length >= 32 && databaseUrl);
+  // Shared gate with auth/server-config — registry, JWT secret, and DATABASE_URL.
+  return isW3dsAuthConfigured(env);
 }
 
 function normalizeOwner(owner: ResourceOwner): ResourceOwner {

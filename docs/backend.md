@@ -54,11 +54,11 @@ one-time session ID. The browser never contacts those protocol services or
 receives their certificates or public-key material.
 
 The platform issues signed access and refresh JWTs. Both are set as `HttpOnly`,
-`SameSite=Lax` cookies; the access credential has a 15-minute lifetime and the
-refresh credential rotates with a seven-day lifetime. `Authorization: Bearer`
-access tokens are accepted for server-to-server/API clients. Raw JWTs are never
-stored in the database — only session rows and token identifiers (`jti`) used
-for validation and rotation.
+`SameSite=Lax`, `Path=/` cookies; in production they also set `Secure`. The access
+credential has a 15-minute lifetime and the refresh credential rotates with a
+seven-day lifetime. `Authorization: Bearer` access tokens are accepted for
+server-to-server/API clients. Raw JWTs are never stored in the database — only
+session rows and token identifiers (`jti`) used for validation and rotation.
 
 Protected account routes require a valid cookie or bearer access session. Profile
 updates accept only local product fields (`displayName`, optional `avatarUrl`) and
@@ -68,20 +68,35 @@ caller's own sessions and rejects attempts to revoke the current session with th
 typed `invalid_session` error. Email, password, and account-deletion mutations are
 not exposed in W3DS mode.
 
+Cookie-authenticated state-changing requests (profile, session revoke, refresh,
+logout, drafts, media upload/delete, publish/unpublish) require a trusted browser
+`Origin` or `Referer` matching the request origin, `APP_ORIGIN`, or
+`TRUSTED_ORIGINS`. Bearer-authenticated API clients skip that browser-origin
+check. The wallet callback (`POST /api/auth/callback`) is intentionally excluded
+so protocol completion is not bound to the SPA origin. Public read routes are
+unaffected. API responses do not emit credentialed CORS headers
+(`Access-Control-Allow-Origin` / `Access-Control-Allow-Credentials`).
+
 Configure the flow with the root `.env.example` values:
 
+- `AUTH_PROVIDER` (`dev` or `w3ds`) — required explicitly in production; development may omit and default to `dev`
+- `APP_ORIGIN` (required in production when `AUTH_PROVIDER=w3ds`)
+- `TRUSTED_ORIGINS` (optional comma-separated extra browser origins)
 - `DATABASE_URL` (required for W3DS mode; unused by `AUTH_PROVIDER=dev`)
 - `W3DS_REGISTRY_BASE_URL`
-- `W3DS_AUTH_JWT_SECRET` (32+ secret characters)
+- `W3DS_AUTH_JWT_SECRET` (32+ secret characters; server-only — never `NEXT_PUBLIC_*`)
 - `W3DS_AUTH_PLATFORM_NAME` (optional; defaults to `vidak`)
 - `W3DS_AUTH_MIN_WALLET_VERSION` (optional temporary compatibility gate)
 - `MEDIA_STORAGE_ROOT` (optional; local-disk MediaStorage root, defaults to `.data/media`)
 - `MEDIA_MAX_UPLOAD_BYTES` (optional; raw upload body limit, defaults to `104857600` / 100 MiB)
 - `MEDIA_ALLOWED_CONTENT_TYPES` (optional; comma-separated MIME allowlist, defaults to `video/mp4,video/webm,video/quicktime`)
 
-If W3DS auth is enabled without `DATABASE_URL`, route handlers return a clear
-`configuration_error` (HTTP 503). Development email/password auth does not use
-PostgreSQL and remains unaffected.
+Server startup (`apps/web/src/instrumentation.ts`) validates this configuration
+through `loadServerSecurityConfig()`. Incomplete W3DS settings fail closed with
+`ServerConfigError` / route `configuration_error` (HTTP 503) rather than falling
+back to development authentication. Development email/password auth does not use
+PostgreSQL and remains unaffected when `AUTH_PROVIDER=dev` is explicit or used
+in non-production defaults.
 
 ## Creator video drafts
 
@@ -508,19 +523,30 @@ Package scripts:
 ## Production operational requirements
 
 1. Provision a shared PostgreSQL database reachable by every W3DS app instance.
-2. Set `DATABASE_URL`, `W3DS_REGISTRY_BASE_URL`, and `W3DS_AUTH_JWT_SECRET` in the
-   server environment only — never `NEXT_PUBLIC_*` for these values.
-3. Run `pnpm db:migrate` (or the equivalent release job) before or as part of
+2. Set `AUTH_PROVIDER` explicitly (`w3ds` for production W3DS auth, or `dev` only
+   when intentionally running the development provider). Silent omission is
+   rejected at Node server startup.
+3. For `AUTH_PROVIDER=w3ds`, set `DATABASE_URL`, `W3DS_REGISTRY_BASE_URL`,
+   `W3DS_AUTH_JWT_SECRET` (≥ 32 characters), and `APP_ORIGIN` in the **server**
+   environment only — never `NEXT_PUBLIC_*` for secrets, database URLs, registry
+   URLs, or JWT material. Optional `TRUSTED_ORIGINS` may list additional browser
+   origins allowed for cookie-authenticated mutations.
+4. Run `pnpm db:migrate` (or the equivalent release job) before or as part of
    deploying application instances that speak W3DS auth / drafts / media assets.
-4. Prefer multiple Node instances behind a load balancer; session/offer/draft
+5. Prefer multiple Node instances behind a load balancer; session/offer/draft
    and media-asset metadata is shared through PostgreSQL, so process-local maps
    must not be reintroduced. Local-disk MediaStorage is for development only.
-5. Rotate `W3DS_AUTH_JWT_SECRET` only with a planned invalidation of existing
+6. Rotate `W3DS_AUTH_JWT_SECRET` only with a planned invalidation of existing
    sessions (changing the secret invalidates outstanding JWTs).
-6. Keep Registry and eVault base URLs server-side; do not expose them to the
-   browser bundle.
-7. Monitor auth configuration failures (`configuration_error` / 503) separately
-   from client credential failures (`invalid_session` / 401).
+7. Keep Registry and eVault base URLs server-side; do not expose them to the
+   browser bundle. The client bundle may receive only `NEXT_PUBLIC_AUTH_PROVIDER`
+   (provider id), never server secrets.
+8. Expect session cookies with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`.
+   Same-origin SPA clients must send cookies via `credentials: 'include'` and a
+   matching `Origin`. Do not enable credentialed cross-origin CORS.
+9. Monitor auth configuration failures (`configuration_error` / 503) and mutation
+   origin rejections (`untrusted_origin` / 403) separately from client credential
+   failures (`invalid_session` / 401).
 
 ## Resource authorization and durable W3DS sync
 
@@ -582,7 +608,7 @@ concerns:
 | `@w3ds/player` | Empty module. |
 | `@w3ds/types` | Product domain types including `Video`, `Channel`, and draft inputs. |
 | `@w3ds/utils` | Exports a generic `identity` helper only. |
-| `@w3ds/config` | Exports the `platformName` constant only. |
+| `@w3ds/config` | Platform name plus auth-provider env var names / default. |
 
 These boundaries should be treated as ownership locations, not public APIs or
 service contracts.

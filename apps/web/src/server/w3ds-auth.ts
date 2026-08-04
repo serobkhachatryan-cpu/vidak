@@ -8,6 +8,11 @@ import {
 } from '@w3ds/auth';
 import type { AuthDeviceSession } from '@w3ds/types';
 import { getW3dsDatabase } from './db/client';
+import {
+  readRequiredW3dsServerConfig,
+  resolveCookieSecurityConfig,
+  resolveServerNodeEnv,
+} from './server-config';
 import { W3dsAuthError } from './w3ds-auth-errors';
 import {
   PostgresW3dsAuthStore,
@@ -893,29 +898,24 @@ export function resetW3dsAuthServiceForTests(): void {
   service = undefined;
 }
 
-export function readW3dsAuthConfig(): W3dsAuthConfig {
-  const platformName = process.env.W3DS_AUTH_PLATFORM_NAME?.trim() || 'vidak';
-  const registryBaseUrl = process.env.W3DS_REGISTRY_BASE_URL?.trim();
-  const jwtSecret = process.env.W3DS_AUTH_JWT_SECRET;
-  const databaseUrl = process.env.DATABASE_URL?.trim();
-  if (!registryBaseUrl || !jwtSecret || jwtSecret.length < 32) {
-    throw new W3dsAuthError('W3DS authentication is not configured.', 'configuration_error', 503);
-  }
-  if (!databaseUrl) {
+export function readW3dsAuthConfig(
+  env: Record<string, string | undefined> = process.env,
+): W3dsAuthConfig {
+  try {
+    const config = readRequiredW3dsServerConfig(env);
+    return {
+      platformName: config.platformName,
+      registryBaseUrl: config.registryBaseUrl,
+      jwtSecret: config.jwtSecret,
+      ...(config.minimumWalletVersion ? { minimumWalletVersion: config.minimumWalletVersion } : {}),
+    };
+  } catch (error) {
     throw new W3dsAuthError(
-      'W3DS authentication requires DATABASE_URL for durable session persistence.',
+      error instanceof Error ? error.message : 'W3DS authentication is not configured.',
       'configuration_error',
       503,
     );
   }
-  return {
-    platformName,
-    registryBaseUrl,
-    jwtSecret,
-    ...(process.env.W3DS_AUTH_MIN_WALLET_VERSION
-      ? { minimumWalletVersion: process.env.W3DS_AUTH_MIN_WALLET_VERSION }
-      : {}),
-  };
 }
 
 export function getBearerToken(headers: Headers): string | undefined {
@@ -936,13 +936,14 @@ export interface W3dsCookieOptions {
 /** Cookie attribute defaults for W3DS session credentials. */
 export function w3dsCookieOptions(
   maxAge: number,
-  secure = process.env.NODE_ENV === 'production',
+  secure = resolveCookieSecurityConfig(resolveServerNodeEnv()).secure,
 ): W3dsCookieOptions {
+  const base = resolveCookieSecurityConfig(resolveServerNodeEnv());
   return {
-    httpOnly: true,
-    sameSite: 'lax',
+    httpOnly: base.httpOnly,
+    sameSite: base.sameSite,
     secure,
-    path: '/',
+    path: base.path,
     maxAge,
   };
 }
@@ -956,7 +957,7 @@ export function applyW3dsSessionCookies(
     set(name: string, value: string, options: W3dsCookieOptions): void;
   },
   session: AuthSession,
-  secure = process.env.NODE_ENV === 'production',
+  secure = resolveCookieSecurityConfig(resolveServerNodeEnv()).secure,
 ): void {
   const accessToken = session.tokens.accessToken;
   if (!accessToken) {
@@ -980,7 +981,7 @@ export function applyW3dsSessionCookies(
 export function clearW3dsSessionCookies(cookies: {
   set(name: string, value: string, options: W3dsCookieOptions): void;
 }): void {
-  const secure = process.env.NODE_ENV === 'production';
+  const secure = resolveCookieSecurityConfig(resolveServerNodeEnv()).secure;
   cookies.set(w3dsAccessCookieName, '', w3dsCookieOptions(0, secure));
   cookies.set(w3dsRefreshCookieName, '', w3dsCookieOptions(0, secure));
 }

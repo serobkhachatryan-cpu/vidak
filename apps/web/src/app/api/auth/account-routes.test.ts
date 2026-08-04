@@ -28,7 +28,10 @@ describe('W3DS account API routes', () => {
     const anonymous = new NextRequest('https://vidak.example/api/auth/profile', {
       method: 'PATCH',
       body: JSON.stringify({ displayName: 'Anon' }),
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://vidak.example',
+      },
     });
 
     await expect(updateProfile(anonymous)).resolves.toMatchObject({ status: 401 });
@@ -36,9 +39,15 @@ describe('W3DS account API routes', () => {
       listSessions(new NextRequest('https://vidak.example/api/auth/sessions')),
     ).resolves.toMatchObject({ status: 401 });
     await expect(
-      deleteSession(new NextRequest('https://vidak.example/api/auth/sessions/session-1'), {
-        params: Promise.resolve({ sessionId: 'session-1' }),
-      }),
+      deleteSession(
+        new NextRequest('https://vidak.example/api/auth/sessions/session-1', {
+          method: 'DELETE',
+          headers: { Origin: 'https://vidak.example' },
+        }),
+        {
+          params: Promise.resolve({ sessionId: 'session-1' }),
+        },
+      ),
     ).resolves.toMatchObject({ status: 401 });
   });
 

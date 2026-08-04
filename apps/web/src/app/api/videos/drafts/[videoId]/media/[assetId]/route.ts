@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { getMediaAssetService, MediaAssetError } from '../../../../../../../server/media-asset';
+import { assertTrustedMutationOrigin } from '../../../../../../../server/request-security';
 import {
   getBearerToken,
   W3dsAuthError,
@@ -45,6 +46,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
 /** DELETE /api/videos/drafts/:videoId/media/:assetId — row + private blob. */
 export async function DELETE(request: NextRequest, context: RouteContext) {
   try {
+    assertTrustedMutationOrigin(request);
     const accessToken = accessTokenFrom(request);
     if (!accessToken) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);

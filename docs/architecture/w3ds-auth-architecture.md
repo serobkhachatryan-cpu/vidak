@@ -745,27 +745,28 @@ Treat `MockAuthApiClient` as the official **development provider**.
 
 ### 9.2 Platform session security
 
-1. Sign JWTs with a server secret / private key never shipped to the frontend.
-2. Prefer **HTTP-only, Secure, SameSite** cookies in production.
+1. Sign JWTs with a server secret / private key never shipped to the frontend (`W3DS_AUTH_JWT_SECRET`, never `NEXT_PUBLIC_*`).
+2. Production session cookies use **HttpOnly**, **Secure**, **SameSite=Lax**, **Path=/** (`apps/web` `w3dsCookieOptions` / `server-config`).
 3. Short access-token TTL; longer refresh TTL with rotation and reuse detection.
 4. Revoke refresh tokens on logout and on remote session revoke.
 5. Bind sessions to device metadata for settings “active sessions” without exposing raw refresh tokens to the UI.
 
 ### 9.3 Boundary security
 
-1. Browser allowlist: only the Vidak platform origin.
+1. Browser allowlist: `APP_ORIGIN` plus optional `TRUSTED_ORIGINS` (and the request’s own origin). Cookie-authenticated mutations call `assertTrustedMutationOrigin`.
 2. Registry / eVault / Ontology credentials and base URLs are server env vars only.
-3. CORS does not need to allow wallet→SPA; wallet posts to backend callback.
+3. CORS must not enable credentialed cross-origin browser access; wallet posts to the backend callback without SPA CORS.
 4. Offer status endpoints must use unguessable `offerId`s and expire with the offer.
-5. Never return eVault admin tokens, platform private keys, or JWKS private material to the client.
+5. Never return eVault admin tokens, platform private keys, JWT secrets, or JWKS private material to the client.
+6. Production requires explicit `AUTH_PROVIDER`; incomplete W3DS config fails at startup / with `configuration_error` rather than falling back to `dev`.
 
 ### 9.4 Application security
 
-1. Preserve logout cache clearing to avoid cross-account data bleed.
+1. Preserve logout cache clearing to avoid cross-account data bleed. Logout/refresh still require a trusted origin for cookie callers so cross-site requests cannot clear or rotate sessions.
 2. `returnTo` remains same-origin path only (`getSafeReturnTo`).
 3. Capability checks on mutations (upload/publish/moderate) are enforced server-side; UI permissions are advisory.
-4. Dev auth endpoints disabled in production builds/config.
-5. Rate-limit offer creation and callback verification.
+4. Dev auth is available only when `AUTH_PROVIDER=dev` is explicit (required in production) or when non-production defaults apply.
+5. Rate-limit offer creation and callback verification (deferred; not part of the current security baseline).
 
 ---
 

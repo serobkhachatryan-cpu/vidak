@@ -51,7 +51,10 @@ describe('video publishing and public discovery routes', () => {
   it('returns 401 for anonymous publish and unpublish', async () => {
     await expect(
       publishVideo(
-        new NextRequest('https://vidak.example/api/videos/v1/publish', { method: 'POST' }),
+        new NextRequest('https://vidak.example/api/videos/v1/publish', {
+          method: 'POST',
+          headers: { Origin: 'https://vidak.example' },
+        }),
         {
           params: Promise.resolve({ videoId: 'v1' }),
         },
@@ -60,7 +63,10 @@ describe('video publishing and public discovery routes', () => {
 
     await expect(
       unpublishVideo(
-        new NextRequest('https://vidak.example/api/videos/v1/unpublish', { method: 'POST' }),
+        new NextRequest('https://vidak.example/api/videos/v1/unpublish', {
+          method: 'POST',
+          headers: { Origin: 'https://vidak.example' },
+        }),
         { params: Promise.resolve({ videoId: 'v1' }) },
       ),
     ).resolves.toMatchObject({ status: 401 });

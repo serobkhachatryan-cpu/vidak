@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
+import { assertTrustedMutationOrigin } from '../../../../../server/request-security';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -13,6 +14,7 @@ export async function DELETE(
   context: { params: Promise<{ sessionId: string }> },
 ) {
   try {
+    assertTrustedMutationOrigin(request);
     const accessToken =
       getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
     if (!accessToken) {

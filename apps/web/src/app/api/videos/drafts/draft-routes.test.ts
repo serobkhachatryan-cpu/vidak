@@ -35,7 +35,10 @@ describe('video draft API routes', () => {
         new NextRequest('https://vidak.example/api/videos/drafts', {
           method: 'POST',
           body: JSON.stringify({ title: 'Anon' }),
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: 'https://vidak.example',
+          },
         }),
       ),
     ).resolves.toMatchObject({ status: 401 });

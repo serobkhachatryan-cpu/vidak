@@ -1,5 +1,6 @@
 import { toBrowserAuthSession } from '@w3ds/auth';
 import { type NextRequest, NextResponse } from 'next/server';
+import { assertTrustedMutationOrigin } from '../../../../server/request-security';
 import {
   applyW3dsSessionCookies,
   getW3dsAuthService,
@@ -11,6 +12,7 @@ export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
+    assertTrustedMutationOrigin(request);
     const refreshToken = request.cookies.get(w3dsRefreshCookieName)?.value;
     if (!refreshToken)
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
