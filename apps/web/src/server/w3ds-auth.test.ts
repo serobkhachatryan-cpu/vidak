@@ -1,7 +1,12 @@
-import { describe, expect, it, vi } from 'vitest';
+import { createAuthUser } from '@w3ds/auth';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  InMemoryW3dsAuthStore,
   RegistryW3dsIdentityVerifier,
+  readW3dsAuthConfig,
+  resetW3dsAuthServiceForTests,
   type VerifiedW3dsIdentity,
+  W3dsAuthError,
   W3dsAuthService,
   type W3dsIdentityVerifier,
 } from './w3ds-auth';
@@ -17,15 +22,18 @@ function createService(now = 1_780_000_000_000) {
     verify: vi.fn().mockResolvedValue(verifiedIdentity),
   };
   const clock = { value: now };
+  const store = new InMemoryW3dsAuthStore();
   return {
     verifier,
     clock,
+    store,
     service: new W3dsAuthService({
       config: {
         platformName: 'vidak',
         registryBaseUrl: 'https://registry.example',
         jwtSecret: 'a development-only test secret with at least 32 characters',
       },
+      store,
       identityVerifier: verifier,
       now: () => clock.value,
     }),
@@ -33,9 +41,14 @@ function createService(now = 1_780_000_000_000) {
 }
 
 describe('W3dsAuthService', () => {
+  afterEach(() => {
+    resetW3dsAuthServiceForTests();
+    vi.unstubAllEnvs();
+  });
+
   it('completes a one-time signed offer and creates a reusable platform user', async () => {
-    const { service, verifier } = createService();
-    const offer = service.createOffer('https://vidak.example');
+    const { service, verifier, store } = createService();
+    const offer = await service.createOffer('https://vidak.example');
     const uri = new URL(offer.uri);
 
     expect(uri.protocol).toBe('w3ds:');
@@ -85,11 +98,90 @@ describe('W3dsAuthService', () => {
         signature: 'signature',
       }),
     ).rejects.toMatchObject({ code: 'consumed_session' });
+
+    const reused = await store.findOrCreateUser(
+      createAuthUser({
+        id: 'w3ds_different',
+        displayName: 'Other',
+        roles: ['creator'],
+        eName: '@creator.w3id',
+        eVaultId: 'evault-creator',
+        eVaultUri: 'https://evault.example/creator',
+      }),
+    );
+    expect(reused.id).toBe(status.session.user.id);
+    expect(reused.eName).toBe('@creator.w3id');
+  });
+
+  it('finds or creates platform users uniquely by eName', async () => {
+    const store = new InMemoryW3dsAuthStore();
+    const first = await store.findOrCreateUser(
+      createAuthUser({
+        id: 'w3ds_a',
+        displayName: 'Creator',
+        roles: ['creator'],
+        eName: '@creator.w3id',
+        eVaultId: 'evault-creator',
+      }),
+    );
+    const second = await store.findOrCreateUser(
+      createAuthUser({
+        id: 'w3ds_b',
+        displayName: 'Other',
+        roles: ['creator'],
+        eName: '@creator.w3id',
+        eVaultId: 'evault-other',
+      }),
+    );
+    const other = await store.findOrCreateUser(
+      createAuthUser({
+        id: 'w3ds_c',
+        displayName: 'Viewer',
+        roles: ['creator'],
+        eName: '@viewer.w3id',
+        eVaultId: 'evault-viewer',
+      }),
+    );
+
+    expect(second.id).toBe(first.id);
+    expect(second.eVaultId).toBe('evault-creator');
+    expect(other.id).toBe('w3ds_c');
+    await expect(store.findUserByEName('@missing.w3id')).resolves.toBeUndefined();
+  });
+
+  it('consumes an offer only once under concurrent callback attempts', async () => {
+    const { service, verifier } = createService();
+    const offer = await service.createOffer('https://vidak.example');
+
+    const results = await Promise.allSettled([
+      service.completeOffer({
+        w3id: '@creator.w3id',
+        session: offer.sessionId,
+        signature: 'signature-a',
+      }),
+      service.completeOffer({
+        w3id: '@creator.w3id',
+        session: offer.sessionId,
+        signature: 'signature-b',
+      }),
+    ]);
+
+    const fulfilled = results.filter((result) => result.status === 'fulfilled');
+    const rejected = results.filter((result) => result.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+      code: 'consumed_session',
+    });
+    expect(verifier.verify).toHaveBeenCalledTimes(1);
+    await expect(service.getOfferStatus(offer.offerId)).resolves.toMatchObject({
+      status: 'completed',
+    });
   });
 
   it('rotates refresh tokens and invalidates the old access token', async () => {
     const { service } = createService();
-    const offer = service.createOffer('https://vidak.example');
+    const offer = await service.createOffer('https://vidak.example');
     await service.completeOffer({
       w3id: '@creator.w3id',
       session: offer.sessionId,
@@ -111,9 +203,31 @@ describe('W3dsAuthService', () => {
     });
   });
 
+  it('revokes sessions on logout across subsequent credential use', async () => {
+    const { service } = createService();
+    const offer = await service.createOffer('https://vidak.example');
+    await service.completeOffer({
+      w3id: '@creator.w3id',
+      session: offer.sessionId,
+      signature: 'signature',
+    });
+    const cookieSession = await service.getOfferSessionForCookie(offer.offerId);
+    const accessToken = cookieSession.tokens.accessToken;
+    const refreshToken = cookieSession.tokens.refreshToken;
+    if (!accessToken || !refreshToken) throw new Error('Expected cookie credentials.');
+
+    await service.logout(accessToken, refreshToken);
+    await expect(service.getSession(accessToken)).rejects.toMatchObject({
+      code: 'invalid_session',
+    });
+    await expect(service.refreshSession(refreshToken)).rejects.toMatchObject({
+      code: 'invalid_session',
+    });
+  });
+
   it('expires offers after five minutes without accepting a callback', async () => {
     const { service, clock } = createService();
-    const offer = service.createOffer('https://vidak.example');
+    const offer = await service.createOffer('https://vidak.example');
     clock.value += 5 * 60 * 1000;
 
     await expect(service.getOfferStatus(offer.offerId)).resolves.toEqual({ status: 'expired' });
@@ -124,6 +238,62 @@ describe('W3dsAuthService', () => {
         signature: 'signature',
       }),
     ).rejects.toMatchObject({ code: 'expired_session' });
+  });
+
+  it('expires refresh sessions when the refresh lifetime elapses', async () => {
+    const { service, clock } = createService();
+    const offer = await service.createOffer('https://vidak.example');
+    await service.completeOffer({
+      w3id: '@creator.w3id',
+      session: offer.sessionId,
+      signature: 'signature',
+    });
+    const cookieSession = await service.getOfferSessionForCookie(offer.offerId);
+    const refreshToken = cookieSession.tokens.refreshToken;
+    if (!refreshToken) throw new Error('Expected a refresh token.');
+
+    clock.value += 7 * 24 * 60 * 60 * 1000 + 1;
+    await expect(service.refreshSession(refreshToken)).rejects.toMatchObject({
+      code: 'invalid_session',
+    });
+  });
+
+  it('fails W3DS configuration when DATABASE_URL is missing', () => {
+    vi.stubEnv('W3DS_REGISTRY_BASE_URL', 'https://registry.example');
+    vi.stubEnv(
+      'W3DS_AUTH_JWT_SECRET',
+      'a development-only test secret with at least 32 characters',
+    );
+    vi.stubEnv('DATABASE_URL', '');
+
+    expect(() => readW3dsAuthConfig()).toThrow(W3dsAuthError);
+    try {
+      readW3dsAuthConfig();
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'configuration_error',
+        status: 503,
+        message: expect.stringContaining('DATABASE_URL'),
+      });
+    }
+  });
+
+  it('keeps development-provider configuration independent of DATABASE_URL', async () => {
+    // Development auth lives in MockAuthApiClient and never calls getW3dsAuthService.
+    const { createAuthClient } = await import('@w3ds/api-client');
+    vi.stubEnv('DATABASE_URL', '');
+    const client = createAuthClient({ provider: 'dev' });
+    expect(client.provider).toBe('dev');
+    expect(client.capabilities.emailPasswordLogin).toBe(true);
+    expect(client.capabilities.w3dsAuthChallenge).toBe(false);
+
+    const session = await client.login({
+      email: 'demo@w3ds.video',
+      password: 'password123',
+      remember: true,
+    });
+    expect(session.provider).toBe('dev');
+    expect(session.tokens.accessToken).toEqual(expect.any(String));
   });
 
   it('verifies Registry-attested eVault keys before accepting a wallet signature', async () => {

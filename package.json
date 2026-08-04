@@ -21,6 +21,8 @@
     "test:e2e:ui": "playwright test --ui",
     "storybook": "pnpm --filter @w3ds/ui storybook",
     "storybook:build": "pnpm --filter @w3ds/ui storybook:build",
+    "db:generate": "pnpm --filter @w3ds/web db:generate",
+    "db:migrate": "pnpm --filter @w3ds/web db:migrate",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {

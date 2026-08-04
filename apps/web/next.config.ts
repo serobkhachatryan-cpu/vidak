@@ -10,6 +10,7 @@ const nextConfig: NextConfig = {
   output: 'standalone',
   reactStrictMode: true,
   allowedDevOrigins: ['127.0.0.1'],
+  serverExternalPackages: ['pg', 'drizzle-orm'],
   env: {
     // Expose AUTH_PROVIDER to the client bundle as NEXT_PUBLIC_AUTH_PROVIDER.
     [authProviderEnvVars.public]: authProvider,

@@ -3,9 +3,9 @@ import { getW3dsAuthService, W3dsAuthError } from '../../../../server/w3ds-auth'
 
 export const runtime = 'nodejs';
 
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    return NextResponse.json(getW3dsAuthService().createOffer(request.nextUrl.origin));
+    return NextResponse.json(await getW3dsAuthService().createOffer(request.nextUrl.origin));
   } catch (error) {
     return errorResponse(error);
   }

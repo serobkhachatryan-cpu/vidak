@@ -8,6 +8,8 @@
     "start": "next start",
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/server/db/migrate.ts",
     "clean": "rm -rf .next"
   },
   "dependencies": {
@@ -24,16 +26,21 @@
     "@w3ds/upload-page": "workspace:*",
     "@w3ds/user-profile-page": "workspace:*",
     "@w3ds/watch-page": "workspace:*",
+    "drizzle-orm": "^0.45.2",
     "next": "latest",
+    "pg": "^8.22.0",
     "qrcode": "^1.5.4",
     "react": "latest",
     "react-dom": "latest"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "latest",
+    "@types/pg": "^8.20.3",
     "@types/qrcode": "^1.5.6",
     "@types/react": "latest",
     "@types/react-dom": "latest",
-    "tailwindcss": "latest"
+    "drizzle-kit": "^0.31.10",
+    "tailwindcss": "latest",
+    "tsx": "^4.23.5"
   }
 }

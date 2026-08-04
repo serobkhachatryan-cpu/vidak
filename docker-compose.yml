@@ -8,3 +8,25 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: production
+
+  # Optional local PostgreSQL for W3DS auth persistence.
+  # Start with: docker compose --profile postgres up -d postgres
+  postgres:
+    profiles: ["postgres"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: vidak
+      POSTGRES_PASSWORD: vidak
+      POSTGRES_DB: vidak
+    ports:
+      - "5432:5432"
+    volumes:
+      - vidak_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vidak -d vidak"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  vidak_postgres:

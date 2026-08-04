@@ -1,5 +1,17 @@
 import { randomUUID } from 'node:crypto';
 import { type AuthSession, type AuthUser, createAuthUser, toBrowserAuthSession } from '@w3ds/auth';
+import { getW3dsDatabase } from './db/client';
+import { W3dsAuthError } from './w3ds-auth-errors';
+import {
+  PostgresW3dsAuthStore,
+  type StoredOffer,
+  type StoredPlatformSession,
+  type W3dsAuthStore,
+} from './w3ds-auth-store';
+
+export { W3dsAuthError } from './w3ds-auth-errors';
+export type { W3dsAuthStore } from './w3ds-auth-store';
+export { InMemoryW3dsAuthStore, PostgresW3dsAuthStore } from './w3ds-auth-store';
 
 const crypto = globalThis.crypto;
 const encoder = new TextEncoder();
@@ -54,36 +66,6 @@ export interface W3dsIdentityVerifier {
   }): Promise<VerifiedW3dsIdentity>;
 }
 
-export class W3dsAuthError extends Error {
-  constructor(
-    message: string,
-    public readonly code: string,
-    public readonly status: number,
-  ) {
-    super(message);
-    this.name = 'W3dsAuthError';
-  }
-}
-
-interface StoredOffer {
-  id: string;
-  sessionId: string;
-  expiresAt: number;
-  status: 'pending' | 'verifying' | 'completed' | 'expired' | 'failed';
-  platformSessionId?: string;
-  errorCode?: string;
-}
-
-interface StoredPlatformSession {
-  id: string;
-  user: AuthUser;
-  accessJti: string;
-  refreshJti: string;
-  accessExpiresAt: number;
-  refreshExpiresAt: number;
-  revoked: boolean;
-}
-
 interface PlatformTokenClaims {
   sub: string;
   sid: string;
@@ -95,6 +77,7 @@ interface PlatformTokenClaims {
 
 export interface W3dsAuthServiceOptions {
   config: W3dsAuthConfig;
+  store: W3dsAuthStore;
   identityVerifier?: W3dsIdentityVerifier;
   now?: () => number;
 }
@@ -106,30 +89,28 @@ export interface W3dsAuthServiceOptions {
  * intentionally confined to the verifier, so no browser code sees protocol
  * service URLs, certificates, or public-key material.
  *
- * The store is process-local because the repository has no database yet. A
- * deployed multi-instance platform must replace it with durable shared storage
- * before enabling W3DS authentication in production.
+ * Durable offer/user/session state lives behind {@link W3dsAuthStore}. Runtime
+ * production uses PostgreSQL; in-memory storage is only for explicit test
+ * injection and is never a production fallback.
  */
 export class W3dsAuthService {
   private readonly config: Required<Pick<W3dsAuthConfig, 'offerLifetimeMs'>> & W3dsAuthConfig;
+  private readonly store: W3dsAuthStore;
   private readonly identityVerifier: W3dsIdentityVerifier;
   private readonly now: () => number;
-  private readonly offersById = new Map<string, StoredOffer>();
-  private readonly offersBySessionId = new Map<string, StoredOffer>();
-  private readonly usersByEName = new Map<string, AuthUser>();
-  private readonly sessionsById = new Map<string, StoredPlatformSession>();
 
   constructor(options: W3dsAuthServiceOptions) {
     this.config = {
       ...options.config,
       offerLifetimeMs: options.config.offerLifetimeMs ?? defaultOfferLifetimeMs,
     };
+    this.store = options.store;
     this.now = options.now ?? Date.now;
     this.identityVerifier =
       options.identityVerifier ?? new RegistryW3dsIdentityVerifier(this.config.registryBaseUrl);
   }
 
-  createOffer(publicBaseUrl: string): LoginOffer {
+  async createOffer(publicBaseUrl: string): Promise<LoginOffer> {
     const baseUrl = parseHttpUrl(publicBaseUrl, 'The platform public URL');
     const offerId = randomUUID();
     const sessionId = randomUUID();
@@ -140,14 +121,7 @@ export class W3dsAuthService {
     offerUri.searchParams.set('session', sessionId);
     offerUri.searchParams.set('platform', this.config.platformName);
 
-    const offer: StoredOffer = {
-      id: offerId,
-      sessionId,
-      expiresAt,
-      status: 'pending',
-    };
-    this.offersById.set(offer.id, offer);
-    this.offersBySessionId.set(offer.sessionId, offer);
+    await this.store.createOffer({ id: offerId, sessionId, expiresAt });
 
     return {
       offerId,
@@ -159,30 +133,33 @@ export class W3dsAuthService {
 
   async completeOffer(input: W3dsCallbackInput): Promise<void> {
     validateCallbackInput(input);
-    const offer = this.offersBySessionId.get(input.session);
-    if (!offer) {
-      throw new W3dsAuthError('Authentication session was not found.', 'invalid_session', 401);
-    }
-    this.expireOfferIfNeeded(offer);
-    if (offer.status === 'expired') {
-      throw new W3dsAuthError('Authentication session has expired.', 'expired_session', 401);
-    }
-    if (offer.status !== 'pending') {
+    const claimed = await this.store.claimOfferForVerification(input.session, this.now());
+    if (!claimed) {
+      const existing = await this.store.getOfferBySessionId(input.session);
+      if (!existing) {
+        throw new W3dsAuthError('Authentication session was not found.', 'invalid_session', 401);
+      }
+      if (existing.status === 'expired' || existing.expiresAt <= this.now()) {
+        if (existing.status !== 'expired') {
+          await this.store.markOfferExpired(existing.id);
+        }
+        throw new W3dsAuthError('Authentication session has expired.', 'expired_session', 401);
+      }
       throw new W3dsAuthError('Authentication session was already used.', 'consumed_session', 401);
     }
-    if (
-      this.config.minimumWalletVersion &&
-      !isAtLeastVersion(input.appVersion, this.config.minimumWalletVersion)
-    ) {
-      throw new W3dsAuthError(
-        'The eID wallet version is not supported.',
-        'unsupported_wallet',
-        400,
-      );
-    }
 
-    offer.status = 'verifying';
     try {
+      if (
+        this.config.minimumWalletVersion &&
+        !isAtLeastVersion(input.appVersion, this.config.minimumWalletVersion)
+      ) {
+        throw new W3dsAuthError(
+          'The eID wallet version is not supported.',
+          'unsupported_wallet',
+          400,
+        );
+      }
+
       const identity = await this.identityVerifier.verify({
         eName: input.w3id,
         session: input.session,
@@ -192,24 +169,22 @@ export class W3dsAuthService {
         throw new W3dsAuthError('Identity verification failed.', 'invalid_signature', 401);
       }
 
-      const user = this.findOrCreateUser(identity);
+      const user = await this.findOrCreateUser(identity);
       const platformSession = await this.issueSession(user);
-      offer.platformSessionId = platformSession.id;
-      offer.status = 'completed';
+      await this.store.completeOffer(claimed.id, platformSession.id);
     } catch (error) {
-      offer.status = 'failed';
-      offer.errorCode = error instanceof W3dsAuthError ? error.code : 'verification_failed';
+      const errorCode = error instanceof W3dsAuthError ? error.code : 'verification_failed';
+      await this.store.failOffer(claimed.id, errorCode);
       if (error instanceof W3dsAuthError) throw error;
       throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
     }
   }
 
   async getOfferStatus(offerId: string): Promise<LoginOfferStatus> {
-    const offer = this.offersById.get(offerId);
+    const offer = await this.expireOfferIfNeeded(await this.store.getOfferById(offerId));
     if (!offer) {
       throw new W3dsAuthError('Authentication offer was not found.', 'invalid_offer', 404);
     }
-    this.expireOfferIfNeeded(offer);
     switch (offer.status) {
       case 'pending':
       case 'verifying':
@@ -226,7 +201,7 @@ export class W3dsAuthService {
         };
       case 'completed': {
         const session = offer.platformSessionId
-          ? this.sessionsById.get(offer.platformSessionId)
+          ? await this.store.getSessionById(offer.platformSessionId)
           : undefined;
         if (!session || session.revoked) {
           return {
@@ -248,9 +223,9 @@ export class W3dsAuthService {
    * as HTTP-only cookies. It must never be serialized into an API response.
    */
   async getOfferSessionForCookie(offerId: string): Promise<AuthSession> {
-    const offer = this.offersById.get(offerId);
+    const offer = await this.store.getOfferById(offerId);
     const session = offer?.platformSessionId
-      ? this.sessionsById.get(offer.platformSessionId)
+      ? await this.store.getSessionById(offer.platformSessionId)
       : undefined;
     if (offer?.status !== 'completed' || !session || session.revoked) {
       throw new W3dsAuthError('Authentication session is unavailable.', 'invalid_session', 401);
@@ -268,9 +243,21 @@ export class W3dsAuthService {
    * setters only — route handlers must strip tokens before JSON serialization.
    */
   async refreshSession(refreshToken: string): Promise<AuthSession> {
-    const platformSession = await this.getActiveSession(refreshToken, 'refresh');
+    const claims = await this.verifyPlatformToken(refreshToken);
+    if (claims.typ !== 'refresh') {
+      throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+    }
+    const platformSession = await this.store.getSessionById(claims.sid);
+    if (
+      !platformSession ||
+      platformSession.revoked ||
+      claims.jti !== platformSession.refreshJti ||
+      claims.sub !== platformSession.user.id
+    ) {
+      throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+    }
     if (platformSession.refreshExpiresAt <= this.now()) {
-      platformSession.revoked = true;
+      await this.store.revokeSession(platformSession.id);
       throw new W3dsAuthError('Authentication session has expired.', 'invalid_session', 401);
     }
     return this.toAuthSession(await this.issueSession(platformSession.user, platformSession), true);
@@ -281,28 +268,29 @@ export class W3dsAuthService {
     if (!token) return;
     try {
       const claims = await this.verifyPlatformToken(token);
-      const session = this.sessionsById.get(claims.sid);
-      if (session) session.revoked = true;
+      await this.store.revokeSession(claims.sid);
     } catch {
       // Logout is idempotent. Client cookies are still cleared by the route.
     }
   }
 
-  private expireOfferIfNeeded(offer: StoredOffer) {
+  private async expireOfferIfNeeded(
+    offer: StoredOffer | undefined,
+  ): Promise<StoredOffer | undefined> {
+    if (!offer) return undefined;
     if (
       (offer.status === 'pending' || offer.status === 'verifying') &&
       offer.expiresAt <= this.now()
     ) {
-      offer.status = 'expired';
+      await this.store.markOfferExpired(offer.id);
+      return { ...offer, status: 'expired' };
     }
+    return offer;
   }
 
-  private findOrCreateUser(identity: VerifiedW3dsIdentity): AuthUser {
-    const existing = this.usersByEName.get(identity.eName);
-    if (existing) return existing;
-
+  private async findOrCreateUser(identity: VerifiedW3dsIdentity): Promise<AuthUser> {
     const displayName = identity.eName.slice(1).split('.')[0] || 'W3DS user';
-    const user = createAuthUser({
+    const candidate = createAuthUser({
       id: `w3ds_${randomUUID()}`,
       displayName,
       handle: displayName,
@@ -311,8 +299,7 @@ export class W3dsAuthService {
       eVaultId: identity.eVaultId,
       eVaultUri: identity.eVaultUri,
     });
-    this.usersByEName.set(user.eName, user);
-    return user;
+    return this.store.findOrCreateUser(candidate);
   }
 
   private async issueSession(
@@ -323,17 +310,32 @@ export class W3dsAuthService {
     const id = previousSession?.id ?? randomUUID();
     const accessJti = randomUUID();
     const refreshJti = randomUUID();
-    const next: StoredPlatformSession = {
+    const accessExpiresAt = (nowSeconds + accessTokenLifetimeSeconds) * 1000;
+    const refreshExpiresAt = (nowSeconds + refreshTokenLifetimeSeconds) * 1000;
+
+    if (previousSession) {
+      const rotated = await this.store.rotateSession({
+        sessionId: previousSession.id,
+        expectedRefreshJti: previousSession.refreshJti,
+        accessJti,
+        refreshJti,
+        accessExpiresAt,
+        refreshExpiresAt,
+      });
+      if (!rotated) {
+        throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
+      }
+      return rotated;
+    }
+
+    return this.store.createSession({
       id,
       user,
       accessJti,
       refreshJti,
-      accessExpiresAt: (nowSeconds + accessTokenLifetimeSeconds) * 1000,
-      refreshExpiresAt: (nowSeconds + refreshTokenLifetimeSeconds) * 1000,
-      revoked: false,
-    };
-    this.sessionsById.set(next.id, next);
-    return next;
+      accessExpiresAt,
+      refreshExpiresAt,
+    });
   }
 
   private async toAuthSession(
@@ -376,7 +378,7 @@ export class W3dsAuthService {
     if (claims.typ !== expectedType) {
       throw new W3dsAuthError('Authentication token is invalid.', 'invalid_session', 401);
     }
-    const session = this.sessionsById.get(claims.sid);
+    const session = await this.store.getSessionById(claims.sid);
     const expectedJti = expectedType === 'access' ? session?.accessJti : session?.refreshJti;
     if (
       !session ||
@@ -769,16 +771,32 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 let service: W3dsAuthService | undefined;
 
 export function getW3dsAuthService(): W3dsAuthService {
-  service ??= new W3dsAuthService({ config: readW3dsAuthConfig() });
+  service ??= new W3dsAuthService({
+    config: readW3dsAuthConfig(),
+    store: new PostgresW3dsAuthStore(getW3dsDatabase()),
+  });
   return service;
 }
 
-function readW3dsAuthConfig(): W3dsAuthConfig {
+/** Test helper to clear the process singleton between cases. */
+export function resetW3dsAuthServiceForTests(): void {
+  service = undefined;
+}
+
+export function readW3dsAuthConfig(): W3dsAuthConfig {
   const platformName = process.env.W3DS_AUTH_PLATFORM_NAME?.trim() || 'vidak';
   const registryBaseUrl = process.env.W3DS_REGISTRY_BASE_URL?.trim();
   const jwtSecret = process.env.W3DS_AUTH_JWT_SECRET;
+  const databaseUrl = process.env.DATABASE_URL?.trim();
   if (!registryBaseUrl || !jwtSecret || jwtSecret.length < 32) {
     throw new W3dsAuthError('W3DS authentication is not configured.', 'configuration_error', 503);
+  }
+  if (!databaseUrl) {
+    throw new W3dsAuthError(
+      'W3DS authentication requires DATABASE_URL for durable session persistence.',
+      'configuration_error',
+      503,
+    );
   }
   return {
     platformName,
