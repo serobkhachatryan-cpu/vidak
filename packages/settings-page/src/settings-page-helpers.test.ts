@@ -83,7 +83,7 @@ describe('settings navigation helpers', () => {
     const w3dsSections = settingsSectionsForCapabilities(getAuthProviderCapabilities('w3ds'));
     expect(w3dsSections).not.toContain('email');
     expect(w3dsSections).not.toContain('password');
-    expect(w3dsSections).not.toContain('sessions');
+    expect(w3dsSections).toContain('sessions');
     expect(w3dsSections).not.toContain('danger');
     expect(w3dsSections).toContain('profile');
     expect(resolveActiveSettingsSection(w3dsSections, 'password')).toBe('profile');

@@ -7,7 +7,9 @@ Next.js route handlers in `apps/web`. There is still no general-purpose API,
 queue worker, storage integration, or video-processing pipeline.
 
 W3DS authentication now persists platform users, login offers, and sessions in
-PostgreSQL through Drizzle ORM. Other product domains remain mock/client-side.
+PostgreSQL through Drizzle ORM, and exposes protected account profile and
+session-management routes on that store. Other product domains remain
+mock/client-side.
 
 ```mermaid
 flowchart LR
@@ -33,6 +35,9 @@ flowchart LR
 | `GET` | `/api/auth/me` | Read the current platform user. |
 | `POST` | `/api/auth/refresh` | Rotate an HTTP-only refresh session. |
 | `POST` | `/api/auth/logout` | Revoke a platform session and clear cookies. |
+| `PATCH` | `/api/auth/profile` | Update the authenticated user's local platform profile. |
+| `GET` | `/api/auth/sessions` | List the authenticated user's active platform sessions. |
+| `DELETE` | `/api/auth/sessions/:sessionId` | Revoke one of the authenticated user's non-current sessions. |
 
 The backend resolves the W3ID in Registry, loads key-binding certificates from
 the resolved eVault's `/whois` endpoint, verifies the Registry-signed ES256
@@ -46,6 +51,14 @@ refresh credential rotates with a seven-day lifetime. `Authorization: Bearer`
 access tokens are accepted for server-to-server/API clients. Raw JWTs are never
 stored in the database — only session rows and token identifiers (`jti`) used
 for validation and rotation.
+
+Protected account routes require a valid cookie or bearer access session. Profile
+updates accept only local product fields (`displayName`, optional `avatarUrl`) and
+reject anonymous callers with `401`. Session listing returns browser-safe device
+session projections for the caller only. Session revocation is scoped to the
+caller's own sessions and rejects attempts to revoke the current session with the
+typed `invalid_session` error. Email, password, and account-deletion mutations are
+not exposed in W3DS mode.
 
 Configure the flow with the root `.env.example` values:
 

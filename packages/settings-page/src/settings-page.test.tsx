@@ -189,7 +189,7 @@ describe('SettingsPage', () => {
     expect(markup).not.toContain('>Email<');
     expect(markup).not.toContain('>Password<');
     expect(markup).not.toContain('>Delete account<');
-    expect(markup).not.toContain('>Sessions<');
+    expect(markup).toContain('>Sessions<');
     expect(markup).toContain('>Profile<');
     expect(markup).toContain('>Appearance<');
   });

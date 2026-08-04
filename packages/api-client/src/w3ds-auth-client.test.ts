@@ -36,7 +36,7 @@ describe('W3dsAuthClient', () => {
       changePassword: false,
       changeEmail: false,
       deleteAccount: false,
-      manageSessions: false,
+      manageSessions: true,
     });
 
     await expect(
@@ -236,6 +236,63 @@ describe('W3dsAuthClient', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/auth/logout',
       expect.objectContaining({ method: 'POST', credentials: 'include' }),
+    );
+  });
+
+  it('updates profile and manages sessions through same-origin cookie requests', async () => {
+    const deviceSessions = [
+      {
+        id: 'session-current',
+        deviceName: 'Vidak session',
+        lastActiveAt: '2026-08-04T12:00:00.000Z',
+        createdAt: '2026-08-04T11:00:00.000Z',
+        current: true,
+      },
+      {
+        id: 'session-other',
+        deviceName: 'Vidak session',
+        lastActiveAt: '2026-08-04T10:00:00.000Z',
+        createdAt: '2026-08-04T09:00:00.000Z',
+        current: false,
+      },
+    ];
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/profile') && init?.method === 'PATCH') {
+        expect(init.credentials).toBe('include');
+        expect(init.body).toBe(JSON.stringify({ displayName: 'Ada Lovelace' }));
+        return jsonResponse({ ...session.user, displayName: 'Ada Lovelace' });
+      }
+      if (url.endsWith('/api/auth/sessions') && (!init?.method || init.method === 'GET')) {
+        return jsonResponse(deviceSessions);
+      }
+      if (url.endsWith('/api/auth/sessions/session-other') && init?.method === 'DELETE') {
+        return jsonResponse([deviceSessions[0]]);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    const client = new W3dsAuthClient({ fetch: fetchMock as typeof fetch });
+    await expect(
+      client.updateProfile('ignored', { displayName: 'Ada Lovelace' }),
+    ).resolves.toMatchObject({
+      displayName: 'Ada Lovelace',
+    });
+    await expect(client.listSessions('ignored')).resolves.toEqual(deviceSessions);
+    await expect(client.revokeSession('ignored', 'session-other')).resolves.toEqual([
+      deviceSessions[0],
+    ]);
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/auth/profile',
+      expect.objectContaining({ method: 'PATCH', credentials: 'include' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/auth/sessions',
+      expect.objectContaining({ credentials: 'include' }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/auth/sessions/session-other',
+      expect.objectContaining({ method: 'DELETE', credentials: 'include' }),
     );
   });
 

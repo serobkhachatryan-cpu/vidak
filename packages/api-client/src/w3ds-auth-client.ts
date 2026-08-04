@@ -107,8 +107,12 @@ export class W3dsAuthClient implements AuthClient {
     }
   }
 
-  async updateProfile(_accessToken: string, _input: UpdateAuthProfileInput): Promise<AuthUser> {
-    throw unavailable('W3DS profile updates require the platform profile API.');
+  async updateProfile(_accessToken: string, input: UpdateAuthProfileInput): Promise<AuthUser> {
+    return this.requestJson<AuthUser>('/api/auth/profile', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
   }
 
   async changeEmail(_accessToken: string, _input: ChangeEmailInput): Promise<AuthUser> {
@@ -120,14 +124,17 @@ export class W3dsAuthClient implements AuthClient {
   }
 
   async listSessions(_accessToken: string): Promise<readonly AuthDeviceSession[]> {
-    throw unavailable('W3DS session listing requires the platform authentication API.');
+    return this.requestJson<readonly AuthDeviceSession[]>('/api/auth/sessions');
   }
 
   async revokeSession(
     _accessToken: string,
-    _sessionId: string,
+    sessionId: string,
   ): Promise<readonly AuthDeviceSession[]> {
-    throw unavailable('W3DS session revocation requires the platform authentication API.');
+    const encoded = encodeURIComponent(sessionId);
+    return this.requestJson<readonly AuthDeviceSession[]>(`/api/auth/sessions/${encoded}`, {
+      method: 'DELETE',
+    });
   }
 
   async deleteAccount(_accessToken: string, _input: DeleteAccountInput): Promise<void> {
@@ -202,10 +209,6 @@ function trimTrailingSlash(value: string): string {
 
 function unsupported(message: string): AuthenticationError {
   return new AuthenticationError(message, 'unsupported_capability');
-}
-
-function unavailable(message: string): AuthenticationError {
-  return new AuthenticationError(message, 'provider_unavailable');
 }
 
 async function readErrorBody(response: Response): Promise<ApiErrorBody> {

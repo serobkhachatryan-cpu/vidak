@@ -23,6 +23,15 @@ export interface StoredPlatformSession {
   accessExpiresAt: number;
   refreshExpiresAt: number;
   revoked: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface UpdateUserProfileRecordInput {
+  userId: string;
+  displayName: string;
+  /** `undefined` leaves the avatar unchanged; `null` clears it. */
+  avatarUrl?: string | null;
 }
 
 export interface CreateOfferRecordInput {
@@ -67,13 +76,20 @@ export interface W3dsAuthStore {
   markOfferExpired(offerId: string): Promise<void>;
 
   findUserByEName(eName: string): Promise<AuthUser | undefined>;
+  findUserById(userId: string): Promise<AuthUser | undefined>;
   /**
    * Inserts a user when the eName is new; returns the existing row on conflict.
    */
   findOrCreateUser(user: AuthUser): Promise<AuthUser>;
+  /** Updates only local platform profile fields for the given user id. */
+  updateUserProfile(input: UpdateUserProfileRecordInput): Promise<AuthUser>;
 
   createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession>;
   getSessionById(sessionId: string): Promise<StoredPlatformSession | undefined>;
+  /**
+   * Active (non-revoked, unexpired refresh) sessions for a single platform user.
+   */
+  listActiveSessionsByUserId(userId: string, now: number): Promise<StoredPlatformSession[]>;
   /**
    * Rotates token identifiers when the expected refresh jti still matches.
    * Returns undefined on mismatch, revocation, or missing session.
@@ -128,11 +144,20 @@ function offerFromRow(row: {
   };
 }
 
+function cloneUser(user: AuthUser): AuthUser {
+  return { ...user, profile: { ...user.profile } };
+}
+
+function cloneSession(session: StoredPlatformSession): StoredPlatformSession {
+  return { ...session, user: cloneUser(session.user) };
+}
+
 /** In-memory store for explicit unit-test injection only. Never a production fallback. */
 export class InMemoryW3dsAuthStore implements W3dsAuthStore {
   private readonly offersById = new Map<string, StoredOffer>();
   private readonly offersBySessionId = new Map<string, StoredOffer>();
   private readonly usersByEName = new Map<string, AuthUser>();
+  private readonly usersById = new Map<string, AuthUser>();
   private readonly sessionsById = new Map<string, StoredPlatformSession>();
   /** Serializes claim operations to emulate atomic DB updates in tests. */
   private claimChain: Promise<unknown> = Promise.resolve();
@@ -210,17 +235,54 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
 
   async findUserByEName(eName: string): Promise<AuthUser | undefined> {
     const user = this.usersByEName.get(eName);
-    return user ? { ...user, profile: { ...user.profile } } : undefined;
+    return user ? cloneUser(user) : undefined;
+  }
+
+  async findUserById(userId: string): Promise<AuthUser | undefined> {
+    const user = this.usersById.get(userId);
+    return user ? cloneUser(user) : undefined;
   }
 
   async findOrCreateUser(user: AuthUser): Promise<AuthUser> {
     const existing = this.usersByEName.get(user.eName);
-    if (existing) return { ...existing, profile: { ...existing.profile } };
+    if (existing) return cloneUser(existing);
     this.usersByEName.set(user.eName, user);
-    return { ...user, profile: { ...user.profile } };
+    this.usersById.set(user.id, user);
+    return cloneUser(user);
+  }
+
+  async updateUserProfile(input: UpdateUserProfileRecordInput): Promise<AuthUser> {
+    const existing = this.usersById.get(input.userId);
+    if (!existing) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+    let avatarUrl = existing.profile.avatarUrl ?? existing.avatarUrl;
+    if (input.avatarUrl === null) avatarUrl = undefined;
+    else if (input.avatarUrl !== undefined) avatarUrl = input.avatarUrl;
+    const updated = createAuthUser({
+      id: existing.id,
+      displayName: input.displayName,
+      roles: existing.roles,
+      ...(existing.email ? { email: existing.email } : {}),
+      ...(avatarUrl ? { avatarUrl } : {}),
+      ...(existing.profile.handle ? { handle: existing.profile.handle } : {}),
+      ...(existing.profile.bio ? { bio: existing.profile.bio } : {}),
+      eName: existing.eName,
+      eVaultId: existing.eVaultId,
+      ...(existing.eVaultUri ? { eVaultUri: existing.eVaultUri } : {}),
+      capabilities: existing.capabilities,
+      permissions: existing.permissions,
+    });
+    this.usersById.set(updated.id, updated);
+    this.usersByEName.set(updated.eName, updated);
+    for (const session of this.sessionsById.values()) {
+      if (session.user.id === updated.id) session.user = updated;
+    }
+    return cloneUser(updated);
   }
 
   async createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession> {
+    const now = Date.now();
     const session: StoredPlatformSession = {
       id: input.id,
       user: input.user,
@@ -229,21 +291,26 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
       accessExpiresAt: input.accessExpiresAt,
       refreshExpiresAt: input.refreshExpiresAt,
       revoked: false,
+      createdAt: now,
+      updatedAt: now,
     };
     this.sessionsById.set(session.id, session);
-    return {
-      ...session,
-      user: { ...session.user, profile: { ...session.user.profile } },
-    };
+    return cloneSession(session);
   }
 
   async getSessionById(sessionId: string): Promise<StoredPlatformSession | undefined> {
     const session = this.sessionsById.get(sessionId);
-    if (!session) return undefined;
-    return {
-      ...session,
-      user: { ...session.user, profile: { ...session.user.profile } },
-    };
+    return session ? cloneSession(session) : undefined;
+  }
+
+  async listActiveSessionsByUserId(userId: string, now: number): Promise<StoredPlatformSession[]> {
+    return [...this.sessionsById.values()]
+      .filter(
+        (session) =>
+          session.user.id === userId && !session.revoked && session.refreshExpiresAt > now,
+      )
+      .sort((left, right) => right.updatedAt - left.updatedAt)
+      .map(cloneSession);
   }
 
   async rotateSession(input: RotateSessionRecordInput): Promise<StoredPlatformSession | undefined> {
@@ -255,15 +322,16 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     session.refreshJti = input.refreshJti;
     session.accessExpiresAt = input.accessExpiresAt;
     session.refreshExpiresAt = input.refreshExpiresAt;
-    return {
-      ...session,
-      user: { ...session.user, profile: { ...session.user.profile } },
-    };
+    session.updatedAt = Date.now();
+    return cloneSession(session);
   }
 
   async revokeSession(sessionId: string): Promise<void> {
     const session = this.sessionsById.get(sessionId);
-    if (session) session.revoked = true;
+    if (session) {
+      session.revoked = true;
+      session.updatedAt = Date.now();
+    }
   }
 }
 
@@ -398,6 +466,15 @@ export class PostgresW3dsAuthStore implements W3dsAuthStore {
     return row ? toAuthUser(row) : undefined;
   }
 
+  async findUserById(userId: string): Promise<AuthUser | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(w3dsPlatformUsers)
+      .where(eq(w3dsPlatformUsers.id, userId))
+      .limit(1);
+    return row ? toAuthUser(row) : undefined;
+  }
+
   async findOrCreateUser(user: AuthUser): Promise<AuthUser> {
     const now = new Date();
     const inserted = await this.db
@@ -427,6 +504,30 @@ export class PostgresW3dsAuthStore implements W3dsAuthStore {
     return existing;
   }
 
+  async updateUserProfile(input: UpdateUserProfileRecordInput): Promise<AuthUser> {
+    const existing = await this.findUserById(input.userId);
+    if (!existing) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+    let avatarUrl = existing.profile.avatarUrl ?? existing.avatarUrl ?? null;
+    if (input.avatarUrl === null) avatarUrl = null;
+    else if (input.avatarUrl !== undefined) avatarUrl = input.avatarUrl;
+    const now = new Date();
+    const [row] = await this.db
+      .update(w3dsPlatformUsers)
+      .set({
+        displayName: input.displayName,
+        avatarUrl,
+        updatedAt: now,
+      })
+      .where(eq(w3dsPlatformUsers.id, input.userId))
+      .returning();
+    if (!row) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+    return toAuthUser(row);
+  }
+
   async createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession> {
     const now = new Date();
     await this.db.insert(w3dsPlatformSessions).values({
@@ -448,6 +549,8 @@ export class PostgresW3dsAuthStore implements W3dsAuthStore {
       accessExpiresAt: input.accessExpiresAt,
       refreshExpiresAt: input.refreshExpiresAt,
       revoked: false,
+      createdAt: now.getTime(),
+      updatedAt: now.getTime(),
     };
   }
 
@@ -462,15 +565,28 @@ export class PostgresW3dsAuthStore implements W3dsAuthStore {
       .where(eq(w3dsPlatformSessions.id, sessionId))
       .limit(1);
     if (!row) return undefined;
-    return {
-      id: row.session.id,
-      user: toAuthUser(row.user),
-      accessJti: row.session.accessJti,
-      refreshJti: row.session.refreshJti,
-      accessExpiresAt: row.session.accessExpiresAt.getTime(),
-      refreshExpiresAt: row.session.refreshExpiresAt.getTime(),
-      revoked: row.session.revoked,
-    };
+    return sessionFromRows(row.session, row.user);
+  }
+
+  async listActiveSessionsByUserId(userId: string, now: number): Promise<StoredPlatformSession[]> {
+    const nowDate = new Date(now);
+    const rows = await this.db
+      .select({
+        session: w3dsPlatformSessions,
+        user: w3dsPlatformUsers,
+      })
+      .from(w3dsPlatformSessions)
+      .innerJoin(w3dsPlatformUsers, eq(w3dsPlatformSessions.userId, w3dsPlatformUsers.id))
+      .where(
+        and(
+          eq(w3dsPlatformSessions.userId, userId),
+          eq(w3dsPlatformSessions.revoked, false),
+          gt(w3dsPlatformSessions.refreshExpiresAt, nowDate),
+        ),
+      );
+    return rows
+      .map((row) => sessionFromRows(row.session, row.user))
+      .sort((left, right) => right.updatedAt - left.updatedAt);
   }
 
   async rotateSession(input: RotateSessionRecordInput): Promise<StoredPlatformSession | undefined> {
@@ -504,4 +620,42 @@ export class PostgresW3dsAuthStore implements W3dsAuthStore {
       .set({ revoked: true, updatedAt: now })
       .where(eq(w3dsPlatformSessions.id, sessionId));
   }
+}
+
+function sessionFromRows(
+  session: {
+    id: string;
+    accessJti: string;
+    refreshJti: string;
+    accessExpiresAt: Date;
+    refreshExpiresAt: Date;
+    revoked: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+  },
+  user: {
+    id: string;
+    eName: string;
+    eVaultId: string;
+    eVaultUri: string | null;
+    displayName: string;
+    handle: string | null;
+    avatarUrl: string | null;
+    bio: string | null;
+    roles: Role[];
+    capabilities: string[];
+    permissions: AuthUserPermissions;
+  },
+): StoredPlatformSession {
+  return {
+    id: session.id,
+    user: toAuthUser(user),
+    accessJti: session.accessJti,
+    refreshJti: session.refreshJti,
+    accessExpiresAt: session.accessExpiresAt.getTime(),
+    refreshExpiresAt: session.refreshExpiresAt.getTime(),
+    revoked: session.revoked,
+    createdAt: session.createdAt.getTime(),
+    updatedAt: session.updatedAt.getTime(),
+  };
 }

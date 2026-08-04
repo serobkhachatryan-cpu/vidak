@@ -122,7 +122,7 @@ describe('authentication utilities', () => {
       changePassword: false,
       changeEmail: false,
       deleteAccount: false,
-      manageSessions: false,
+      manageSessions: true,
     });
   });
 

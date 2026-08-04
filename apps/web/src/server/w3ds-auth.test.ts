@@ -19,7 +19,15 @@ const verifiedIdentity: VerifiedW3dsIdentity = {
 
 function createService(now = 1_780_000_000_000) {
   const verifier: W3dsIdentityVerifier = {
-    verify: vi.fn().mockResolvedValue(verifiedIdentity),
+    verify: vi.fn().mockImplementation(async ({ eName }: { eName: string }) => {
+      if (eName === verifiedIdentity.eName) return verifiedIdentity;
+      const slug = eName.slice(1).replace(/\.w3id$/i, '') || 'user';
+      return {
+        eName,
+        eVaultId: `evault-${slug}`,
+        eVaultUri: `https://evault.example/${slug}`,
+      };
+    }),
   };
   const clock = { value: now };
   const store = new InMemoryW3dsAuthStore();
@@ -296,6 +304,111 @@ describe('W3dsAuthService', () => {
     expect(session.tokens.accessToken).toEqual(expect.any(String));
   });
 
+  it('updates the authenticated user profile and rejects anonymous callers', async () => {
+    const { service } = createService();
+    const accessToken = await completeLogin(service, '@creator.w3id');
+
+    const updated = await service.updateProfile(accessToken, {
+      displayName: 'Creator Updated',
+      avatarUrl: 'https://cdn.example/avatar.png',
+    });
+    expect(updated).toMatchObject({
+      displayName: 'Creator Updated',
+      profile: {
+        displayName: 'Creator Updated',
+        avatarUrl: 'https://cdn.example/avatar.png',
+      },
+      eName: '@creator.w3id',
+    });
+    await expect(service.getSession(accessToken)).resolves.toMatchObject({
+      user: {
+        displayName: 'Creator Updated',
+        profile: { avatarUrl: 'https://cdn.example/avatar.png' },
+      },
+    });
+
+    await expect(
+      service.updateProfile('not-a-token', { displayName: 'Nope' }),
+    ).rejects.toMatchObject({
+      code: 'invalid_session',
+      status: 401,
+    });
+    await expect(service.updateProfile(accessToken, { displayName: '   ' })).rejects.toMatchObject({
+      code: 'validation_failed',
+      status: 400,
+    });
+  });
+
+  it('lists only the caller sessions and rejects foreign or current revocation', async () => {
+    const { service, store } = createService();
+    const creatorAccess = await completeLogin(service, '@creator.w3id');
+    const creatorSecondAccess = await completeLogin(service, '@creator.w3id');
+    const viewerAccess = await completeLogin(service, '@viewer.w3id');
+
+    const creatorSessions = await service.listSessions(creatorSecondAccess);
+    expect(creatorSessions).toHaveLength(2);
+    expect(creatorSessions.every((session) => typeof session.id === 'string')).toBe(true);
+    expect(creatorSessions.filter((session) => session.current)).toHaveLength(1);
+    expect(JSON.stringify(creatorSessions)).not.toMatch(/refreshJti|accessJti|refreshToken/);
+
+    const creatorCurrent = creatorSessions.find((session) => session.current);
+    const creatorOther = creatorSessions.find((session) => !session.current);
+    if (!creatorCurrent || !creatorOther) throw new Error('Expected current and other sessions.');
+
+    await expect(
+      service.revokeUserSession(creatorSecondAccess, creatorCurrent.id),
+    ).rejects.toMatchObject({
+      code: 'invalid_session',
+      message: 'You cannot revoke your current session.',
+      status: 400,
+    });
+
+    const viewerSessions = await service.listSessions(viewerAccess);
+    expect(viewerSessions).toHaveLength(1);
+    await expect(service.revokeUserSession(viewerAccess, creatorOther.id)).rejects.toMatchObject({
+      code: 'invalid_session',
+      status: 404,
+    });
+    await expect(service.listSessions(viewerAccess)).resolves.toHaveLength(1);
+    expect(await store.getSessionById(creatorOther.id)).toMatchObject({ revoked: false });
+
+    await expect(service.revokeUserSession(creatorSecondAccess, creatorOther.id)).resolves.toEqual(
+      expect.arrayContaining([expect.objectContaining({ id: creatorCurrent.id, current: true })]),
+    );
+    expect(await store.getSessionById(creatorOther.id)).toMatchObject({ revoked: true });
+    await expect(service.getSession(creatorAccess)).rejects.toMatchObject({
+      code: 'invalid_session',
+    });
+  });
+
+  it('preserves development-provider account settings behavior', async () => {
+    const { createAuthClient } = await import('@w3ds/api-client');
+    const client = createAuthClient({ provider: 'dev' });
+    const session = await client.login({
+      email: 'demo@w3ds.video',
+      password: 'password123',
+      remember: true,
+    });
+    const accessToken = session.tokens.accessToken as string;
+
+    const updated = await client.updateProfile(accessToken, { displayName: 'Demo Settings' });
+    expect(updated.displayName).toBe('Demo Settings');
+    const sessions = await client.listSessions(accessToken);
+    expect(sessions.some((item) => item.current)).toBe(true);
+    await expect(
+      client.changeEmail(accessToken, {
+        email: 'demo-settings@w3ds.video',
+        password: 'password123',
+      }),
+    ).resolves.toMatchObject({ email: 'demo-settings@w3ds.video' });
+    expect(client.capabilities).toMatchObject({
+      changeEmail: true,
+      changePassword: true,
+      deleteAccount: true,
+      manageSessions: true,
+    });
+  });
+
   it('verifies Registry-attested eVault keys before accepting a wallet signature', async () => {
     const registryKeyPair = await crypto.subtle.generateKey(
       { name: 'ECDSA', namedCurve: 'P-256' },
@@ -359,6 +472,19 @@ describe('W3dsAuthService', () => {
     }
   });
 });
+
+async function completeLogin(service: W3dsAuthService, eName: string): Promise<string> {
+  const offer = await service.createOffer('https://vidak.example');
+  await service.completeOffer({
+    w3id: eName,
+    session: offer.sessionId,
+    signature: 'signature',
+  });
+  const cookieSession = await service.getOfferSessionForCookie(offer.offerId);
+  const accessToken = cookieSession.tokens.accessToken;
+  if (!accessToken) throw new Error('Expected an access token.');
+  return accessToken;
+}
 
 async function signJsonWebToken(
   privateKey: CryptoKey,

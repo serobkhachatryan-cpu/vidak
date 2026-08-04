@@ -24,8 +24,7 @@ export const authProviderCapabilities = {
     changePassword: false,
     changeEmail: false,
     deleteAccount: false,
-    // Platform session listing/revocation is not wired yet; hide until supported.
-    manageSessions: false,
+    manageSessions: true,
   },
 } as const satisfies Record<AuthProviderId, AuthProviderCapabilities>;
 

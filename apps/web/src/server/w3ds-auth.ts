@@ -1,5 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { type AuthSession, type AuthUser, createAuthUser, toBrowserAuthSession } from '@w3ds/auth';
+import {
+  type AuthSession,
+  type AuthUser,
+  createAuthUser,
+  toBrowserAuthSession,
+  type UpdateAuthProfileInput,
+} from '@w3ds/auth';
+import type { AuthDeviceSession } from '@w3ds/types';
 import { getW3dsDatabase } from './db/client';
 import { W3dsAuthError } from './w3ds-auth-errors';
 import {
@@ -274,6 +281,62 @@ export class W3dsAuthService {
     }
   }
 
+  /**
+   * Updates the authenticated user's local platform profile only.
+   * Does not mutate eName, eVault metadata, email, or password.
+   */
+  async updateProfile(accessToken: string, input: UpdateAuthProfileInput): Promise<AuthUser> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    const displayName = validateProfileUpdateInput(input);
+    return this.store.updateUserProfile({
+      userId: platformSession.user.id,
+      displayName,
+      ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl } : {}),
+    });
+  }
+
+  /** Lists only the authenticated user's active platform sessions. */
+  async listSessions(accessToken: string): Promise<readonly AuthDeviceSession[]> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    const sessions = await this.store.listActiveSessionsByUserId(
+      platformSession.user.id,
+      this.now(),
+    );
+    return sessions.map((session) => toDeviceSession(session, platformSession.id));
+  }
+
+  /**
+   * Revokes one of the authenticated user's sessions.
+   * Rejects attempts to revoke the current session.
+   */
+  async revokeUserSession(
+    accessToken: string,
+    sessionId: string,
+  ): Promise<readonly AuthDeviceSession[]> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    if (!sessionId.trim()) {
+      throw new W3dsAuthError('Session not found.', 'invalid_session', 404);
+    }
+    if (sessionId === platformSession.id) {
+      throw new W3dsAuthError('You cannot revoke your current session.', 'invalid_session', 400);
+    }
+    const target = await this.store.getSessionById(sessionId);
+    if (
+      !target ||
+      target.revoked ||
+      target.user.id !== platformSession.user.id ||
+      target.refreshExpiresAt <= this.now()
+    ) {
+      throw new W3dsAuthError('Session not found.', 'invalid_session', 404);
+    }
+    await this.store.revokeSession(sessionId);
+    const sessions = await this.store.listActiveSessionsByUserId(
+      platformSession.user.id,
+      this.now(),
+    );
+    return sessions.map((session) => toDeviceSession(session, platformSession.id));
+  }
+
   private async expireOfferIfNeeded(
     offer: StoredOffer | undefined,
   ): Promise<StoredOffer | undefined> {
@@ -530,6 +593,53 @@ function validateCallbackInput(input: W3dsCallbackInput) {
   if (!isEName(input.w3id)) {
     throw new W3dsAuthError('The W3DS identity is invalid.', 'validation_failed', 400);
   }
+}
+
+const maxDisplayNameLength = 50;
+
+function validateProfileUpdateInput(input: UpdateAuthProfileInput): string {
+  if (typeof input.displayName !== 'string') {
+    throw new W3dsAuthError('Display name is required.', 'validation_failed', 400);
+  }
+  const displayName = input.displayName.trim();
+  if (!displayName) {
+    throw new W3dsAuthError('Display name is required.', 'validation_failed', 400);
+  }
+  if (displayName.length > maxDisplayNameLength) {
+    throw new W3dsAuthError(
+      'Display name must be 50 characters or fewer.',
+      'validation_failed',
+      400,
+    );
+  }
+  if (input.avatarUrl !== undefined && input.avatarUrl !== null) {
+    if (typeof input.avatarUrl !== 'string' || !isHttpUrl(input.avatarUrl)) {
+      throw new W3dsAuthError('Avatar URL is invalid.', 'validation_failed', 400);
+    }
+  }
+  return displayName;
+}
+
+function isHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function toDeviceSession(
+  session: StoredPlatformSession,
+  currentSessionId: string,
+): AuthDeviceSession {
+  return {
+    id: session.id,
+    deviceName: 'Vidak session',
+    lastActiveAt: new Date(session.updatedAt).toISOString(),
+    createdAt: new Date(session.createdAt).toISOString(),
+    current: session.id === currentSessionId,
+  };
 }
 
 function isEName(value: string): boolean {
