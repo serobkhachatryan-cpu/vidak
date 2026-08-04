@@ -98,10 +98,7 @@ export function UserProfilePageData({ client, userId, ...props }: UserProfilePag
   const playlistPages = playlistsQuery.data?.pages;
 
   const channelsById = useMemo(() => {
-    const entries: Array<[string, Channel]> = ownedChannels.map((channel) => [
-      channel.id,
-      channel,
-    ]);
+    const entries: Array<[string, Channel]> = ownedChannels.map((channel) => [channel.id, channel]);
     return Object.fromEntries(entries);
   }, [ownedChannels]);
   const videos = useMemo(
@@ -115,7 +112,10 @@ export function UserProfilePageData({ client, userId, ...props }: UserProfilePag
   );
   const playlists = useMemo(
     () =>
-      playlistsForOwnedChannels(playlistPages?.flatMap((page) => page.items) ?? [], ownedChannelIds),
+      playlistsForOwnedChannels(
+        playlistPages?.flatMap((page) => page.items) ?? [],
+        ownedChannelIds,
+      ),
     [ownedChannelIds, playlistPages],
   );
   const videoCount = useMemo(

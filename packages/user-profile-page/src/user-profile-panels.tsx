@@ -11,12 +11,7 @@ import {
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
-import {
-  formatFollowers,
-  formatFollowing,
-  formatJoinDate,
-  formatVideoCount,
-} from './format';
+import { formatFollowers, formatFollowing, formatJoinDate, formatVideoCount } from './format';
 import { ProfileWebsiteLink } from './profile-website-link';
 import {
   LoadingRegion,
