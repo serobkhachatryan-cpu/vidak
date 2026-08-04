@@ -11,6 +11,7 @@ import type {
   CreateVideoDraftInput,
   CreateVideoInput,
   CursorPage,
+  DraftMediaAsset,
   PaginationParams,
   Playlist,
   PlaylistId,
@@ -20,6 +21,8 @@ import type {
   UpdateVideoDraftInput,
   UpdateVideoInput,
   UploadAvatarInput,
+  UploadDraftMediaFile,
+  UploadDraftMediaOptions,
   UploadVideoInput,
   UploadVideoOptions,
   UploadVideoResult,
@@ -78,4 +81,22 @@ export interface VideoApiClient {
   getDraft(id: VideoId): Promise<Video>;
   updateDraft(id: VideoId, input: UpdateVideoDraftInput): Promise<Video>;
   deleteDraft(id: VideoId): Promise<void>;
+  /**
+   * Stream-upload raw media bytes into an owned saved draft via the protected
+   * media API. Uses cookie session credentials; never exposes tokens or storage keys.
+   */
+  uploadDraftMedia(
+    videoId: VideoId,
+    file: UploadDraftMediaFile,
+    options?: UploadDraftMediaOptions,
+  ): Promise<DraftMediaAsset>;
+  /** Read owned draft media metadata (no storage key / public URL). */
+  getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset>;
+  /** Delete an owned draft media asset through the protected delete route. */
+  deleteDraftMedia(videoId: VideoId, assetId: string): Promise<void>;
+  /**
+   * Same-origin authenticated content path for private preview/download.
+   * Not a public media URL — requires the creator session cookie.
+   */
+  draftMediaContentPath(videoId: VideoId, assetId: string): string;
 }

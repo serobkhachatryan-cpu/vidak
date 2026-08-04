@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
-import type { Video } from '@w3ds/types';
+import type { DraftMediaAsset, Video } from '@w3ds/types';
 import { emptyUploadDraft, UploadPage } from './upload-page';
 
 const autoThumbnails = [
@@ -39,6 +39,18 @@ const savedDraft: Video = {
   tags: draft.tags,
 };
 
+const mediaAsset: DraftMediaAsset = {
+  id: 'asset-design-system',
+  ownerId: 'user-grace',
+  videoId: 'video-design-system',
+  originalFilename: 'design-system.mp4',
+  contentType: 'video/mp4',
+  byteSize: 100_000_000,
+  uploadState: 'ready',
+  createdAt: '2026-08-04T10:00:00.000Z',
+  updatedAt: '2026-08-04T10:00:00.000Z',
+};
+
 const progress = {
   percent: 58,
   bytesUploaded: 58_000_000,
@@ -71,6 +83,21 @@ export const SelectVideoInvalid: Story = {
   },
 };
 
+export const UploadIdle: Story = {
+  args: {
+    step: 'progress',
+    uploadStatus: 'idle',
+  },
+};
+
+export const UploadValidating: Story = {
+  args: {
+    step: 'progress',
+    fileName: 'design-system.mp4',
+    uploadStatus: 'validating',
+  },
+};
+
 export const Uploading: Story = {
   args: {
     step: 'progress',
@@ -80,6 +107,20 @@ export const Uploading: Story = {
     progress,
     completedSteps: ['select'],
     onCancelUpload: () => undefined,
+  },
+};
+
+export const UploadComplete: Story = {
+  args: {
+    step: 'progress',
+    fileName: 'design-system.mp4',
+    fileSize: 100_000_000,
+    uploadStatus: 'complete',
+    progress: { ...progress, percent: 100, bytesUploaded: 100_000_000, remainingSeconds: 0 },
+    mediaAsset,
+    mediaPreviewSrc: '/api/videos/drafts/video-design-system/media/asset-design-system/content',
+    completedSteps: ['select', 'progress'],
+    onRemoveMedia: () => undefined,
   },
 };
 
@@ -94,6 +135,13 @@ export const UploadFailed: Story = {
   },
 };
 
+export const UploadValidationError: Story = {
+  args: {
+    step: 'select',
+    fileError: 'File is too large. Maximum size is 2 GB.',
+  },
+};
+
 export const UploadCancelled: Story = {
   args: {
     step: 'progress',
@@ -105,12 +153,51 @@ export const UploadCancelled: Story = {
   },
 };
 
+export const UploadRetry: Story = {
+  args: {
+    step: 'progress',
+    fileName: 'design-system.mp4',
+    uploadStatus: 'error',
+    uploadError: 'Network connection lost.',
+    completedSteps: ['select'],
+    onRetryUpload: () => undefined,
+  },
+};
+
+export const RemovingAttachedAsset: Story = {
+  args: {
+    step: 'details',
+    fileName: 'design-system.mp4',
+    draft,
+    mediaAsset,
+    mediaPreviewSrc: '/api/videos/drafts/video-design-system/media/asset-design-system/content',
+    isRemovingMedia: true,
+    completedSteps: ['select', 'progress'],
+    onRemoveMedia: () => undefined,
+  },
+};
+
+export const RemoveAttachedAssetError: Story = {
+  args: {
+    step: 'details',
+    fileName: 'design-system.mp4',
+    draft,
+    mediaAsset,
+    removeMediaError: 'Could not remove the attached media.',
+    completedSteps: ['select', 'progress'],
+    onRemoveMedia: () => undefined,
+  },
+};
+
 export const VideoDetails: Story = {
   args: {
     step: 'details',
     fileName: 'design-system.mp4',
     draft,
+    mediaAsset,
+    mediaPreviewSrc: '/api/videos/drafts/video-design-system/media/asset-design-system/content',
     completedSteps: ['select', 'progress'],
+    onRemoveMedia: () => undefined,
   },
 };
 

@@ -10,6 +10,73 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+const publicAsset = {
+  id: 'asset-1',
+  ownerId: 'user-1',
+  videoId: 'draft-1',
+  originalFilename: 'clip.mp4',
+  contentType: 'video/mp4',
+  byteSize: 12,
+  uploadState: 'ready' as const,
+  createdAt: '2026-08-04T10:00:00.000Z',
+  updatedAt: '2026-08-04T10:00:00.000Z',
+};
+
+class FakeXMLHttpRequest {
+  static last: FakeXMLHttpRequest | undefined;
+  static responders: Array<(xhr: FakeXMLHttpRequest) => void> = [];
+
+  readonly upload = {
+    onprogress: null as ((event: ProgressEvent) => void) | null,
+  };
+  onerror: (() => void) | null = null;
+  onabort: (() => void) | null = null;
+  onload: (() => void) | null = null;
+  status = 0;
+  responseText = '';
+  withCredentials = false;
+  responseType = '';
+  method = '';
+  url = '';
+  readonly headers = new Map<string, string>();
+  body: unknown;
+  aborted = false;
+
+  open(method: string, url: string) {
+    this.method = method;
+    this.url = url;
+  }
+
+  setRequestHeader(name: string, value: string) {
+    this.headers.set(name, value);
+  }
+
+  abort() {
+    this.aborted = true;
+    this.onabort?.();
+  }
+
+  send(body?: unknown) {
+    this.body = body;
+    FakeXMLHttpRequest.last = this;
+    const responder = FakeXMLHttpRequest.responders.shift();
+    if (responder) {
+      queueMicrotask(() => responder(this));
+      return;
+    }
+    queueMicrotask(() => {
+      this.status = 201;
+      this.responseText = JSON.stringify(publicAsset);
+      this.upload.onprogress?.({
+        lengthComputable: true,
+        loaded: 12,
+        total: 12,
+      } as ProgressEvent);
+      this.onload?.();
+    });
+  }
+}
+
 describe('W3dsVideoApiClient', () => {
   it('sends cookie credentials for draft create/list/read/update/delete', async () => {
     const draft = {
@@ -76,6 +143,123 @@ describe('W3dsVideoApiClient', () => {
     const headers = new Headers(init?.headers);
     expect(headers.get('Authorization')).toBeNull();
     expect(init?.credentials).toBe('include');
+  });
+
+  it('uploads draft media with cookie credentials, progress, and public asset metadata only', async () => {
+    FakeXMLHttpRequest.responders = [];
+    const progress: number[] = [];
+    const client = new W3dsVideoApiClient({
+      createXHR: () => new FakeXMLHttpRequest() as unknown as XMLHttpRequest,
+    });
+
+    const body = new Blob(['hello-video'], { type: 'video/mp4' });
+    const uploadPromise = client.uploadDraftMedia(
+      'draft-1',
+      { name: 'clip.mp4', size: body.size, type: 'video/mp4', body },
+      { onProgress: (event) => progress.push(event.percent) },
+    );
+
+    await Promise.resolve();
+    const xhr = FakeXMLHttpRequest.last;
+    expect(xhr).toBeDefined();
+    expect(xhr?.method).toBe('POST');
+    expect(xhr?.url).toBe('/api/videos/drafts/draft-1/media');
+    expect(xhr?.withCredentials).toBe(true);
+    expect(xhr?.headers.get('Content-Type')).toBe('video/mp4');
+    expect(xhr?.headers.get('X-Original-Filename')).toBe('clip.mp4');
+    expect(xhr?.headers.has('Content-Length')).toBe(false);
+    expect(xhr?.headers.has('Authorization')).toBe(false);
+    expect(xhr?.body).toBe(body);
+
+    const asset = await uploadPromise;
+    expect(asset).toEqual(publicAsset);
+    expect(asset).not.toHaveProperty('storageKey');
+    expect(progress.at(-1)).toBe(100);
+    expect(client.draftMediaContentPath('draft-1', 'asset-1')).toBe(
+      '/api/videos/drafts/draft-1/media/asset-1/content',
+    );
+  });
+
+  it('cancels an in-flight media upload when aborted', async () => {
+    FakeXMLHttpRequest.responders = [
+      (xhr) => {
+        // Leave the request hanging until abort.
+        void xhr;
+      },
+    ];
+    const controller = new AbortController();
+    const client = new W3dsVideoApiClient({
+      createXHR: () => new FakeXMLHttpRequest() as unknown as XMLHttpRequest,
+    });
+    const body = new Blob(['bytes'], { type: 'video/mp4' });
+    const uploadPromise = client.uploadDraftMedia(
+      'draft-1',
+      { name: 'clip.mp4', size: body.size, type: 'video/mp4', body },
+      { signal: controller.signal },
+    );
+    await Promise.resolve();
+    controller.abort();
+    await expect(uploadPromise).rejects.toMatchObject({ name: 'AbortError' });
+    expect(FakeXMLHttpRequest.last?.aborted).toBe(true);
+  });
+
+  it('surfaces network failures from media upload', async () => {
+    FakeXMLHttpRequest.responders = [
+      (xhr) => {
+        xhr.onerror?.();
+      },
+    ];
+    const client = new W3dsVideoApiClient({
+      createXHR: () => new FakeXMLHttpRequest() as unknown as XMLHttpRequest,
+    });
+    const body = new Blob(['bytes'], { type: 'video/mp4' });
+    await expect(
+      client.uploadDraftMedia('draft-1', {
+        name: 'clip.mp4',
+        size: body.size,
+        type: 'video/mp4',
+        body,
+      }),
+    ).rejects.toThrow(/network connection lost/i);
+  });
+
+  it('reads and deletes draft media through cookie-authenticated routes', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      expect(init?.credentials).toBe('include');
+      if (url.endsWith('/api/videos/drafts/draft-1/media/asset-1') && init?.method === 'DELETE') {
+        return new Response(null, { status: 204 });
+      }
+      if (url.endsWith('/api/videos/drafts/draft-1/media/asset-1')) {
+        return jsonResponse(publicAsset);
+      }
+      return jsonResponse({ error: { code: 'not_found', message: 'missing' } }, 404);
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    await expect(client.getDraftMedia('draft-1', 'asset-1')).resolves.toEqual(publicAsset);
+    await expect(client.deleteDraftMedia('draft-1', 'asset-1')).resolves.toBeUndefined();
+  });
+
+  it('rejects media responses that leak storage keys', async () => {
+    FakeXMLHttpRequest.responders = [
+      (xhr) => {
+        xhr.status = 201;
+        xhr.responseText = JSON.stringify({ ...publicAsset, storageKey: 'media_secret' });
+        xhr.onload?.();
+      },
+    ];
+    const client = new W3dsVideoApiClient({
+      createXHR: () => new FakeXMLHttpRequest() as unknown as XMLHttpRequest,
+    });
+    const body = new Blob(['bytes'], { type: 'video/mp4' });
+    await expect(
+      client.uploadDraftMedia('draft-1', {
+        name: 'clip.mp4',
+        size: body.size,
+        type: 'video/mp4',
+        body,
+      }),
+    ).rejects.toThrow(/forbidden storage key/i);
   });
 });
 

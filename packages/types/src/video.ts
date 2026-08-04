@@ -80,6 +80,38 @@ export interface UploadVideoResult {
   autoThumbnails: readonly string[];
 }
 
+/** Upload lifecycle for a draft-owned media asset (wire projection). */
+export type MediaUploadState = 'pending' | 'uploading' | 'ready' | 'failed';
+
+/**
+ * Browser-safe media asset metadata for an owned draft.
+ * Omits storage keys, filesystem paths, and public playback URLs.
+ */
+export interface DraftMediaAsset {
+  id: string;
+  ownerId: string;
+  videoId: VideoId;
+  originalFilename: string;
+  contentType: string;
+  byteSize: number;
+  uploadState: MediaUploadState;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** File metadata + raw body for authenticated draft media upload. */
+export interface UploadDraftMediaFile {
+  name: string;
+  size: number;
+  type: string;
+  body: Blob;
+}
+
+export interface UploadDraftMediaOptions {
+  signal?: AbortSignal;
+  onProgress?: (progress: VideoUploadProgress) => void;
+}
+
 export interface CreateVideoInput {
   channelId: ChannelId;
   uploadId: string;

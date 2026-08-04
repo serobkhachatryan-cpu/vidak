@@ -1,8 +1,15 @@
 'use client';
 
-import type { Video, VideoCategory, VideoLanguage, VideoVisibility } from '@w3ds/types';
+import type {
+  DraftMediaAsset,
+  Video,
+  VideoCategory,
+  VideoLanguage,
+  VideoVisibility,
+} from '@w3ds/types';
 import { AppShell, type AppShellProps, Button, Heading, Page } from '@w3ds/ui';
 import { type ReactNode, useId, useState } from 'react';
+import { AttachedMediaAsset } from './steps/attached-media-asset';
 import { PublishConfirmationStep } from './steps/publish-confirmation-step';
 import { SelectVideoStep } from './steps/select-video-step';
 import { ThumbnailStep } from './steps/thumbnail-step';
@@ -52,6 +59,11 @@ export interface UploadPageProps {
   uploadError?: string;
   onCancelUpload?: () => void;
   onRetryUpload?: () => void;
+  mediaAsset?: DraftMediaAsset;
+  mediaPreviewSrc?: string;
+  isRemovingMedia?: boolean;
+  removeMediaError?: string;
+  onRemoveMedia?: () => void;
   draft?: UploadDraft;
   onDraftChange?: (patch: Partial<UploadDraft>) => void;
   detailsErrors?: UploadDetailsErrors;
@@ -103,6 +115,11 @@ export function UploadPage({
   uploadError,
   onCancelUpload,
   onRetryUpload,
+  mediaAsset,
+  mediaPreviewSrc,
+  isRemovingMedia,
+  removeMediaError,
+  onRemoveMedia,
   draft: draftProp,
   onDraftChange,
   detailsErrors,
@@ -166,16 +183,32 @@ export function UploadPage({
           {...(uploadError !== undefined ? { error: uploadError } : {})}
           {...(onCancelUpload ? { onCancel: onCancelUpload } : {})}
           {...(onRetryUpload ? { onRetry: onRetryUpload } : {})}
+          {...(mediaAsset !== undefined ? { mediaAsset } : {})}
+          {...(mediaPreviewSrc !== undefined ? { mediaPreviewSrc } : {})}
+          {...(isRemovingMedia !== undefined ? { isRemovingMedia } : {})}
+          {...(removeMediaError !== undefined ? { removeMediaError } : {})}
+          {...(onRemoveMedia ? { onRemoveMedia } : {})}
         />
       );
       break;
     case 'details':
       body = (
-        <VideoDetailsStep
-          value={stepDetails(draft)}
-          {...(detailsErrors !== undefined ? { errors: detailsErrors } : {})}
-          onChange={patchDraft}
-        />
+        <div className="space-y-5">
+          {mediaAsset && (
+            <AttachedMediaAsset
+              asset={mediaAsset}
+              {...(mediaPreviewSrc !== undefined ? { previewSrc: mediaPreviewSrc } : {})}
+              {...(isRemovingMedia !== undefined ? { isRemoving: isRemovingMedia } : {})}
+              {...(removeMediaError !== undefined ? { removeError: removeMediaError } : {})}
+              {...(onRemoveMedia ? { onRemove: onRemoveMedia } : {})}
+            />
+          )}
+          <VideoDetailsStep
+            value={stepDetails(draft)}
+            {...(detailsErrors !== undefined ? { errors: detailsErrors } : {})}
+            onChange={patchDraft}
+          />
+        </div>
       );
       break;
     case 'thumbnail':

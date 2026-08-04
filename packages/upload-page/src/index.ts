@@ -1,3 +1,7 @@
+export { DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE } from './draft-before-upload';
+export { resolveVideoContentType } from './resolve-video-content-type';
+export { AttachedMediaAsset } from './steps/attached-media-asset';
+export type { UploadProgressStatus, UploadProgressView } from './steps/upload-progress-step';
 export type { UploadStepId } from './upload-constants';
 export {
   canNavigateToUploadStep,

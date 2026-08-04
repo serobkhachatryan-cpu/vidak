@@ -41,8 +41,12 @@ export {
 export type {
   CreateVideoDraftInput,
   CreateVideoInput,
+  DraftMediaAsset,
+  MediaUploadState,
   UpdateVideoDraftInput,
   UpdateVideoInput,
+  UploadDraftMediaFile,
+  UploadDraftMediaOptions,
   UploadVideoInput,
   UploadVideoOptions,
   UploadVideoResult,

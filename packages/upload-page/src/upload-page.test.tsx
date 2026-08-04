@@ -1,7 +1,21 @@
-import type { Video } from '@w3ds/types';
+import type { DraftMediaAsset, Video } from '@w3ds/types';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
+import { DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE } from './draft-before-upload';
+import { resolveVideoContentType } from './resolve-video-content-type';
 import { emptyUploadDraft, UploadPage } from './upload-page';
+
+const mediaAsset: DraftMediaAsset = {
+  id: 'asset-1',
+  ownerId: 'user-1',
+  videoId: 'draft-1',
+  originalFilename: 'demo.mp4',
+  contentType: 'video/mp4',
+  byteSize: 1_024,
+  uploadState: 'ready',
+  createdAt: '2026-08-04T10:00:00.000Z',
+  updatedAt: '2026-08-04T10:00:00.000Z',
+};
 
 const publishedVideo: Video = {
   id: 'video-new',
@@ -133,6 +147,83 @@ describe('UploadPage', () => {
     );
     expect(markup).toContain('Upload cancelled');
     expect(markup).toContain('Retry upload');
+  });
+
+  it('renders idle and validating upload states', () => {
+    const idle = renderToStaticMarkup(<UploadPage step="progress" uploadStatus="idle" />);
+    expect(idle).toContain('Ready to upload');
+
+    const validating = renderToStaticMarkup(
+      <UploadPage step="progress" fileName="demo.mp4" uploadStatus="validating" />,
+    );
+    expect(validating).toContain('Validating file format and size');
+    expect(validating).toContain('demo.mp4');
+  });
+
+  it('renders upload success with attached asset metadata and remove action', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="progress"
+        fileName="demo.mp4"
+        uploadStatus="complete"
+        progress={{
+          percent: 100,
+          bytesUploaded: 1024,
+          bytesTotal: 1024,
+          bytesPerSecond: 1024,
+          remainingSeconds: 0,
+        }}
+        mediaAsset={mediaAsset}
+        mediaPreviewSrc="/api/videos/drafts/draft-1/media/asset-1/content"
+        onRemoveMedia={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Upload complete');
+    expect(markup).toContain('Attached media');
+    expect(markup).toContain('demo.mp4');
+    expect(markup).toContain('video/mp4');
+    expect(markup).toContain('Remove');
+    expect(markup).toContain('/api/videos/drafts/draft-1/media/asset-1/content');
+  });
+
+  it('renders network error and retry affordance', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="progress"
+        fileName="demo.mp4"
+        uploadStatus="error"
+        uploadError="Network connection lost."
+        onRetryUpload={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Upload failed');
+    expect(markup).toContain('Network connection lost.');
+    expect(markup).toContain('Retry upload');
+  });
+
+  it('renders removing an attached asset on the details step', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="details"
+        draft={{
+          ...emptyUploadDraft(),
+          title: 'Demo',
+          category: 'education',
+          language: 'en',
+        }}
+        mediaAsset={mediaAsset}
+        isRemovingMedia
+        onRemoveMedia={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Attached media');
+    expect(markup).toContain('Removing…');
+  });
+
+  it('keeps draft-required messaging actionable for upload gating', () => {
+    expect(DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE).toMatch(/save your draft before uploading/i);
+    expect(resolveVideoContentType({ name: 'clip.mov', type: '' })).toBe('video/quicktime');
+    expect(resolveVideoContentType({ name: 'clip.mp4', type: 'video/mp4' })).toBe('video/mp4');
   });
 
   it('scopes the step heading id per page instance', () => {

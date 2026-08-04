@@ -286,7 +286,26 @@ Rules:
   returned `storageKey` so orphaned blobs are cleaned up.
 
 This layer intentionally stops short of multipart buffering, signed/public URLs,
-transcoding, and eVault file envelopes. Upload UI / client flows are unchanged.
+transcoding, and eVault file envelopes.
+
+### Browser client upload contract
+
+`@w3ds/api-client` (`W3dsVideoApiClient`) talks to these routes with
+same-origin `credentials: 'include'` (HttpOnly session cookie). The browser
+never receives W3DS tokens, storage keys, filesystem paths, or public media
+URLs.
+
+| Client method | Route | Notes |
+| --- | --- | --- |
+| `uploadDraftMedia(videoId, file, options)` | `POST …/media` | Raw `Blob` body + `Content-Type` / `X-Original-Filename`. Progress via XHR `upload.onprogress`. `Content-Length` is set by the browser. |
+| `getDraftMedia(videoId, assetId)` | `GET …/media/:assetId` | Public asset JSON only. |
+| `deleteDraftMedia(videoId, assetId)` | `DELETE …/media/:assetId` | `204` on success. |
+| `draftMediaContentPath(videoId, assetId)` | path helper | Same-origin authenticated content path for private preview (`<video src>`), not a public URL. |
+
+Creator upload UI (`@w3ds/upload-page`) persists a draft before media transfer,
+shows idle / validating / uploading / complete / failed / cancelled states,
+displays attached asset metadata, and removes assets through `deleteDraftMedia`.
+Development auth keeps `MockVideoApiClient` simulated uploads.
 
 ## Persistence model
 

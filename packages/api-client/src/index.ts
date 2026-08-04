@@ -2,6 +2,11 @@ export type { CreateAuthClientOptions } from './create-auth-client';
 export { createAuthClient } from './create-auth-client';
 export type { CreateVideoApiClientOptions } from './create-video-api-client';
 export { createVideoApiClient } from './create-video-api-client';
+export {
+  draftMediaAssetPath,
+  draftMediaContentPath,
+  draftMediaUploadPath,
+} from './draft-media-path';
 export type { MockAuthApiClientOptions, MockAuthUser } from './mock-auth-client';
 export { DevAuthClient, MockAuthApiClient } from './mock-auth-client';
 export {
@@ -12,7 +17,7 @@ export {
   mockVideos,
 } from './mock-data';
 export type { MockVideoApiClientOptions } from './mock-video-client';
-export { MockVideoApiClient } from './mock-video-client';
+export { MockVideoApiClient, mockUploadAutoThumbnails } from './mock-video-client';
 export { createCursorPage, getNextPageParam } from './pagination';
 export type { VideoApiClient } from './video-client';
 export type { W3dsAuthClientOptions } from './w3ds-auth-client';

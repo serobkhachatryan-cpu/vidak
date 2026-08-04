@@ -103,6 +103,35 @@ describe('MockVideoApiClient', () => {
     await expect(uploadPromise).rejects.toMatchObject({ name: 'AbortError' });
   });
 
+  it('uploads, reads, and deletes draft media assets with progress', async () => {
+    const draftClient = new MockVideoApiClient({ delayMs: 0 });
+    const draft = await draftClient.createDraft({ title: 'Media draft' });
+    const progress: number[] = [];
+    const body = new Blob(['mock-bytes'], { type: 'video/mp4' });
+    const asset = await draftClient.uploadDraftMedia(
+      draft.id,
+      { name: 'clip.mp4', size: body.size, type: 'video/mp4', body },
+      { onProgress: (event) => progress.push(event.percent) },
+    );
+
+    expect(asset).toMatchObject({
+      videoId: draft.id,
+      originalFilename: 'clip.mp4',
+      contentType: 'video/mp4',
+      uploadState: 'ready',
+    });
+    expect(asset).not.toHaveProperty('storageKey');
+    expect(progress.at(-1)).toBe(100);
+    expect(draftClient.draftMediaContentPath(draft.id, asset.id)).toBe(
+      `/api/videos/drafts/${draft.id}/media/${asset.id}/content`,
+    );
+    await expect(draftClient.getDraftMedia(draft.id, asset.id)).resolves.toMatchObject({
+      id: asset.id,
+    });
+    await draftClient.deleteDraftMedia(draft.id, asset.id);
+    await expect(draftClient.getDraftMedia(draft.id, asset.id)).rejects.toThrow(/was not found/i);
+  });
+
   it('creates and manages draft videos without changing createVideo publish behavior', async () => {
     const draftClient = new MockVideoApiClient({ delayMs: 0 });
     const draft = await draftClient.createDraft({

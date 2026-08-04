@@ -1,8 +1,22 @@
 'use client';
 
-import type { VideoApiClient } from '@w3ds/api-client';
-import type { ChannelId, Video, VideoCategory, VideoLanguage, VideoVisibility } from '@w3ds/types';
+import {
+  MockVideoApiClient,
+  mockUploadAutoThumbnails,
+  type VideoApiClient,
+} from '@w3ds/api-client';
+import type {
+  ChannelId,
+  DraftMediaAsset,
+  Video,
+  VideoCategory,
+  VideoId,
+  VideoLanguage,
+  VideoVisibility,
+} from '@w3ds/types';
 import { useEffect, useRef, useState } from 'react';
+import { DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE } from './draft-before-upload';
+import { resolveVideoContentType } from './resolve-video-content-type';
 import type { UploadProgressStatus, UploadProgressView } from './steps/upload-progress-step';
 import {
   nextUploadStep,
@@ -42,6 +56,11 @@ export interface UploadPageDataProps
     | 'uploadError'
     | 'onCancelUpload'
     | 'onRetryUpload'
+    | 'mediaAsset'
+    | 'mediaPreviewSrc'
+    | 'isRemovingMedia'
+    | 'removeMediaError'
+    | 'onRemoveMedia'
     | 'draft'
     | 'onDraftChange'
     | 'detailsErrors'
@@ -59,12 +78,15 @@ export interface UploadPageDataProps
   > {
   client: VideoApiClient;
   channelId: ChannelId;
+  /** Optional existing saved draft to attach media to. */
+  draftId?: VideoId;
   onWatchVideo?: (video: Video) => void;
 }
 
 export function UploadPageData({
   client,
   channelId: _channelId,
+  draftId: initialDraftId,
   onWatchVideo,
   onWatch,
   onUploadAnother,
@@ -76,10 +98,13 @@ export function UploadPageData({
   const [completedSteps, setCompletedSteps] = useState<UploadStepId[]>([]);
   const [file, setFile] = useState<File | undefined>();
   const [fileError, setFileError] = useState<string | undefined>();
-  const [uploadStatus, setUploadStatus] = useState<UploadProgressStatus>('uploading');
+  const [uploadStatus, setUploadStatus] = useState<UploadProgressStatus>('idle');
   const [progress, setProgress] = useState<UploadProgressView | undefined>();
   const [uploadError, setUploadError] = useState<string | undefined>();
-  const [uploadId, setUploadId] = useState<string | undefined>();
+  const [draftVideoId, setDraftVideoId] = useState<VideoId | undefined>(initialDraftId);
+  const [mediaAsset, setMediaAsset] = useState<DraftMediaAsset | undefined>();
+  const [isRemovingMedia, setIsRemovingMedia] = useState(false);
+  const [removeMediaError, setRemoveMediaError] = useState<string | undefined>();
   const [autoThumbnails, setAutoThumbnails] = useState<readonly string[]>([]);
   const [customThumbnailUrl, setCustomThumbnailUrl] = useState<string | undefined>();
   const [draft, setDraft] = useState<UploadDraft>(emptyUploadDraft);
@@ -91,13 +116,27 @@ export function UploadPageData({
   const [publishedVideo, setPublishedVideo] = useState<Video | undefined>();
   const abortRef = useRef<AbortController | undefined>(undefined);
   const customObjectUrlRef = useRef<string | undefined>(undefined);
+  const localPreviewUrlRef = useRef<string | undefined>(undefined);
+  const draftVideoIdRef = useRef<VideoId | undefined>(initialDraftId);
+
+  useEffect(() => {
+    draftVideoIdRef.current = draftVideoId;
+  }, [draftVideoId]);
 
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
       if (customObjectUrlRef.current) URL.revokeObjectURL(customObjectUrlRef.current);
+      if (localPreviewUrlRef.current) URL.revokeObjectURL(localPreviewUrlRef.current);
     };
   }, []);
+
+  const revokeLocalPreview = () => {
+    if (localPreviewUrlRef.current) {
+      URL.revokeObjectURL(localPreviewUrlRef.current);
+      localPreviewUrlRef.current = undefined;
+    }
+  };
 
   const markCompleted = (completed: UploadStepId) => {
     setCompletedSteps((current) =>
@@ -116,14 +155,19 @@ export function UploadPageData({
       URL.revokeObjectURL(customObjectUrlRef.current);
       customObjectUrlRef.current = undefined;
     }
+    revokeLocalPreview();
     setStep('select');
     setCompletedSteps([]);
     setFile(undefined);
     setFileError(undefined);
-    setUploadStatus('uploading');
+    setUploadStatus('idle');
     setProgress(undefined);
     setUploadError(undefined);
-    setUploadId(undefined);
+    draftVideoIdRef.current = initialDraftId;
+    setDraftVideoId(initialDraftId);
+    setMediaAsset(undefined);
+    setIsRemovingMedia(false);
+    setRemoveMediaError(undefined);
     setAutoThumbnails([]);
     setCustomThumbnailUrl(undefined);
     setDraft(emptyUploadDraft());
@@ -135,12 +179,42 @@ export function UploadPageData({
     setPublishedVideo(undefined);
   };
 
+  const ensureSavedDraft = async (nextFile: File, draftSnapshot: UploadDraft): Promise<VideoId> => {
+    if (draftVideoIdRef.current) return draftVideoIdRef.current;
+
+    const title =
+      draftSnapshot.title.trim() || titleFromFileName(nextFile.name) || 'Untitled video';
+
+    try {
+      const video = await client.createDraft({
+        title,
+        ...(draftSnapshot.description ? { description: draftSnapshot.description } : {}),
+        ...(draftSnapshot.tags.length > 0 ? { tags: draftSnapshot.tags } : {}),
+        ...(draftSnapshot.category ? { category: draftSnapshot.category as VideoCategory } : {}),
+        ...(draftSnapshot.language ? { language: draftSnapshot.language as VideoLanguage } : {}),
+        ...(draftSnapshot.visibility
+          ? { visibility: draftSnapshot.visibility as VideoVisibility }
+          : {}),
+        ...(draftSnapshot.thumbnailUrl ? { thumbnailUrl: draftSnapshot.thumbnailUrl } : {}),
+      });
+      draftVideoIdRef.current = video.id;
+      setDraftVideoId(video.id);
+      if (!draftSnapshot.title.trim()) {
+        patchDraft({ title });
+      }
+      return video.id;
+    } catch {
+      throw new Error(DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE);
+    }
+  };
+
   const startUpload = async (nextFile: File) => {
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
     setUploadStatus('uploading');
     setUploadError(undefined);
+    setRemoveMediaError(undefined);
     setProgress({
       percent: 0,
       bytesUploaded: 0,
@@ -151,16 +225,27 @@ export function UploadPageData({
     setStep('progress');
 
     try {
-      const result = await client.uploadVideo(
-        { name: nextFile.name, size: nextFile.size, type: nextFile.type },
+      const videoId = await ensureSavedDraft(nextFile, draft);
+      if (controller.signal.aborted) return;
+
+      const contentType = resolveVideoContentType(nextFile);
+      const asset = await client.uploadDraftMedia(
+        videoId,
+        {
+          name: nextFile.name,
+          size: nextFile.size,
+          type: contentType,
+          body: nextFile,
+        },
         {
           signal: controller.signal,
           onProgress: setProgress,
         },
       );
       if (controller.signal.aborted) return;
-      setUploadId(result.uploadId);
-      setAutoThumbnails(result.autoThumbnails);
+
+      revokeLocalPreview();
+      setMediaAsset(asset);
       setUploadStatus('complete');
       setProgress((current) =>
         current
@@ -169,10 +254,18 @@ export function UploadPageData({
       );
       markCompleted('select');
       markCompleted('progress');
-      patchDraft({
-        title: titleFromFileName(result.fileName),
-        thumbnailUrl: result.autoThumbnails[0] ?? '',
-      });
+      if (client instanceof MockVideoApiClient) {
+        setAutoThumbnails(mockUploadAutoThumbnails);
+        patchDraft({
+          title: draft.title.trim() || titleFromFileName(asset.originalFilename),
+          thumbnailUrl: draft.thumbnailUrl || mockUploadAutoThumbnails[0] || '',
+        });
+      } else {
+        setAutoThumbnails([]);
+        patchDraft({
+          title: draft.title.trim() || titleFromFileName(asset.originalFilename),
+        });
+      }
       setStep('details');
     } catch (reason) {
       if (
@@ -189,9 +282,17 @@ export function UploadPageData({
   };
 
   const onFileSelect = (nextFile: File) => {
+    setUploadStatus('validating');
+    setFileError(undefined);
+    setUploadError(undefined);
     const error = validateVideoFile(nextFile);
-    setFileError(error);
-    if (error) return;
+    if (error) {
+      setFileError(error);
+      setUploadStatus('idle');
+      setStep('select');
+      return;
+    }
+    revokeLocalPreview();
     setFile(nextFile);
     void startUpload(nextFile);
   };
@@ -204,10 +305,33 @@ export function UploadPageData({
 
   const onRetryUpload = () => {
     if (!file) {
+      setUploadStatus('idle');
       setStep('select');
       return;
     }
     void startUpload(file);
+  };
+
+  const onRemoveMedia = async () => {
+    const videoId = draftVideoIdRef.current;
+    if (!mediaAsset || !videoId) return;
+    setIsRemovingMedia(true);
+    setRemoveMediaError(undefined);
+    try {
+      await client.deleteDraftMedia(videoId, mediaAsset.id);
+      revokeLocalPreview();
+      setMediaAsset(undefined);
+      setAutoThumbnails([]);
+      setUploadStatus('idle');
+      setProgress(undefined);
+      setCompletedSteps((current) => current.filter((item) => item !== 'progress'));
+    } catch (reason) {
+      setRemoveMediaError(
+        reason instanceof Error ? reason.message : 'Could not remove the attached media.',
+      );
+    } finally {
+      setIsRemovingMedia(false);
+    }
   };
 
   const onCustomThumbnailSelect = (image: File) => {
@@ -260,7 +384,6 @@ export function UploadPageData({
 
   const onPublish = async () => {
     const error = validateSaveDraft({
-      uploadId,
       title: draft.title,
       description: draft.description,
       tags: draft.tags,
@@ -277,7 +400,7 @@ export function UploadPageData({
     setIsPublishing(true);
     setPublishError(undefined);
     try {
-      const video = await client.createDraft({
+      const metadata = {
         title: draft.title,
         description: draft.description,
         tags: draft.tags,
@@ -285,7 +408,15 @@ export function UploadPageData({
         language: draft.language as VideoLanguage,
         visibility: draft.visibility as VideoVisibility,
         thumbnailUrl: draft.thumbnailUrl,
-      });
+      };
+      const existingId = draftVideoIdRef.current;
+      const video = existingId
+        ? await client.updateDraft(existingId, metadata)
+        : await client.createDraft(metadata);
+      if (!existingId) {
+        draftVideoIdRef.current = video.id;
+        setDraftVideoId(video.id);
+      }
       markCompleted('details');
       markCompleted('thumbnail');
       markCompleted('visibility');
@@ -297,6 +428,11 @@ export function UploadPageData({
       setIsPublishing(false);
     }
   };
+
+  const mediaPreviewSrc =
+    mediaAsset && draftVideoId && mediaAsset.uploadState === 'ready'
+      ? client.draftMediaContentPath(draftVideoId, mediaAsset.id)
+      : undefined;
 
   return (
     <UploadPage
@@ -312,6 +448,13 @@ export function UploadPageData({
       {...(uploadError !== undefined ? { uploadError } : {})}
       onCancelUpload={onCancelUpload}
       onRetryUpload={onRetryUpload}
+      {...(mediaAsset !== undefined ? { mediaAsset } : {})}
+      {...(mediaPreviewSrc !== undefined ? { mediaPreviewSrc } : {})}
+      isRemovingMedia={isRemovingMedia}
+      {...(removeMediaError !== undefined ? { removeMediaError } : {})}
+      onRemoveMedia={() => {
+        void onRemoveMedia();
+      }}
       draft={draft}
       onDraftChange={patchDraft}
       {...(detailsErrors !== undefined ? { detailsErrors } : {})}

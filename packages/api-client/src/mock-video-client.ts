@@ -11,6 +11,7 @@ import type {
   CreateVideoDraftInput,
   CreateVideoInput,
   CursorPage,
+  DraftMediaAsset,
   PaginationParams,
   Playlist,
   PlaylistId,
@@ -20,6 +21,8 @@ import type {
   UpdateVideoDraftInput,
   UpdateVideoInput,
   UploadAvatarInput,
+  UploadDraftMediaFile,
+  UploadDraftMediaOptions,
   UploadVideoInput,
   UploadVideoOptions,
   UploadVideoResult,
@@ -35,6 +38,7 @@ import {
   maxAvatarFileSizeBytes,
   supportedAvatarMimeTypes,
 } from '@w3ds/types';
+import { draftMediaContentPath } from './draft-media-path';
 import {
   mockChannels,
   mockComments,
@@ -45,12 +49,15 @@ import {
 import { createCursorPage } from './pagination';
 import type { VideoApiClient } from './video-client';
 
-const autoThumbnailUrls = [
+/** Placeholder thumbs for the development mock upload UX only (not from the media API). */
+export const mockUploadAutoThumbnails = [
   'https://images.unsplash.com/photo-1558655146-d09347e92766?w=1280&h=720&fit=crop',
   'https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1280&h=720&fit=crop',
   'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1280&h=720&fit=crop',
   'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1280&h=720&fit=crop',
 ] as const;
+
+const autoThumbnailUrls = mockUploadAutoThumbnails;
 
 const defaultConnectedAccounts: readonly ConnectedAccount[] = [
   {
@@ -90,10 +97,12 @@ export class MockVideoApiClient implements VideoApiClient {
   private preferencesByUserId = new Map<UserProfileId, UserPreferences>();
   private connectedAccountsByUserId = new Map<UserProfileId, ConnectedAccount[]>();
   private uploadSequence = 0;
+  private mediaSequence = 0;
   private readonly completedUploads = new Map<
     string,
     { fileName: string; durationSeconds: number }
   >();
+  private readonly draftMediaById = new Map<string, DraftMediaAsset>();
 
   constructor(options: MockVideoApiClientOptions = {}) {
     this.delayMs = options.delayMs ?? 0;
@@ -533,11 +542,91 @@ export class MockVideoApiClient implements VideoApiClient {
     const video = this.videos.find((item) => item.id === id && item.status === 'draft');
     if (!video) throw new Error(`Draft ${id} was not found`);
     this.videos = this.videos.filter((item) => item.id !== id);
+    for (const [assetId, asset] of this.draftMediaById) {
+      if (asset.videoId === id) this.draftMediaById.delete(assetId);
+    }
     this.channels = this.channels.map((channel) =>
       channel.id === video.channelId
         ? { ...channel, videoCount: Math.max(0, channel.videoCount - 1) }
         : channel,
     );
+  }
+
+  async uploadDraftMedia(
+    videoId: VideoId,
+    file: UploadDraftMediaFile,
+    options: UploadDraftMediaOptions = {},
+  ): Promise<DraftMediaAsset> {
+    const draft = this.videos.find((item) => item.id === videoId && item.status === 'draft');
+    if (!draft) throw new Error(`Draft ${videoId} was not found`);
+
+    const total = Math.max(file.size, 1);
+    const steps = 20;
+    const chunk = Math.max(Math.floor(total / steps), 1);
+    let uploaded = 0;
+    const startedAt = Date.now();
+    const tickMs = this.delayMs > 0 ? Math.max(Math.floor(this.delayMs / 4), 16) : 16;
+
+    while (uploaded < total) {
+      if (options.signal?.aborted) {
+        throw new DOMException('Upload cancelled', 'AbortError');
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, tickMs));
+      uploaded = Math.min(total, uploaded + chunk);
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+      const bytesPerSecond = uploaded / elapsedSeconds;
+      options.onProgress?.({
+        bytesUploaded: uploaded,
+        bytesTotal: total,
+        percent: Math.round((uploaded / total) * 100),
+        bytesPerSecond,
+        remainingSeconds: (total - uploaded) / Math.max(bytesPerSecond, 1),
+      });
+    }
+
+    this.mediaSequence += 1;
+    const now = new Date().toISOString();
+    const asset: DraftMediaAsset = {
+      id: `asset-${this.mediaSequence}`,
+      ownerId: this.currentUserId,
+      videoId,
+      originalFilename: file.name,
+      contentType: file.type || 'video/mp4',
+      byteSize: file.size,
+      uploadState: 'ready',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.draftMediaById.set(asset.id, asset);
+
+    this.uploadSequence += 1;
+    const uploadId = `upload-${this.uploadSequence}`;
+    const durationSeconds = Math.max(30, Math.min(900, Math.round(file.size / 250_000)));
+    this.completedUploads.set(uploadId, { fileName: file.name, durationSeconds });
+
+    return { ...asset };
+  }
+
+  async getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset> {
+    await this.wait();
+    const asset = this.draftMediaById.get(assetId);
+    if (!asset || asset.videoId !== videoId) {
+      throw new Error(`Media asset ${assetId} was not found`);
+    }
+    return { ...asset };
+  }
+
+  async deleteDraftMedia(videoId: VideoId, assetId: string): Promise<void> {
+    await this.wait();
+    const asset = this.draftMediaById.get(assetId);
+    if (!asset || asset.videoId !== videoId) {
+      throw new Error(`Media asset ${assetId} was not found`);
+    }
+    this.draftMediaById.delete(assetId);
+  }
+
+  draftMediaContentPath(videoId: VideoId, assetId: string): string {
+    return draftMediaContentPath(videoId, assetId);
   }
 
   private filterVideos(filters: VideoListFilters): readonly Video[] {

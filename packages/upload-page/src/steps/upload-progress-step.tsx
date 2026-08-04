@@ -1,9 +1,17 @@
 'use client';
 
+import type { DraftMediaAsset } from '@w3ds/types';
 import { Button, ErrorState, Progress, Text } from '@w3ds/ui';
 import { formatBytes, formatRemainingTime, formatSpeed } from '../upload-constants';
+import { AttachedMediaAsset } from './attached-media-asset';
 
-export type UploadProgressStatus = 'uploading' | 'cancelled' | 'error' | 'complete';
+export type UploadProgressStatus =
+  | 'idle'
+  | 'validating'
+  | 'uploading'
+  | 'cancelled'
+  | 'error'
+  | 'complete';
 
 export interface UploadProgressView {
   percent: number;
@@ -20,6 +28,11 @@ export interface UploadProgressStepProps {
   error?: string;
   onCancel?: () => void;
   onRetry?: () => void;
+  mediaAsset?: DraftMediaAsset;
+  mediaPreviewSrc?: string;
+  isRemovingMedia?: boolean;
+  removeMediaError?: string;
+  onRemoveMedia?: () => void;
 }
 
 export function UploadProgressStep({
@@ -29,7 +42,34 @@ export function UploadProgressStep({
   error,
   onCancel,
   onRetry,
+  mediaAsset,
+  mediaPreviewSrc,
+  isRemovingMedia,
+  removeMediaError,
+  onRemoveMedia,
 }: UploadProgressStepProps) {
+  if (status === 'idle') {
+    return (
+      <div className="space-y-2">
+        <Text className="font-semibold">Ready to upload</Text>
+        <Text size="sm" tone="muted">
+          Select a supported video file to begin uploading to your draft.
+        </Text>
+      </div>
+    );
+  }
+
+  if (status === 'validating') {
+    return (
+      <div className="space-y-2">
+        <Text className="font-semibold">{fileName ?? 'Checking video'}</Text>
+        <Text size="sm" tone="muted">
+          Validating file format and size…
+        </Text>
+      </div>
+    );
+  }
+
   if (status === 'error' || status === 'cancelled') {
     return (
       <ErrorState
@@ -53,7 +93,7 @@ export function UploadProgressStep({
       <div className="space-y-1">
         <Text className="font-semibold">{fileName ?? 'Uploading video'}</Text>
         <Text size="sm" tone="muted">
-          {status === 'complete' ? 'Upload complete' : 'Uploading to W3DS…'}
+          {status === 'complete' ? 'Upload complete' : 'Uploading to your draft…'}
         </Text>
       </div>
       <Progress value={percent} label="Upload progress" />
@@ -83,6 +123,15 @@ export function UploadProgressStep({
         <Button type="button" variant="secondary" onClick={onCancel}>
           Cancel upload
         </Button>
+      )}
+      {status === 'complete' && mediaAsset && (
+        <AttachedMediaAsset
+          asset={mediaAsset}
+          {...(mediaPreviewSrc !== undefined ? { previewSrc: mediaPreviewSrc } : {})}
+          {...(isRemovingMedia !== undefined ? { isRemoving: isRemovingMedia } : {})}
+          {...(removeMediaError !== undefined ? { removeError: removeMediaError } : {})}
+          {...(onRemoveMedia ? { onRemove: onRemoveMedia } : {})}
+        />
       )}
     </div>
   );
