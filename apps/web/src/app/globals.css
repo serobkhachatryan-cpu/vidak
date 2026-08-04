@@ -3,6 +3,7 @@
 
 @source "../../../../packages/channel-page/src";
 @source "../../../../packages/ui/src";
+@source "../../../../packages/user-profile-page/src";
 @source "../../../../packages/watch-page/src";
 @source "../features";
 

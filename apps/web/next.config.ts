@@ -9,6 +9,7 @@ const nextConfig: NextConfig = {
     '@w3ds/auth',
     '@w3ds/hooks',
     '@w3ds/ui',
+    '@w3ds/user-profile-page',
     '@w3ds/watch-page',
   ],
 };

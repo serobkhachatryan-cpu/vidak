@@ -6,9 +6,13 @@ export const mockUserProfiles: readonly UserProfile[] = [
     handle: 'ada-lovelace',
     displayName: 'Ada Lovelace',
     avatarUrl: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=160&h=160&fit=crop',
+    bannerUrl: 'https://images.unsplash.com/photo-1522252234503-e356532cafd5?w=1600&h=400&fit=crop',
     bio: 'Building thoughtful tools for curious people.',
+    location: 'London, United Kingdom',
+    websiteUrl: 'https://example.com/ada',
     joinedAt: '2025-01-12T09:00:00.000Z',
     subscriberCount: 152_400,
+    followingCount: 184,
     isVerified: true,
   },
   {
@@ -18,6 +22,7 @@ export const mockUserProfiles: readonly UserProfile[] = [
     avatarUrl: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=160&h=160&fit=crop',
     joinedAt: '2025-05-20T09:00:00.000Z',
     subscriberCount: 8_240,
+    followingCount: 42,
     isVerified: false,
   },
 ];
