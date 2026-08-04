@@ -1,47 +1,40 @@
-# W3DS Resource Authorization Foundation
+# W3DS Resource Authorization
 
-**Status:** Phase 1 foundation (policy evaluation only)  
+**Status:** Phase 2 — durable authorization sync (fail-closed without official SDK)  
 **Date:** 2026-08-04  
-**Scope:** Server-only authorization model for creator videos and media  
-**Non-goals:** Route/UI wiring, eVault ACL mutations, grant sync, share management
+**Scope:** Server-only authorization model + durable grant/revoke/reconcile sync layer  
+**Non-goals:** Route/UI wiring, automatic background workers, share-management UI, fabricated eVault HTTP
 
 ---
 
 ## 1. Purpose
 
-Vidak already authenticates users through W3DS (`w3ds://auth`) and enforces
-local ownership plus product visibility on video/media routes. This foundation
-adds a **provider-neutral, server-only authorization model** that later phases
-can use to delegate access decisions to W3DS without rewriting product semantics.
+Vidak authenticates users through W3DS (`w3ds://auth`) and enforces local
+ownership plus product visibility on video/media routes. Authorization is split
+into:
 
-Phase 1:
+1. **Phase 1 foundation** — provider-neutral resource/subject/scope model and
+   local policy evaluation
+2. **Phase 2 sync layer** — durable, retryable ownership/grant synchronization
+   through an official W3DS authorization/ACL client boundary
 
-- Defines resource, subject, owner, and access-scope types
-- Evaluates the **same** local ownership / visibility rules used today
-- Exposes an authorization-provider interface with explicit capability detection
-- Does **not** change route handlers, public APIs, or UI behavior
-- Performs **no** Registry / eVault / ACL network mutations
+Phase 2 persists sync intent and can drive remote mutations **only** via
+officially supported SDK methods. This repository does **not** currently install
+those methods, so production remains fail-closed for remote sync.
 
 ---
 
-## 2. Model
+## 2. Model (Phase 1)
 
 ### Subject (canonical identity)
-
-Authorization subjects are derived only from authenticated W3DS platform
-identity:
 
 | Field | Source | Role |
 | --- | --- | --- |
 | `platformUserId` | `AuthUser.id` / JWT `sub` | Local ownership key |
-| `eName` | Verified W3ID (`@…`) | Global identity for later grants |
-| `eVaultId` | Registry-resolved vault id | Future ownership / ACL binding |
+| `eName` | Verified W3ID (`@…`) | Global identity for grants |
+| `eVaultId` | Registry-resolved vault id | Ownership / ACL binding |
 
-**Not subjects:** email, display name, browser storage keys, client-supplied ids,
-or any identifier the browser can forge.
-
-Anonymous callers are modeled as `{ kind: 'anonymous' }` and never synthesize a
-subject.
+**Not subjects:** email, display name, browser storage keys, client-supplied ids.
 
 ### Resource
 
@@ -50,49 +43,103 @@ subject.
 | `creator_video` | `videos.id` | `vra_1_v_<digest>_<encodedLocalId>` |
 | `media_asset` | `media_assets.id` | `vra_1_m_<digest>_<encodedLocalId>` |
 
-Opaque `resourceId` values are deterministic and server-decodable. They are
-suitable as stable keys for later W3DS-backed ownership and grant
-synchronization. They are not public product URLs (those continue to use
-`publicVideoId`).
-
-### Owner
-
-```ts
-{ platformUserId: string; eName?: string }
-```
-
-Ownership decisions today compare `platformUserId`. `eName` is retained on the
-descriptor for later `ownerEnamePath` / grant sync.
+Opaque `resourceId` values are the stable keys used by the sync layer.
 
 ### Access scopes
 
 | Scope | Meaning |
 | --- | --- |
 | `video:owner` | Owner draft/publish/unpublish mutations |
-| `video:read` | Read video metadata (owner or anonymous public/unlisted detail) |
+| `video:read` | Read video metadata |
 | `video:discover` | Appear in anonymous discovery listing |
 | `media:owner` | Owner media upload/download/delete |
-| `media:read` | Stream/download media (owner or anonymous public/unlisted) |
+| `media:read` | Stream/download media |
 
-Scopes are product vocabulary. They are **not** raw eVault ACL arrays.
+Scopes are product vocabulary — not raw eVault ACL arrays.
+
+Local policy still mirrors current ownership and public/unlisted/private rules.
+`authorize()` does not perform remote ACL evaluation.
 
 ---
 
-## 3. Local policy (preserved behavior)
+## 3. Durable synchronization (Phase 2)
 
-`evaluateLocalResourcePolicy` mirrors current route/store guarantees:
+### Official client boundary
 
-| Caller | Resource state | `video:owner` / `media:owner` | `video:read` / `media:read` | `video:discover` |
-| --- | --- | --- | --- | --- |
-| Owner | any | allow | allow | n/a (listing is anonymous) |
-| Other user | any | deny (`not_owner`) | same as anonymous | n/a |
-| Anonymous | `draft` | deny | deny | deny |
-| Anonymous | `published` + `private` | deny | deny | deny |
-| Anonymous | `published` + `unlisted` | deny | allow | deny |
-| Anonymous | `published` + `public` | deny | allow | allow |
+`W3dsAuthorizationOfficialClient` is the only allowed remote mutation surface:
 
-Publish/unpublish still do not change visibility. This phase only evaluates
-policy; existing services continue to enforce access.
+- `ensureResourceOwner`
+- `grantAccess`
+- `revokeAccess`
+- optional `listAccessGrants` (reconcile read-back)
+
+Implementations may wrap installed SDK methods only. Raw GraphQL/HTTP ACL calls
+are not permitted.
+
+`resolveW3dsAuthorizationOfficialClient()` currently returns **unavailable**
+because:
+
+1. `@w3ds/sdk` is an empty module with no authorization/ACL API
+2. No installed dependency documents a supported authorization-mutation client
+3. Remote mutation credentials beyond existing W3DS auth gates are therefore
+   undefined
+
+Exact gap strings live in `W3DS_AUTHORIZATION_SDK_GAPS` and are surfaced by
+config diagnostics and `sdk_unavailable` errors.
+
+### Sync service operations
+
+`W3dsAuthorizationSyncService` supports:
+
+| Operation | Behavior |
+| --- | --- |
+| `grant` | Persist intent=`grant`, ensure owner, grant scope; idempotent |
+| `revoke` | Persist intent=`revoke`, revoke remote access; idempotent; retries never restore access |
+| `reconcile` | Ensure owner, grant intended entries, revoke previously tracked grants omitted from the intended set |
+
+All operations fail closed when:
+
+- W3DS auth configuration is missing
+- the official client is unavailable / misconfigured
+- a remote mutation throws
+
+They never silently fall back to a local grant or report successful remote sync
+on failure.
+
+### Sync states
+
+Table: `w3ds_authorization_sync` (one row per `resourceId` + `subjectEName` + `scope`)
+
+| `sync_status` | Meaning |
+| --- | --- |
+| `pending` | Intent recorded; remote mutation not yet confirmed |
+| `synced` | Remote grant confirmed for intent=`grant` |
+| `revoked` | Remote revoke confirmed for intent=`revoke` |
+| `failed` | Last remote attempt failed; safe redacted `failure_reason` stored |
+
+Also persisted: resource/subject/scope intent, optional `external_grant_id` /
+`external_owner_binding_id`, `attempt_count`, `last_attempted_at`,
+`last_synced_at`.
+
+### Retry semantics
+
+1. Re-running `grant` after `synced` is a no-op (no duplicate remote grant).
+2. Re-running `revoke` after `revoked` is a no-op (access stays revoked).
+3. Re-running after `failed` increments `attempt_count` and retries the remote
+   mutation for the current intent.
+4. Changing intent (`grant` ↔ `revoke`) resets status to `pending` and clears
+   the previous failure reason before the next attempt.
+5. Partial remote failure leaves the row `failed` and throws `sync_failed`
+   (503). Callers must not treat the resource as remotely synchronized.
+
+### Secret handling
+
+- W3DS credentials and raw remote errors stay server-only
+- `failure_reason` is passed through `redactAuthorizationFailureReason` before
+  persistence (strips bearer tokens, JWTs, password/secret fields, credential
+  URLs)
+- Sync records, credentials, and remote payloads must not be returned to browser
+  clients or logged in raw form
 
 ---
 
@@ -103,43 +150,42 @@ policy; existing services continue to enforce access.
 | `local` | `AUTH_PROVIDER=dev` (default), or `W3DS_AUTHZ_PROVIDER=local` | Explicit development/local policy |
 | `w3ds` | `AUTH_PROVIDER=w3ds` (default), or `W3DS_AUTHZ_PROVIDER=w3ds` | W3DS-oriented boundary |
 
-Capability matrix (Phase 1):
-
-| Capability | `local` | `w3ds` |
-| --- | --- | --- |
-| `localPolicyEvaluation` | yes | yes |
-| `remoteGrantEvaluation` | no | no |
-| `remoteGrantMutation` | no | no |
-| `grantSynchronization` | no | no |
+| Capability | `local` | `w3ds` (today) | `w3ds` + official SDK client |
+| --- | --- | --- | --- |
+| `localPolicyEvaluation` | yes | yes | yes |
+| `remoteGrantEvaluation` | no | no | no (no evaluate API installed) |
+| `remoteGrantMutation` | no | no | yes |
+| `grantSynchronization` | no | no | yes |
 
 Rules:
 
 1. Development never silently claims W3DS remote capabilities.
 2. Constructing the W3DS provider without W3DS auth configuration fails closed
    (`configuration_error` / 503).
-3. Requiring an unavailable capability fails closed
-   (`capability_unavailable` / 503).
-4. `authorize()` performs **local policy only** and does not call Registry,
-   eVault, or any remote ACL API.
+3. Requiring sync/mutation without an official client fails closed
+   (`capability_unavailable` / `sdk_unavailable` / 503) and reports the exact
+   missing SDK gaps.
+4. `authorize()` remains local-policy-only; sync is a separate server adapter.
 
 ---
 
 ## 5. Server-only configuration
 
-Authorization configuration is server-only. Do not expose these values through
-`NEXT_PUBLIC_*`.
+Do not expose these values through `NEXT_PUBLIC_*`.
 
 | Variable | Purpose |
 | --- | --- |
-| `AUTH_PROVIDER` | Selects auth mode; also defaults authz provider (`dev` → `local`, `w3ds` → `w3ds`) |
+| `AUTH_PROVIDER` | Auth mode; defaults authz provider (`dev` → `local`, `w3ds` → `w3ds`) |
 | `W3DS_AUTHZ_PROVIDER` | Optional override: `local` \| `w3ds` |
-| `W3DS_REGISTRY_BASE_URL` | Part of “W3DS authorization configured” gate |
+| `W3DS_REGISTRY_BASE_URL` | Part of W3DS authorization configured gate |
 | `W3DS_AUTH_JWT_SECRET` | Part of configured gate (≥ 32 characters) |
-| `DATABASE_URL` | Part of configured gate (durable identity/session store) |
+| `DATABASE_URL` | Durable identity/session/sync store |
 
-“Configured” for the W3DS authorization provider means the same server secrets
-already required for W3DS authentication. It does **not** enable remote grant
-evaluation or mutation in this phase.
+“Configured” means W3DS auth secrets + registry + database are present. It does
+**not** enable remote mutation until an official authorization SDK client exists.
+
+When an official SDK is added later, document any additional SDK-required
+credentials here. Do not invent them ahead of the SDK.
 
 ---
 
@@ -147,20 +193,38 @@ evaluation or mutation in this phase.
 
 | Path | Role |
 | --- | --- |
-| `apps/web/src/server/resource-authorization.ts` | Model, policy, providers, config, opaque ids |
-| `apps/web/src/server/resource-authorization-errors.ts` | Typed errors |
-| `apps/web/src/server/resource-authorization.test.ts` | Unit tests |
+| `apps/web/src/server/resource-authorization.ts` | Model, policy, providers, opaque ids |
+| `apps/web/src/server/w3ds-authorization-sync.ts` | Durable sync service + redaction |
+| `apps/web/src/server/w3ds-authorization-official-client.ts` | Official client boundary + fake test client |
+| `apps/web/src/server/w3ds-authorization-sync-store.ts` | Durable sync persistence |
+| `apps/web/src/server/db/schema.ts` | `w3ds_authorization_sync` table |
+| `apps/web/drizzle/0004_*.sql` | Migration |
 
-Browser packages (`@w3ds/auth`, `@w3ds/api-client`) do not import this module.
-Routes are not wired yet; `getResourceAuthorizationProvider()` exists for later
-integration.
+Browser packages do not import these modules. Routes/UI are not wired in this
+phase. No automatic background worker is started.
 
 ---
 
-## 7. Explicit non-goals (this phase)
+## 7. Operational failure behavior
 
-- W3DS / eVault network calls for ACL reads or writes
-- Remote grant creation, revocation, or background synchronization
+| Condition | Result |
+| --- | --- |
+| `AUTH_PROVIDER`/`W3DS_AUTHZ_PROVIDER` selects `w3ds` without auth config | Provider construction fails (`configuration_error` / 503) |
+| Sync called without official SDK client | `sdk_unavailable` / 503 with exact missing capability text |
+| Sync called without auth config | `configuration_error` / 503 |
+| Remote ensure/grant/revoke throws | Row → `failed`, redacted reason stored, `sync_failed` / 503 |
+| Duplicate grant/revoke | No-op success using durable terminal state |
+| Official client becomes available later | Inject/resolve client; capabilities flip on for mutation/sync |
+
+Monitor `sdk_unavailable`, `configuration_error`, and `sync_failed` separately
+from client auth failures (`invalid_session` / 401).
+
+---
+
+## 8. Explicit non-goals (this phase)
+
+- Fabricated eVault GraphQL/HTTP ACL integrations
+- Automatic background retry workers
 - Share-management routes or UI
 - Changes to public/discovery/media route behavior
 - Browser secrets or protocol URLs in the client bundle
@@ -168,12 +232,12 @@ integration.
 
 ---
 
-## 8. Acceptance criteria
+## 9. Acceptance criteria
 
-1. Subjects are W3DS identity fields only; email cannot authorize.
-2. Local ownership and public/unlisted/private visibility decisions match today’s
-   product rules.
-3. Provider capabilities are explicit; unavailable capabilities fail closed.
-4. Development remains on the local provider without silent W3DS remote grants.
-5. Opaque resource ids are stable and resolvable server-side.
-6. No route/UI behavior changes and no W3DS network mutations ship in this phase.
+1. Subjects remain W3DS identity fields only.
+2. Opaque Phase 1 resource ids are the sync keys.
+3. Grant / revoke / reconcile are idempotent and durable.
+4. Missing official SDK/config fails closed with exact gap reporting.
+5. Remote failures never report successful sync or fall back to local grants.
+6. Secrets and raw remote errors are redacted from persisted failure reasons.
+7. No route/UI/worker behavior changes ship in this phase.

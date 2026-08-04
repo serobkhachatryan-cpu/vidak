@@ -1,6 +1,15 @@
 import type { AuthUserPermissions, Role } from '@w3ds/auth';
 import type { VideoCategory, VideoLanguage, VideoStatus, VideoVisibility } from '@w3ds/types';
-import { boolean, index, integer, jsonb, pgTable, text, timestamp } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  text,
+  timestamp,
+  uniqueIndex,
+} from 'drizzle-orm/pg-core';
 
 /**
  * Durable W3DS platform identity. One row per global eName.
@@ -177,9 +186,66 @@ export const w3dsPlatformSessions = pgTable(
   ],
 );
 
+/**
+ * Durable intent + sync state for W3DS resource authorization grants.
+ * Server-only — never expose rows, credentials, or raw remote errors to browsers.
+ *
+ * One row per (resourceId, subjectEName, scope). Intent is grant|revoke; remote
+ * mutations are retryable via status/attempt metadata. Failure reasons must be
+ * pre-redacted (no secrets, tokens, or credential-bearing URLs).
+ */
+export type W3dsAuthorizationSyncIntent = 'grant' | 'revoke';
+export type W3dsAuthorizationSyncStatus = 'pending' | 'synced' | 'failed' | 'revoked';
+export type W3dsAuthorizationResourceKind = 'creator_video' | 'media_asset';
+export type W3dsAuthorizationAccessScope =
+  | 'video:owner'
+  | 'video:read'
+  | 'video:discover'
+  | 'media:owner'
+  | 'media:read';
+
+export const w3dsAuthorizationSync = pgTable(
+  'w3ds_authorization_sync',
+  {
+    id: text('id').primaryKey(),
+    resourceKind: text('resource_kind').$type<W3dsAuthorizationResourceKind>().notNull(),
+    /** Opaque Phase 1 resource id (`vra_1_*`). */
+    resourceId: text('resource_id').notNull(),
+    localResourceId: text('local_resource_id').notNull(),
+    ownerPlatformUserId: text('owner_platform_user_id').notNull(),
+    ownerEName: text('owner_e_name').notNull(),
+    subjectPlatformUserId: text('subject_platform_user_id'),
+    subjectEName: text('subject_e_name').notNull(),
+    subjectEVaultId: text('subject_e_vault_id'),
+    scope: text('scope').$type<W3dsAuthorizationAccessScope>().notNull(),
+    intent: text('intent').$type<W3dsAuthorizationSyncIntent>().notNull(),
+    syncStatus: text('sync_status').$type<W3dsAuthorizationSyncStatus>().notNull(),
+    externalGrantId: text('external_grant_id'),
+    externalOwnerBindingId: text('external_owner_binding_id'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastAttemptedAt: timestamp('last_attempted_at', { withTimezone: true, mode: 'date' }),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true, mode: 'date' }),
+    /** Safe, non-secret failure summary only. */
+    failureReason: text('failure_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('w3ds_authorization_sync_resource_subject_scope_uidx').on(
+      table.resourceId,
+      table.subjectEName,
+      table.scope,
+    ),
+    index('w3ds_authorization_sync_status_idx').on(table.syncStatus),
+    index('w3ds_authorization_sync_resource_id_idx').on(table.resourceId),
+    index('w3ds_authorization_sync_owner_platform_user_id_idx').on(table.ownerPlatformUserId),
+  ],
+);
+
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
 export type W3dsPlatformSessionRow = typeof w3dsPlatformSessions.$inferSelect;
 export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
 export type VideoRow = typeof videos.$inferSelect;
 export type MediaAssetRow = typeof mediaAssets.$inferSelect;
+export type W3dsAuthorizationSyncRow = typeof w3dsAuthorizationSync.$inferSelect;

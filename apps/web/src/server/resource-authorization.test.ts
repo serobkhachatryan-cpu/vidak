@@ -334,10 +334,10 @@ describe('authorization providers and capabilities', () => {
       W3DS_AUTH_JWT_SECRET: 'x'.repeat(32),
       DATABASE_URL: 'postgresql://vidak:vidak@127.0.0.1:5432/vidak',
     });
-    expect(config).toEqual({
-      provider: 'local',
-      w3dsAuthorizationConfigured: true,
-    });
+    expect(config.provider).toBe('local');
+    expect(config.w3dsAuthorizationConfigured).toBe(true);
+    expect(config.w3dsOfficialAuthorizationClientAvailable).toBe(false);
+    expect(config.w3dsAuthorizationMissingCapabilities.length).toBeGreaterThan(0);
     expect(createResourceAuthorizationProvider(config).id).toBe('local');
   });
 
@@ -345,10 +345,8 @@ describe('authorization providers and capabilities', () => {
     const config = readResourceAuthorizationConfig({
       AUTH_PROVIDER: 'w3ds',
     });
-    expect(config).toEqual({
-      provider: 'w3ds',
-      w3dsAuthorizationConfigured: false,
-    });
+    expect(config.provider).toBe('w3ds');
+    expect(config.w3dsAuthorizationConfigured).toBe(false);
     expect(() => createResourceAuthorizationProvider(config)).toThrow(ResourceAuthorizationError);
     try {
       createResourceAuthorizationProvider(config);
@@ -368,6 +366,7 @@ describe('authorization providers and capabilities', () => {
     expect(provider.id).toBe('w3ds');
     expect(provider.capabilities().remoteGrantMutation).toBe(false);
     expect(provider.capabilities().remoteGrantEvaluation).toBe(false);
+    expect(provider.capabilities().grantSynchronization).toBe(false);
   });
 
   it('rejects unsafe authenticated principals during provider authorize', async () => {
@@ -392,6 +391,8 @@ describe('authorization providers and capabilities', () => {
     const first = createResourceAuthorizationProvider({
       provider: 'local',
       w3dsAuthorizationConfigured: false,
+      w3dsOfficialAuthorizationClientAvailable: false,
+      w3dsAuthorizationMissingCapabilities: [],
     });
     expect(first.id).toBe('local');
     // Singleton uses process env; default AUTH_PROVIDER resolves to local/dev.

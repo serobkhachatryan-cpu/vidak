@@ -12,10 +12,11 @@ Authenticated owners can publish/unpublish over HTTP, and anonymous callers
 can read published `public` / `unlisted` videos by opaque `publicVideoId`
 (with discovery limited to `published` + `public`).
 
-There is still no queue worker, video-processing pipeline, eVault sync, remote
-ACL mutations, search indexing, or creator/public UI for publishing. A
-server-only resource-authorization foundation exists for later W3DS delegation
-(see below) but is not yet wired into routes.
+There is still no queue worker, video-processing pipeline, search indexing, or
+creator/public UI wiring for authorization sync. A server-only resource
+authorization foundation plus durable W3DS grant sync layer exist (see below)
+but remain unwired to routes; live remote ACL mutation stays fail-closed until
+an official authorization SDK client is installed.
 
 ```mermaid
 flowchart LR
@@ -454,6 +455,7 @@ Server-only tables (Drizzle schema in `apps/web/src/server/db/schema.ts`):
 | Table | Purpose |
 | --- | --- |
 | `w3ds_platform_users` | Platform users unique by `e_name`, with eVault metadata and product profile projection. |
+| `w3ds_authorization_sync` | Durable W3DS authorization grant/revoke intent and sync state (server-only). |
 | `w3ds_login_offers` | One-time login offers with expiry, status (`pending` / `verifying` / `completed` / `expired` / `failed`), and failure codes. |
 | `w3ds_platform_sessions` | Platform sessions with user id, access/refresh `jti` identifiers, expiry timestamps, and revocation. |
 | `creator_channels` | Local creator channel per platform user (`owner_id` unique); product `Channel` projection. |
@@ -520,7 +522,7 @@ Package scripts:
 7. Monitor auth configuration failures (`configuration_error` / 503) separately
    from client credential failures (`invalid_session` / 401).
 
-## Resource authorization foundation (Phase 1)
+## Resource authorization and durable W3DS sync
 
 `apps/web/src/server/resource-authorization.ts` defines a provider-neutral,
 server-only authorization model for creator videos and media:
@@ -532,9 +534,20 @@ server-only authorization model for creator videos and media:
 - **Policy:** local ownership and public/unlisted/private visibility rules that
   match current draft/publish/public behavior
 - **Providers:** explicit `local` (development) and `w3ds` boundaries with
-  capability detection; remote grant evaluation/mutation/sync remain unavailable
-  and fail closed
-- **Network:** no Registry/eVault ACL reads or writes in this phase
+  capability detection
+
+Phase 2 adds durable authorization synchronization in
+`apps/web/src/server/w3ds-authorization-sync.ts`:
+
+- Persist grant/revoke intent in `w3ds_authorization_sync` (status, attempts,
+  optional external ids, redacted failure reason)
+- Explicit `grant` / `revoke` / `reconcile` operations that are idempotent and
+  retryable
+- Official-client boundary only — no fabricated eVault HTTP/GraphQL ACL calls
+- **Current gap:** `@w3ds/sdk` exports no authorization/ACL methods, so remote
+  mutation/sync capabilities stay false and sync calls fail closed with
+  `sdk_unavailable` until an official SDK surface (and its required config) is
+  added
 
 Routes and UI continue to enforce access through existing services. Full design
 notes live in `docs/architecture/w3ds-resource-authorization.md`.

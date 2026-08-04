@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { type AuthProviderId, type AuthUser, resolveAuthProviderId } from '@w3ds/auth';
 import type { VideoStatus, VideoVisibility } from '@w3ds/types';
 import { ResourceAuthorizationError } from './resource-authorization-errors';
+import { resolveW3dsAuthorizationOfficialClient } from './w3ds-authorization-official-client';
 
 export type { ResourceAuthorizationErrorCode } from './resource-authorization-errors';
 export { ResourceAuthorizationError } from './resource-authorization-errors';
@@ -111,16 +112,17 @@ export interface ResourceAuthorizationDecision {
 
 /**
  * Explicit capability matrix for the active authorization provider.
- * Remote W3DS grant evaluation/mutation stay disabled in this phase.
+ * Remote mutation/sync stay false unless an official W3DS authorization SDK
+ * client is installed and W3DS auth configuration is present.
  */
 export interface ResourceAuthorizationCapabilities {
   /** Evaluate local ownership + visibility policy (Phase 1). */
   localPolicyEvaluation: boolean;
-  /** Evaluate remote eVault ACL / grants. Unavailable in this phase. */
+  /** Evaluate remote eVault ACL / grants. No official evaluate API is installed. */
   remoteGrantEvaluation: boolean;
-  /** Mutate remote ACLs / grants. Unavailable — no network mutations in this phase. */
+  /** Mutate remote ACLs / grants via an official SDK client boundary. */
   remoteGrantMutation: boolean;
-  /** Background ownership/grant synchronization with W3DS. Unavailable in this phase. */
+  /** Durable ownership/grant synchronization with W3DS. */
   grantSynchronization: boolean;
 }
 
@@ -155,6 +157,13 @@ export interface ResourceAuthorizationConfig {
    * Required to construct the W3DS authorization provider; never invents remote capabilities.
    */
   w3dsAuthorizationConfigured: boolean;
+  /**
+   * Whether an officially supported W3DS authorization/ACL SDK client is present.
+   * Required for remoteGrantMutation / grantSynchronization; currently false.
+   */
+  w3dsOfficialAuthorizationClientAvailable: boolean;
+  /** Exact missing SDK/configuration strings when the official client is absent. */
+  w3dsAuthorizationMissingCapabilities: readonly string[];
 }
 
 const resourceKindCodes = {
@@ -176,7 +185,7 @@ const localCapabilities = {
   grantSynchronization: false,
 } as const satisfies ResourceAuthorizationCapabilities;
 
-const w3dsPhase1Capabilities = {
+const w3dsLocalOnlyCapabilities = {
   localPolicyEvaluation: true,
   remoteGrantEvaluation: false,
   remoteGrantMutation: false,
@@ -429,14 +438,21 @@ export class LocalResourceAuthorizationProvider implements ResourceAuthorization
 /**
  * W3DS-oriented authorization provider boundary.
  *
- * Phase 1 evaluates the same local ownership/visibility policy and does not
- * perform Registry/eVault network calls or remote ACL mutations. Remote grant
- * capabilities remain explicitly unavailable and fail closed when required.
+ * Local ownership/visibility policy remains the authorize() path. Remote grant
+ * mutation/sync capabilities are enabled only when an official W3DS
+ * authorization/ACL SDK client is installed and auth configuration is present.
+ * Missing SDK/config fails closed — never silent local-grant fallback.
  */
 export class W3dsResourceAuthorizationProvider implements ResourceAuthorizationProvider {
   readonly id = 'w3ds' as const;
+  private readonly remoteSyncAvailable: boolean;
+  private readonly missingCapabilities: readonly string[];
 
-  constructor(options: { configured: boolean }) {
+  constructor(options: {
+    configured: boolean;
+    officialClientAvailable?: boolean;
+    missingCapabilities?: readonly string[];
+  }) {
     if (!options.configured) {
       throw new ResourceAuthorizationError(
         'W3DS resource authorization is not configured.',
@@ -444,18 +460,31 @@ export class W3dsResourceAuthorizationProvider implements ResourceAuthorizationP
         503,
       );
     }
+    this.remoteSyncAvailable = Boolean(options.officialClientAvailable);
+    this.missingCapabilities = options.missingCapabilities ?? [];
   }
 
   capabilities(): ResourceAuthorizationCapabilities {
-    // Remote capabilities stay false until a later phase wires real W3DS grants.
-    // Being configured for auth is not enough to claim remote ACL powers.
-    return { ...w3dsPhase1Capabilities };
+    if (!this.remoteSyncAvailable) {
+      return { ...w3dsLocalOnlyCapabilities };
+    }
+    return {
+      localPolicyEvaluation: true,
+      // No official remote evaluate API is installed yet.
+      remoteGrantEvaluation: false,
+      remoteGrantMutation: true,
+      grantSynchronization: true,
+    };
   }
 
   requireCapability(capability: keyof ResourceAuthorizationCapabilities): void {
     if (!this.capabilities()[capability]) {
+      const missing =
+        this.missingCapabilities.length > 0
+          ? ` Missing: ${this.missingCapabilities.join(' ')}`
+          : '';
       throw new ResourceAuthorizationError(
-        `Authorization capability "${capability}" is unavailable for the W3DS provider in this phase.`,
+        `Authorization capability "${capability}" is unavailable for the W3DS provider.${missing}`,
         'capability_unavailable',
         503,
       );
@@ -464,8 +493,7 @@ export class W3dsResourceAuthorizationProvider implements ResourceAuthorizationP
 
   async authorize(request: ResourceAuthorizationRequest): Promise<ResourceAuthorizationDecision> {
     this.requireCapability('localPolicyEvaluation');
-    // Fail closed if a caller somehow requests remote-only behavior via requireCapability.
-    // authorize() itself stays local-policy-only in Phase 1.
+    // authorize() stays local-policy-only; remote sync is a separate adapter.
     return evaluateLocalResourcePolicy(normalizeRequest(request));
   }
 }
@@ -480,12 +508,20 @@ export function readResourceAuthorizationConfig(
   const authProvider = resolveAuthProviderId(env.AUTH_PROVIDER ?? env.NEXT_PUBLIC_AUTH_PROVIDER);
   const w3dsAuthorizationConfigured = isW3dsAuthorizationConfigured(env);
   const provider = resolveAuthorizationProviderId(authProvider, env.W3DS_AUTHZ_PROVIDER);
-  return { provider, w3dsAuthorizationConfigured };
+  const official = resolveW3dsAuthorizationOfficialClient();
+  return {
+    provider,
+    w3dsAuthorizationConfigured,
+    w3dsOfficialAuthorizationClientAvailable: official.status === 'available',
+    w3dsAuthorizationMissingCapabilities:
+      official.status === 'unavailable' ? official.missing : ([] as const),
+  };
 }
 
 /**
  * Creates the configured authorization provider.
  * Development stays on the explicit local provider; W3DS fails closed when unconfigured.
+ * Remote sync capabilities stay disabled without an official authorization SDK client.
  */
 export function createResourceAuthorizationProvider(
   config: ResourceAuthorizationConfig = readResourceAuthorizationConfig(),
@@ -500,7 +536,11 @@ export function createResourceAuthorizationProvider(
       503,
     );
   }
-  return new W3dsResourceAuthorizationProvider({ configured: true });
+  return new W3dsResourceAuthorizationProvider({
+    configured: true,
+    officialClientAvailable: config.w3dsOfficialAuthorizationClientAvailable,
+    missingCapabilities: config.w3dsAuthorizationMissingCapabilities,
+  });
 }
 
 let sharedProvider: ResourceAuthorizationProvider | undefined;
