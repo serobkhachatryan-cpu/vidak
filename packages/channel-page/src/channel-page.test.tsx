@@ -14,6 +14,16 @@ const channel: Channel = {
   createdAt: '2025-01-12T09:00:00.000Z',
 };
 
+const channelWithoutDescription: Channel = {
+  id: 'channel-quiet',
+  ownerId: 'user-ada',
+  handle: 'quiet-studio',
+  name: 'Quiet Studio',
+  subscriberCount: 12,
+  videoCount: 0,
+  createdAt: '2025-03-04T09:00:00.000Z',
+};
+
 const video: Video = {
   id: 'video-design-system',
   channelId: channel.id,
@@ -51,8 +61,26 @@ const playlist: Playlist = {
   updatedAt: '2026-07-14T10:00:00.000Z',
 };
 
+interface RenderedTab {
+  id: string;
+  controls: string;
+  label: string;
+  selected: boolean;
+}
+
+function readTabs(markup: string): RenderedTab[] {
+  return [...markup.matchAll(/<button([^>]*role="tab"[^>]*)>([^<]*)</g)].map(
+    ([, attributes = '', label = '']) => ({
+      id: /id="([^"]+)"/.exec(attributes)?.[1] ?? '',
+      controls: /aria-controls="([^"]+)"/.exec(attributes)?.[1] ?? '',
+      label,
+      selected: attributes.includes('aria-selected="true"'),
+    }),
+  );
+}
+
 describe('ChannelPage', () => {
-  it('renders the channel identity, subscribe control, and tab navigation', () => {
+  it('renders the channel identity and subscribe control', () => {
     const markup = renderToStaticMarkup(
       <ChannelPage channel={channel} isVerified videos={[video]} />,
     );
@@ -64,14 +92,38 @@ describe('ChannelPage', () => {
     expect(markup).toContain('@w3ds-studio · 999 subscribers · 24 videos');
     expect(markup).toContain('Design, engineering, and video production workflows.');
     expect(markup).toContain('aria-label="Subscribe to W3DS Studio"');
+  });
+
+  it('links every tab to its panel with ids scoped to the rendered instance', () => {
+    const markup = renderToStaticMarkup(
+      <>
+        <ChannelPage channel={channel} videos={[video]} />
+        <ChannelPage channel={channel} videos={[video]} activeTab="about" />
+      </>,
+    );
+    const tabs = readTabs(markup);
+
     expect(markup).toContain('aria-label="Channel sections"');
-    for (const tab of ['videos', 'shorts', 'playlists', 'about']) {
-      expect(markup).toContain(`id="channel-tab-${tab}"`);
-      expect(markup).toContain(`aria-controls="channel-panel-${tab}"`);
+    expect(tabs.map((tab) => tab.label)).toEqual([
+      'Videos',
+      'Shorts',
+      'Playlists',
+      'About',
+      'Videos',
+      'Shorts',
+      'Playlists',
+      'About',
+    ]);
+    expect(new Set(tabs.map((tab) => tab.id)).size).toBe(tabs.length);
+    expect(new Set(tabs.map((tab) => tab.controls)).size).toBe(tabs.length);
+
+    const selectedTabs = tabs.filter((tab) => tab.selected);
+    expect(selectedTabs.map((tab) => tab.label)).toEqual(['Videos', 'About']);
+    for (const tab of selectedTabs) {
+      expect(markup).toContain(
+        `<div role="tabpanel" id="${tab.controls}" aria-labelledby="${tab.id}"`,
+      );
     }
-    expect(markup).toContain('role="tabpanel"');
-    expect(markup).toContain('id="channel-panel-videos"');
-    expect(markup).toContain('aria-labelledby="channel-tab-videos"');
   });
 
   it('reuses video cards for the videos tab and links to the channel uploads', () => {
@@ -99,7 +151,6 @@ describe('ChannelPage', () => {
     const shortsMarkup = renderToStaticMarkup(
       <ChannelPage channel={channel} shorts={[short]} activeTab="shorts" />,
     );
-    expect(shortsMarkup).toContain('id="channel-panel-shorts"');
     expect(shortsMarkup).toContain('aria-label="Watch Design system tip"');
     expect(shortsMarkup).toContain('aspect-[9/16]');
     expect(shortsMarkup).toContain('4.2K views');
@@ -107,16 +158,22 @@ describe('ChannelPage', () => {
     const playlistsMarkup = renderToStaticMarkup(
       <ChannelPage channel={channel} playlists={[playlist]} activeTab="playlists" />,
     );
-    expect(playlistsMarkup).toContain('id="channel-panel-playlists"');
     expect(playlistsMarkup).toContain('href="/playlist/playlist-foundations"');
     expect(playlistsMarkup).toContain('Video platform foundations');
 
     const aboutMarkup = renderToStaticMarkup(<ChannelPage channel={channel} activeTab="about" />);
-    expect(aboutMarkup).toContain('id="channel-panel-about"');
     expect(aboutMarkup).toContain('aria-label="Channel description"');
     expect(aboutMarkup).toContain('aria-label="Channel details"');
     expect(aboutMarkup).toContain('Joined');
     expect(aboutMarkup).toContain('2025');
+  });
+
+  it('falls back to placeholder copy when the channel has no description', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelPage channel={channelWithoutDescription} activeTab="about" />,
+    );
+
+    expect(markup).toContain('This channel has not added a description yet.');
   });
 
   it('renders channel-level loading, empty, and error states with accessible labels', () => {
@@ -152,12 +209,42 @@ describe('ChannelPage', () => {
     ).toContain('No shorts yet');
     expect(
       renderToStaticMarkup(
+        <ChannelPage
+          channel={channel}
+          activeTab="shorts"
+          shortsState="error"
+          onRetryUploads={() => undefined}
+        />,
+      ),
+    ).toContain('Could not load shorts');
+
+    expect(
+      renderToStaticMarkup(
         <ChannelPage channel={channel} activeTab="playlists" playlistsState="loading" />,
       ),
     ).toContain('aria-label="Loading playlists"');
     expect(
       renderToStaticMarkup(<ChannelPage channel={channel} activeTab="playlists" playlists={[]} />),
     ).toContain('No playlists yet');
+    expect(
+      renderToStaticMarkup(
+        <ChannelPage
+          channel={channel}
+          activeTab="playlists"
+          playlistsState="error"
+          onRetryPlaylists={() => undefined}
+        />,
+      ),
+    ).toContain('Could not load playlists');
+  });
+
+  it('announces each loading section once instead of once per skeleton', () => {
+    const markup = renderToStaticMarkup(<ChannelPage channel={channel} videosState="loading" />);
+
+    expect(markup).toContain(
+      '<div role="status" aria-live="polite" aria-label="Loading videos"><div aria-hidden="true">',
+    );
+    expect(markup.match(/aria-live="polite"/g)).toHaveLength(1);
   });
 
   it('offers a load more control only when further uploads are available', () => {
@@ -174,6 +261,22 @@ describe('ChannelPage', () => {
     expect(renderToStaticMarkup(<ChannelPage channel={channel} videos={[video]} />)).not.toContain(
       'Load more videos',
     );
+  });
+
+  it('keeps the load more control busy while the next uploads page is fetching', () => {
+    const markup = renderToStaticMarkup(
+      <ChannelPage
+        channel={channel}
+        videos={[video]}
+        hasMoreUploads
+        isFetchingMoreUploads
+        onLoadMoreUploads={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('Load more videos');
+    expect(markup).toContain('aria-busy="true"');
+    expect(markup).toContain('disabled=""');
   });
 
   it('applies responsive layouts and dark mode', () => {

@@ -108,6 +108,8 @@ const playlists: readonly Playlist[] = [
   },
 ];
 
+const noop = () => undefined;
+
 const meta = {
   title: 'Pages/Channel page',
   component: ChannelPage,
@@ -154,12 +156,28 @@ export const MoreVideosAvailable: Story = {
   args: { hasMoreUploads: true },
 };
 
+export const FetchingMoreVideos: Story = {
+  args: { hasMoreUploads: true, isFetchingMoreUploads: true },
+};
+
 export const NoVideos: Story = {
   args: { videos: [], videosState: 'empty' },
 };
 
+export const VideosLoading: Story = {
+  args: { videosState: 'loading' },
+};
+
 export const VideosError: Story = {
-  args: { videosState: 'error' },
+  args: { videosState: 'error', onRetryUploads: noop },
+};
+
+export const ShortsError: Story = {
+  args: { activeTab: 'shorts', shortsState: 'error', onRetryUploads: noop },
+};
+
+export const PlaylistsError: Story = {
+  args: { activeTab: 'playlists', playlistsState: 'error', onRetryPlaylists: noop },
 };
 
 export const Loading: Story = {
@@ -171,7 +189,7 @@ export const Empty: Story = {
 };
 
 export const ErrorState: Story = {
-  args: { state: 'error' },
+  args: { state: 'error', onRetry: noop },
 };
 
 export const Dark: Story = {
