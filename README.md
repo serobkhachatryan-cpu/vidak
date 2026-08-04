@@ -26,7 +26,12 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm storybook:build
+pnpm verify:release
 ```
+
+`pnpm verify:release` is the repeatable release gate (lint, typecheck, tests,
+build, Storybook build, and migration validation). It does not require live W3DS
+access. See `docs/backend.md` for the deployment runbook and health probes.
 
 Run browser tests after installing Playwright's Chromium runtime:
 

@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { reportOperationalFailure } from './ops-observability';
+import { redactSensitiveText } from './ops-redaction';
 import {
   type ResourceAccessScope,
   type ResourceAuthSubject,
@@ -36,14 +38,6 @@ export {
 } from './w3ds-authorization-sync-store';
 
 const eNamePattern = /^@[^\s@]+$/;
-
-const secretPatterns: RegExp[] = [
-  /Bearer\s+[A-Za-z0-9._\-+=/]+/gi,
-  /eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g,
-  /(?:api[_-]?key|secret|password|token|authorization)\s*[:=]\s*['"]?[^'"\s,;]+/gi,
-  /https?:\/\/[^/\s:@]+:[^/@\s]+@[^\s]+/gi,
-  /postgresql:\/\/[^/\s:@]+:[^/@\s]+@[^\s]+/gi,
-];
 
 export interface W3dsAuthorizationSyncConfig {
   /** Same gate as Phase 1 W3DS auth configuration. */
@@ -331,6 +325,11 @@ export class W3dsAuthorizationSyncService {
       });
     } catch (error) {
       const failureReason = redactAuthorizationFailureReason(error);
+      reportOperationalFailure({
+        category: 'w3ds_sync',
+        error,
+        code: 'sync_failed',
+      });
       await this.store.markAttempt({
         id: record.id,
         syncStatus: 'failed',
@@ -371,6 +370,11 @@ export class W3dsAuthorizationSyncService {
       });
     } catch (error) {
       const failureReason = redactAuthorizationFailureReason(error);
+      reportOperationalFailure({
+        category: 'w3ds_sync',
+        error,
+        code: 'sync_failed',
+      });
       await this.store.markAttempt({
         id: record.id,
         syncStatus: 'failed',
@@ -431,32 +435,7 @@ export function redactAuthorizationFailureReason(
   error: unknown,
   fallback = 'Remote authorization mutation failed.',
 ): string {
-  let raw = '';
-  if (error instanceof Error) {
-    raw = error.message;
-  } else if (typeof error === 'string') {
-    raw = error;
-  } else if (error && typeof error === 'object') {
-    try {
-      raw = JSON.stringify(error);
-    } catch {
-      raw = fallback;
-    }
-  } else {
-    raw = fallback;
-  }
-
-  let redacted = raw;
-  for (const pattern of secretPatterns) {
-    redacted = redacted.replace(pattern, '[REDACTED]');
-  }
-  redacted = redacted.replace(/\s+/g, ' ').trim();
-  if (!redacted) return fallback;
-  // Cap length so persisted reasons stay operational summaries, not payloads.
-  if (redacted.length > 240) {
-    redacted = `${redacted.slice(0, 237)}...`;
-  }
-  return redacted;
+  return redactSensitiveText(error, fallback);
 }
 
 export function readW3dsAuthorizationSyncConfig(

@@ -36,6 +36,8 @@ flowchart LR
 
 | Method | Path | Purpose |
 | --- | --- | --- |
+| `GET` | `/api/health/live` | Liveness probe (process up; no dependency details). |
+| `GET` | `/api/health/ready` | Readiness probe (config + required dependencies; generic failure body). |
 | `GET` | `/api/auth/offer` | Create a one-time, five-minute `w3ds://auth` login offer. |
 | `POST` | `/api/auth/callback` | Receive the wallet callback and verify its signature server-side. |
 | `GET` | `/api/auth/offer/:offerId/status` | Let the same-origin SPA poll for login completion. |
@@ -542,7 +544,10 @@ Shared harness: `apps/web/src/server/test/integration-harness.ts`
 ### Repeatable local / CI commands
 
 ```bash
-# Full quality gate (also what CI `quality` runs)
+# Full release verification gate (also what CI `quality` runs)
+pnpm verify:release
+
+# Equivalent individual steps (verify:release runs these plus migration validation)
 pnpm lint
 pnpm typecheck
 pnpm test
@@ -596,6 +601,137 @@ Do not point integration tests at production databases or shared developer media
 9. Monitor auth configuration failures (`configuration_error` / 503) and mutation
    origin rejections (`untrusted_origin` / 403) separately from client credential
    failures (`invalid_session` / 401).
+10. Use the health probes and release verification command documented in the
+    deployment runbook below before promoting a build.
+
+## Deployment runbook
+
+This runbook covers production operational readiness for `apps/web`. It does **not**
+automate deployment and does **not** perform live W3DS Registry/eVault/ACL calls.
+Milestone 20 Phase 3 (remote W3DS ACL sync) remains deferred until an official
+authorization SDK client and credentials exist.
+
+### Release verification (before deploy)
+
+```bash
+pnpm verify:release
+```
+
+Runs, in order: `lint`, `typecheck`, `test`, `build`, `storybook:build`, and
+explicit migration validation (`apps/web/src/server/db/migrations.test.ts` on
+embedded PGlite). No live W3DS access is required. CI `quality` invokes the same
+command.
+
+### Deployment order
+
+1. **Validate environment** for the target stage (see below). Incomplete W3DS
+   production config fails closed at Node startup via `instrumentation.ts`.
+2. **Provision / verify PostgreSQL** and private media storage (see below).
+3. **Apply migrations** with `pnpm db:migrate` against the target `DATABASE_URL`
+   **before** routing traffic to new application revisions that need the schema.
+4. **Deploy application instances** (Docker/`next start` or equivalent). Prefer
+   rolling deploy behind a load balancer.
+5. **Confirm probes**: liveness then readiness (see below).
+6. **Only after readiness is healthy**, send user traffic to the new revision.
+
+### Environment validation
+
+| Variable | Production W3DS | Notes |
+| --- | --- | --- |
+| `AUTH_PROVIDER` | required (`w3ds`) | Must be explicit; no silent `dev` fallback |
+| `DATABASE_URL` | required | Server-only |
+| `W3DS_REGISTRY_BASE_URL` | required | Server-only; auth verification |
+| `W3DS_AUTH_JWT_SECRET` | required (≥ 32 chars) | Server-only; never `NEXT_PUBLIC_*` |
+| `APP_ORIGIN` | required | Cookie mutation origin trust |
+| `TRUSTED_ORIGINS` | optional | Extra browser origins |
+| `MEDIA_STORAGE_ROOT` | recommended | Private blob root for LocalDiskMediaStorage |
+| `MEDIA_MAX_UPLOAD_BYTES` / `MEDIA_ALLOWED_CONTENT_TYPES` | optional | Upload limits |
+
+Do not place secrets, database URLs, registry URLs, or JWT material in
+`NEXT_PUBLIC_*` variables.
+
+### Migration execution
+
+```bash
+pnpm db:migrate
+```
+
+- Migrations live in `apps/web/drizzle/` and are applied by
+  `apps/web/src/server/db/migrate.ts`.
+- Apply to the target database **before** or as a blocking pre-traffic step for
+  app instances that depend on new tables/columns.
+- Release verification validates the journal on empty PGlite; it does **not**
+  replace applying migrations to the real target database.
+
+### Private-media storage provisioning
+
+- Create a private, non-public filesystem (or volume) for media blobs.
+- Set `MEDIA_STORAGE_ROOT` to that location on every app instance that serves
+  upload/download routes.
+- LocalDiskMediaStorage is the current adapter (development-oriented). Objects
+  are opaque keys under the root; never expose the root path or storage keys on
+  the public API.
+- Ensure the process user can create the root (and `.uploads/`) and has read/write
+  access. Back up this volume with the same retention policy as PostgreSQL if
+  drafts/published media must be restorable.
+
+### Backup / restore expectations
+
+| Asset | Backup | Restore constraint |
+| --- | --- | --- |
+| PostgreSQL | Regular logical or volume backups of the W3DS/product schema | Restore DB **before** starting app traffic; re-run `pnpm db:migrate` only if restoring an older dump that needs forward migration |
+| Private media volume | Backup `MEDIA_STORAGE_ROOT` alongside DB snapshots when media durability is required | Restore media volume to match DB `media_assets.storage_key` rows; orphaned blobs or missing keys cause download failures |
+| JWT secret | Store out-of-band with other secrets | Restoring a different `W3DS_AUTH_JWT_SECRET` invalidates outstanding sessions |
+
+There is no automated backup job in this repository.
+
+### Readiness and liveness checks
+
+| Probe | Path | Success | Failure |
+| --- | --- | --- | --- |
+| Liveness | `GET /api/health/live` | `200` `{ "status": "ok" }` | Process not accepting HTTP |
+| Readiness | `GET /api/health/ready` | `200` `{ "status": "ready" }` | `503` `{ "error": { "code": "not_ready", "message": "Service is not ready." } }` |
+
+- Liveness does **not** inspect dependencies or disclose internal state.
+- Readiness verifies server security configuration, private media-storage
+  accessibility, and (when `AUTH_PROVIDER=w3ds`) database connectivity plus
+  presence of required migrated tables. It does **not** call live W3DS ACL APIs.
+- Failure responses are intentionally generic. Dependency details are written
+  only to redacted structured server logs with an `X-Request-Id` /
+  `X-Correlation-Id` correlation id.
+- Load balancers should gate traffic on readiness, not only liveness.
+
+### Correlation and structured error reporting
+
+Operational failures in authentication configuration, media storage,
+migration/readiness probes, and W3DS authorization sync emit JSON error lines
+to stderr with category, correlation id, optional code, and a redacted message.
+Cookies, bearer tokens, raw `Authorization` headers, credentials, database URLs,
+JWT secrets, and storage paths are stripped before logging.
+
+### Rollback constraints
+
+- **Application-only rollback** is safe when the new revision did not require a
+  forward-incompatible schema change.
+- **Do not roll back migrations** that have already been applied to production
+  unless you have a tested down-migration (this repo ships forward migrations
+  only). Prefer rolling the app forward or restoring from backup.
+- After DB restore to an older snapshot, ensure the media volume matches and
+  re-validate readiness before traffic.
+- Changing `W3DS_AUTH_JWT_SECRET` during rollback forces session invalidation.
+
+### Remaining W3DS remote-ACL prerequisite (explicit)
+
+Durable authorization sync tables and fail-closed service code exist, but
+**remote W3DS ACL grant/revoke is unavailable** until:
+
+1. An official W3DS authorization/ACL SDK client is provided by `@w3ds/sdk`
+   (or an approved successor), and
+2. Required remote credentials/configuration for that client are provisioned.
+
+Until then, do not invent eVault ACL HTTP/GraphQL calls, do not mark remote sync
+capabilities available, and do not block application readiness on remote ACL
+connectivity. Local ownership/visibility policy continues to enforce access.
 
 ## Resource authorization and durable W3DS sync
 
@@ -666,13 +802,16 @@ service contracts.
 
 Backend-oriented infrastructure is limited to the repository tooling:
 
-- GitHub Actions validates pull requests and pushes to `main` with lint,
-  typecheck, unit tests, build, Storybook build, and browser tests.
+- GitHub Actions validates pull requests and pushes to `main` / `develop` with
+  `pnpm verify:release` (lint, typecheck, tests, build, Storybook build,
+  migration validation) plus a separate browser-test job.
 - Docker supports production builds for a selected app through the `APP` build
   argument.
 - pnpm workspaces and Turborepo manage dependency ordering and task execution.
 - Drizzle migrations under `apps/web/drizzle/` version the W3DS auth,
   creator-video (including publish lifecycle), and media-asset schema.
+- Health probes (`/api/health/live`, `/api/health/ready`) and the deployment
+  runbook above cover production operational readiness without remote W3DS ACL.
 
 When additional backend domains are introduced, document their API versioning,
 authorization model, persistence strategy, storage lifecycle, observability,

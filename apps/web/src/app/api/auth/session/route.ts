@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
+import { authenticationErrorResponse } from '../../../../server/ops-http';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -16,15 +17,6 @@ export async function GET(request: NextRequest) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     return NextResponse.json(await getW3dsAuthService().getSession(accessToken));
   } catch (error) {
-    if (error instanceof W3dsAuthError) {
-      return NextResponse.json(
-        { error: { code: error.code, message: error.message } },
-        { status: error.status },
-      );
-    }
-    return NextResponse.json(
-      { error: { code: 'internal_error', message: 'Authentication is unavailable.' } },
-      { status: 500 },
-    );
+    return authenticationErrorResponse(error, request.headers);
   }
 }

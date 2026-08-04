@@ -18,6 +18,7 @@ import {
   MediaStorageError,
   resolveLocalMediaStorageRoot,
 } from './media-storage';
+import { reportOperationalFailure } from './ops-observability';
 import { getW3dsAuthService, W3dsAuthError } from './w3ds-auth';
 
 export { MediaAssetError } from './media-asset-errors';
@@ -212,8 +213,18 @@ export class MediaAssetService {
         throw error;
       }
       if (error instanceof MediaStorageError) {
-        throw new MediaAssetError(error.message, 'internal_error', 500);
+        reportOperationalFailure({
+          category: 'media_storage',
+          error,
+          code: error.code,
+        });
+        throw new MediaAssetError('Media storage is unavailable.', 'internal_error', 500);
       }
+      reportOperationalFailure({
+        category: 'media_storage',
+        error,
+        code: 'internal_error',
+      });
       throw error;
     }
   }
