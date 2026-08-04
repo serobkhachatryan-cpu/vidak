@@ -5,7 +5,14 @@ import {
   type AuthUser,
   type LoginInput,
   type RegisterInput,
+  type UpdateAuthProfileInput,
 } from '@w3ds/auth';
+import type {
+  AuthDeviceSession,
+  ChangeEmailInput,
+  ChangePasswordInput,
+  DeleteAccountInput,
+} from '@w3ds/types';
 
 export interface MockAuthApiClientOptions {
   delayMs?: number;
@@ -14,6 +21,11 @@ export interface MockAuthApiClientOptions {
 
 export interface MockAuthUser extends AuthUser {
   password: string;
+}
+
+interface MockDeviceSession extends AuthDeviceSession {
+  refreshToken: string;
+  userId: string;
 }
 
 const defaultUsers: readonly MockAuthUser[] = [
@@ -26,12 +38,27 @@ const defaultUsers: readonly MockAuthUser[] = [
   },
 ];
 
+function toAuthUser(user: MockAuthUser): AuthUser {
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    roles: user.roles,
+    ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
+  };
+}
+
+function isStrongPassword(password: string): boolean {
+  return password.length >= 8;
+}
+
 export class MockAuthApiClient implements AuthApi {
   private readonly delayMs: number;
   private users: MockAuthUser[];
   private sessions = new Map<string, AuthUser>();
   private accessTokensByRefreshToken = new Map<string, Set<string>>();
   private revokedRefreshTokens = new Set<string>();
+  private deviceSessions: MockDeviceSession[] = [];
   private sequence = 0;
 
   constructor(options: MockAuthApiClientOptions = {}) {
@@ -56,6 +83,9 @@ export class MockAuthApiClient implements AuthApi {
     if (this.users.some((user) => user.email.toLocaleLowerCase() === email)) {
       throw new AuthenticationError('An account already exists for this email.', 'email_in_use');
     }
+    if (!isStrongPassword(input.password)) {
+      throw new AuthenticationError('Password must be at least 8 characters.', 'weak_password');
+    }
     const user: MockAuthUser = {
       id: `user-${this.users.length + 1}`,
       email,
@@ -74,44 +104,172 @@ export class MockAuthApiClient implements AuthApi {
     }
     const user = this.sessions.get(refreshToken) ?? this.userFromToken(refreshToken, 'refresh.');
     if (!user) throw new AuthenticationError('Your session has expired.', 'invalid_session');
-    return this.createSession(user, refreshToken);
+    const mockUser = this.users.find((candidate) => candidate.id === user.id);
+    if (!mockUser) throw new AuthenticationError('Your session has expired.', 'invalid_session');
+    return this.createSession(mockUser, refreshToken);
   }
 
   async getCurrentUser(accessToken: string): Promise<AuthUser> {
     await this.wait();
-    const user = this.sessions.get(accessToken);
-    if (!user) throw new AuthenticationError('Your session has expired.', 'invalid_session');
-    return user;
+    const user = this.requireUser(accessToken);
+    return toAuthUser(user);
   }
 
   async logout(refreshToken?: string): Promise<void> {
     await this.wait();
     if (refreshToken) {
-      this.sessions.delete(refreshToken);
-      for (const accessToken of this.accessTokensByRefreshToken.get(refreshToken) ?? []) {
-        this.sessions.delete(accessToken);
-      }
-      this.accessTokensByRefreshToken.delete(refreshToken);
-      this.revokedRefreshTokens.add(refreshToken);
+      this.revokeRefreshToken(refreshToken);
     }
   }
 
-  private createSession(user: AuthUser, existingRefreshToken?: string): AuthSession {
+  async updateProfile(accessToken: string, input: UpdateAuthProfileInput): Promise<AuthUser> {
+    await this.wait();
+    const user = this.requireUser(accessToken);
+    const displayName = input.displayName.trim();
+    if (!displayName) {
+      throw new AuthenticationError('Display name is required.', 'validation_failed');
+    }
+    user.displayName = displayName;
+    if (input.avatarUrl === null) delete user.avatarUrl;
+    else if (input.avatarUrl !== undefined) user.avatarUrl = input.avatarUrl;
+    this.syncUserAcrossSessions(user);
+    return toAuthUser(user);
+  }
+
+  async changeEmail(accessToken: string, input: ChangeEmailInput): Promise<AuthUser> {
+    await this.wait();
+    const user = this.requireUser(accessToken);
+    if (user.password !== input.password) {
+      throw new AuthenticationError('Current password is incorrect.', 'invalid_password');
+    }
+    const email = input.email.trim().toLocaleLowerCase();
+    if (!email.includes('@')) {
+      throw new AuthenticationError('Enter a valid email address.', 'validation_failed');
+    }
+    if (
+      this.users.some(
+        (candidate) => candidate.id !== user.id && candidate.email.toLocaleLowerCase() === email,
+      )
+    ) {
+      throw new AuthenticationError('An account already exists for this email.', 'email_in_use');
+    }
+    user.email = email;
+    this.syncUserAcrossSessions(user);
+    return toAuthUser(user);
+  }
+
+  async changePassword(accessToken: string, input: ChangePasswordInput): Promise<void> {
+    await this.wait();
+    const user = this.requireUser(accessToken);
+    if (user.password !== input.currentPassword) {
+      throw new AuthenticationError('Current password is incorrect.', 'invalid_password');
+    }
+    if (!isStrongPassword(input.newPassword)) {
+      throw new AuthenticationError('Password must be at least 8 characters.', 'weak_password');
+    }
+    if (input.newPassword === input.currentPassword) {
+      throw new AuthenticationError(
+        'New password must be different from your current password.',
+        'weak_password',
+      );
+    }
+    user.password = input.newPassword;
+  }
+
+  async listSessions(accessToken: string): Promise<readonly AuthDeviceSession[]> {
+    await this.wait();
+    const user = this.requireUser(accessToken);
+    return this.deviceSessions
+      .filter((session) => session.userId === user.id)
+      .map(toPublicSession)
+      .sort(
+        (first, second) =>
+          new Date(second.lastActiveAt).getTime() - new Date(first.lastActiveAt).getTime(),
+      );
+  }
+
+  async revokeSession(
+    accessToken: string,
+    sessionId: string,
+  ): Promise<readonly AuthDeviceSession[]> {
+    await this.wait();
+    const user = this.requireUser(accessToken);
+    const session = this.deviceSessions.find(
+      (candidate) => candidate.id === sessionId && candidate.userId === user.id,
+    );
+    if (!session) {
+      throw new AuthenticationError('Session not found.', 'invalid_session');
+    }
+    if (session.current) {
+      throw new AuthenticationError('You cannot revoke your current session.', 'invalid_session');
+    }
+    this.revokeRefreshToken(session.refreshToken);
+    this.deviceSessions = this.deviceSessions.filter((candidate) => candidate.id !== sessionId);
+    return this.deviceSessions
+      .filter((candidate) => candidate.userId === user.id)
+      .map(toPublicSession);
+  }
+
+  async deleteAccount(accessToken: string, input: DeleteAccountInput): Promise<void> {
+    await this.wait();
+    const user = this.requireUser(accessToken);
+    if (user.password !== input.password) {
+      throw new AuthenticationError('Current password is incorrect.', 'invalid_password');
+    }
+    if (input.confirmation.trim() !== 'DELETE') {
+      throw new AuthenticationError(
+        'Type DELETE to confirm account deletion.',
+        'confirmation_mismatch',
+      );
+    }
+    const refreshTokens = this.deviceSessions
+      .filter((session) => session.userId === user.id)
+      .map((session) => session.refreshToken);
+    for (const refreshToken of refreshTokens) this.revokeRefreshToken(refreshToken);
+    this.deviceSessions = this.deviceSessions.filter((session) => session.userId !== user.id);
+    this.users = this.users.filter((candidate) => candidate.id !== user.id);
+  }
+
+  private createSession(user: MockAuthUser, existingRefreshToken?: string): AuthSession {
     const nonce = ++this.sequence;
     const refreshToken = existingRefreshToken ?? `refresh.${user.id}.${nonce}`;
     const accessToken = `access.${user.id}.${nonce}`;
-    const authUser: AuthUser = {
-      id: user.id,
-      email: user.email,
-      displayName: user.displayName,
-      roles: user.roles,
-      ...(user.avatarUrl ? { avatarUrl: user.avatarUrl } : {}),
-    };
+    const authUser = toAuthUser(user);
     this.sessions.set(refreshToken, authUser);
     this.sessions.set(accessToken, authUser);
     const accessTokens = this.accessTokensByRefreshToken.get(refreshToken) ?? new Set<string>();
     accessTokens.add(accessToken);
     this.accessTokensByRefreshToken.set(refreshToken, accessTokens);
+
+    const now = new Date().toISOString();
+    if (existingRefreshToken) {
+      const existing = this.deviceSessions.find(
+        (session) => session.refreshToken === existingRefreshToken,
+      );
+      if (existing) {
+        existing.lastActiveAt = now;
+        existing.current = true;
+        for (const session of this.deviceSessions) {
+          if (session.userId === user.id && session.id !== existing.id) session.current = false;
+        }
+      }
+    } else {
+      for (const session of this.deviceSessions) {
+        if (session.userId === user.id) session.current = false;
+      }
+      this.deviceSessions.push({
+        id: `session-${user.id}-${nonce}`,
+        userId: user.id,
+        refreshToken,
+        deviceName: nonce % 2 === 0 ? 'Chrome on macOS' : 'Safari on iPhone',
+        location: nonce % 2 === 0 ? 'San Francisco, US' : 'London, UK',
+        ipAddress: `203.0.113.${(nonce % 200) + 1}`,
+        lastActiveAt: now,
+        createdAt: now,
+        current: true,
+      });
+    }
+
     return {
       user: authUser,
       tokens: {
@@ -122,6 +280,34 @@ export class MockAuthApiClient implements AuthApi {
     };
   }
 
+  private requireUser(accessToken: string): MockAuthUser {
+    const sessionUser = this.sessions.get(accessToken);
+    if (!sessionUser) {
+      throw new AuthenticationError('Your session has expired.', 'invalid_session');
+    }
+    const user = this.users.find((candidate) => candidate.id === sessionUser.id);
+    if (!user) {
+      throw new AuthenticationError('Your session has expired.', 'invalid_session');
+    }
+    return user;
+  }
+
+  private syncUserAcrossSessions(user: MockAuthUser) {
+    const authUser = toAuthUser(user);
+    for (const [token, sessionUser] of this.sessions) {
+      if (sessionUser.id === user.id) this.sessions.set(token, authUser);
+    }
+  }
+
+  private revokeRefreshToken(refreshToken: string) {
+    this.sessions.delete(refreshToken);
+    for (const accessToken of this.accessTokensByRefreshToken.get(refreshToken) ?? []) {
+      this.sessions.delete(accessToken);
+    }
+    this.accessTokensByRefreshToken.delete(refreshToken);
+    this.revokedRefreshTokens.add(refreshToken);
+  }
+
   private async wait(): Promise<void> {
     if (this.delayMs > 0) await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
   }
@@ -129,6 +315,19 @@ export class MockAuthApiClient implements AuthApi {
   private userFromToken(token: string, prefix: string): AuthUser | undefined {
     if (!token.startsWith(prefix)) return undefined;
     const userId = token.slice(prefix.length, token.lastIndexOf('.'));
-    return this.users.find((user) => user.id === userId);
+    const user = this.users.find((candidate) => candidate.id === userId);
+    return user ? toAuthUser(user) : undefined;
   }
+}
+
+function toPublicSession(session: MockDeviceSession): AuthDeviceSession {
+  return {
+    id: session.id,
+    deviceName: session.deviceName,
+    lastActiveAt: session.lastActiveAt,
+    createdAt: session.createdAt,
+    current: session.current,
+    ...(session.location ? { location: session.location } : {}),
+    ...(session.ipAddress ? { ipAddress: session.ipAddress } : {}),
+  };
 }

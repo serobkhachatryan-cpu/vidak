@@ -6,6 +6,7 @@ const config: StorybookConfig = {
     '../../channel-page/src/**/*.stories.@(ts|tsx)',
     '../../upload-page/src/**/*.stories.@(ts|tsx)',
     '../../user-profile-page/src/**/*.stories.@(ts|tsx)',
+    '../../settings-page/src/**/*.stories.@(ts|tsx)',
     '../../watch-page/src/**/*.stories.@(ts|tsx)',
   ],
   addons: [],

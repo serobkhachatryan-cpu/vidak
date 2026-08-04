@@ -25,6 +25,19 @@ export const mockUserProfiles: readonly UserProfile[] = [
     followingCount: 42,
     isVerified: false,
   },
+  {
+    id: 'user-demo',
+    handle: 'demo-creator',
+    displayName: 'Demo Creator',
+    avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=160&h=160&fit=crop',
+    bio: 'Demo account for exploring W3DS Video settings and creator tools.',
+    location: 'Remote',
+    websiteUrl: 'https://w3ds.video',
+    joinedAt: '2025-03-01T09:00:00.000Z',
+    subscriberCount: 1_280,
+    followingCount: 36,
+    isVerified: false,
+  },
 ];
 
 export const mockChannels: readonly Channel[] = [

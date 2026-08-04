@@ -1,0 +1,39 @@
+{
+  "name": "@w3ds/settings-page",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "clean": "rm -rf dist"
+  },
+  "peerDependencies": {
+    "@tanstack/react-query": ">=5",
+    "react": ">=19",
+    "react-dom": ">=19"
+  },
+  "dependencies": {
+    "@w3ds/api-client": "workspace:*",
+    "@w3ds/auth": "workspace:*",
+    "@w3ds/hooks": "workspace:*",
+    "@w3ds/types": "workspace:*",
+    "@w3ds/ui": "workspace:*"
+  },
+  "devDependencies": {
+    "@storybook/react-vite": "latest",
+    "@tanstack/react-query": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "react": "latest",
+    "react-dom": "latest",
+    "storybook": "latest",
+    "typescript": "6.0.3",
+    "vite": "latest",
+    "vitest": "latest"
+  }
+}

@@ -21,6 +21,7 @@
     "@w3ds/ui": "workspace:*",
     "@w3ds/upload-page": "workspace:*",
     "@w3ds/user-profile-page": "workspace:*",
+    "@w3ds/settings-page": "workspace:*",
     "@w3ds/watch-page": "workspace:*",
     "next": "latest",
     "react": "latest",

@@ -1,4 +1,14 @@
 export {
+  settingsQueryKeys,
+  useConnectAccount,
+  useConnectedAccounts,
+  useDisconnectAccount,
+  useUpdateUserPreferences,
+  useUpdateUserProfile,
+  useUploadUserAvatar,
+  useUserPreferences,
+} from './settings-queries';
+export {
   useChannel,
   useCommentReplies,
   useInfiniteChannels,

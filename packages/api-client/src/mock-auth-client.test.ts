@@ -46,4 +46,50 @@ describe('MockAuthApiClient', () => {
       client.login({ email: 'new@example.com', password: 'wrong', remember: false }),
     ).rejects.toMatchObject({ code: 'invalid_credentials' });
   });
+
+  it('updates profile, email, password, sessions, and deletes accounts', async () => {
+    const client = new MockAuthApiClient();
+    const session = await client.login({
+      email: 'demo@w3ds.video',
+      password: 'password123',
+      remember: true,
+    });
+    const accessToken = session.tokens.accessToken;
+
+    const updated = await client.updateProfile(accessToken, { displayName: 'Demo Updated' });
+    expect(updated.displayName).toBe('Demo Updated');
+
+    const withEmail = await client.changeEmail(accessToken, {
+      email: 'demo-new@w3ds.video',
+      password: 'password123',
+    });
+    expect(withEmail.email).toBe('demo-new@w3ds.video');
+
+    await client.changePassword(accessToken, {
+      currentPassword: 'password123',
+      newPassword: 'password456',
+    });
+    await expect(
+      client.login({
+        email: 'demo-new@w3ds.video',
+        password: 'password456',
+        remember: false,
+      }),
+    ).resolves.toMatchObject({ user: { email: 'demo-new@w3ds.video' } });
+
+    const sessions = await client.listSessions(accessToken);
+    expect(sessions.some((item) => item.current)).toBe(true);
+
+    await client.deleteAccount(accessToken, {
+      password: 'password456',
+      confirmation: 'DELETE',
+    });
+    await expect(
+      client.login({
+        email: 'demo-new@w3ds.video',
+        password: 'password456',
+        remember: false,
+      }),
+    ).rejects.toMatchObject({ code: 'invalid_credentials' });
+  });
 });

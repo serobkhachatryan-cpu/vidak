@@ -5,6 +5,8 @@ import type {
   CommentId,
   CommentListFilters,
   CommentReaction,
+  ConnectedAccount,
+  ConnectedAccountProvider,
   CreateCommentInput,
   CreateVideoInput,
   CursorPage,
@@ -12,10 +14,14 @@ import type {
   Playlist,
   PlaylistId,
   SearchFilters,
+  UpdateProfileInput,
+  UpdateUserPreferencesInput,
   UpdateVideoInput,
+  UploadAvatarInput,
   UploadVideoInput,
   UploadVideoOptions,
   UploadVideoResult,
+  UserPreferences,
   UserProfile,
   UserProfileId,
   Video,
@@ -37,6 +43,22 @@ export interface VideoApiClient {
   ): Promise<CursorPage<Playlist>>;
   getPlaylist(id: PlaylistId): Promise<Playlist | undefined>;
   getUserProfile(id: UserProfileId): Promise<UserProfile | undefined>;
+  updateUserProfile(id: UserProfileId, input: UpdateProfileInput): Promise<UserProfile>;
+  uploadUserAvatar(id: UserProfileId, input: UploadAvatarInput): Promise<UserProfile>;
+  getUserPreferences(id: UserProfileId): Promise<UserPreferences>;
+  updateUserPreferences(
+    id: UserProfileId,
+    input: UpdateUserPreferencesInput,
+  ): Promise<UserPreferences>;
+  listConnectedAccounts(id: UserProfileId): Promise<readonly ConnectedAccount[]>;
+  connectAccount(
+    id: UserProfileId,
+    provider: ConnectedAccountProvider,
+  ): Promise<readonly ConnectedAccount[]>;
+  disconnectAccount(
+    id: UserProfileId,
+    provider: ConnectedAccountProvider,
+  ): Promise<readonly ConnectedAccount[]>;
   listComments(
     videoId: VideoId,
     filters?: CommentListFilters,

@@ -8,14 +8,24 @@ export type {
   Role,
   StoredAuthSession,
   TokenStorage,
+  UpdateAuthProfileInput,
 } from './types';
 
 import type { AuthUser, Role, StoredAuthSession, TokenStorage } from './types';
 
+export type AuthenticationErrorCode =
+  | 'invalid_credentials'
+  | 'email_in_use'
+  | 'invalid_session'
+  | 'invalid_password'
+  | 'weak_password'
+  | 'confirmation_mismatch'
+  | 'validation_failed';
+
 export class AuthenticationError extends Error {
   constructor(
     message: string,
-    public readonly code: 'invalid_credentials' | 'email_in_use' | 'invalid_session',
+    public readonly code: AuthenticationErrorCode,
   ) {
     super(message);
     this.name = 'AuthenticationError';

@@ -12,6 +12,9 @@
     "test": "vitest run --passWithNoTests",
     "clean": "rm -rf dist"
   },
+  "dependencies": {
+    "@w3ds/types": "workspace:*"
+  },
   "devDependencies": {
     "typescript": "6.0.3",
     "vitest": "latest"

@@ -5,6 +5,8 @@ import type {
   CommentId,
   CommentListFilters,
   CommentReaction,
+  ConnectedAccount,
+  ConnectedAccountProvider,
   CreateCommentInput,
   CreateVideoInput,
   CursorPage,
@@ -12,16 +14,21 @@ import type {
   Playlist,
   PlaylistId,
   SearchFilters,
+  UpdateProfileInput,
+  UpdateUserPreferencesInput,
   UpdateVideoInput,
+  UploadAvatarInput,
   UploadVideoInput,
   UploadVideoOptions,
   UploadVideoResult,
+  UserPreferences,
   UserProfile,
   UserProfileId,
   Video,
   VideoId,
   VideoListFilters,
 } from '@w3ds/types';
+import { defaultUserPreferences } from '@w3ds/types';
 import {
   mockChannels,
   mockComments,
@@ -39,6 +46,26 @@ const autoThumbnailUrls = [
   'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1280&h=720&fit=crop',
 ] as const;
 
+const defaultConnectedAccounts: readonly ConnectedAccount[] = [
+  {
+    provider: 'google',
+    connected: true,
+    accountLabel: 'demo@gmail.com',
+    connectedAt: '2025-06-12T10:00:00.000Z',
+  },
+  {
+    provider: 'github',
+    connected: false,
+  },
+  {
+    provider: 'apple',
+    connected: false,
+  },
+];
+
+const supportedAvatarMimeTypes = ['image/jpeg', 'image/png', 'image/webp'] as const;
+const maxAvatarFileSizeBytes = 5 * 1024 * 1024;
+
 export interface MockVideoApiClientOptions {
   delayMs?: number;
   channels?: readonly Channel[];
@@ -55,8 +82,10 @@ export class MockVideoApiClient implements VideoApiClient {
   private comments: Comment[];
   private readonly currentUserId: UserProfileId;
   private readonly playlists: readonly Playlist[];
-  private readonly userProfiles: readonly UserProfile[];
+  private userProfiles: UserProfile[];
   private videos: Video[];
+  private preferencesByUserId = new Map<UserProfileId, UserPreferences>();
+  private connectedAccountsByUserId = new Map<UserProfileId, ConnectedAccount[]>();
   private uploadSequence = 0;
   private readonly completedUploads = new Map<
     string,
@@ -69,7 +98,7 @@ export class MockVideoApiClient implements VideoApiClient {
     this.comments = [...(options.comments ?? mockComments)];
     this.currentUserId = options.currentUserId ?? 'user-grace';
     this.playlists = options.playlists ?? mockPlaylists;
-    this.userProfiles = options.userProfiles ?? mockUserProfiles;
+    this.userProfiles = [...(options.userProfiles ?? mockUserProfiles)];
     this.videos = [...(options.videos ?? mockVideos)];
   }
 
@@ -129,6 +158,125 @@ export class MockVideoApiClient implements VideoApiClient {
   async getUserProfile(id: UserProfileId): Promise<UserProfile | undefined> {
     await this.wait();
     return this.userProfiles.find((profile) => profile.id === id);
+  }
+
+  async updateUserProfile(id: UserProfileId, input: UpdateProfileInput): Promise<UserProfile> {
+    await this.wait();
+    const profile = this.requireProfile(id);
+    const handle = normalizeHandle(input.handle);
+    if (!handle) throw new Error('Username is required.');
+    if (
+      this.userProfiles.some(
+        (candidate) => candidate.id !== id && candidate.handle.toLocaleLowerCase() === handle,
+      )
+    ) {
+      throw new Error('That username is already taken.');
+    }
+    const displayName = input.displayName.trim();
+    if (!displayName) throw new Error('Display name is required.');
+    const bio = input.bio !== undefined ? input.bio.trim() || undefined : profile.bio;
+    const next: UserProfile = {
+      id: profile.id,
+      handle,
+      displayName,
+      joinedAt: profile.joinedAt,
+      subscriberCount: profile.subscriberCount,
+      isVerified: profile.isVerified,
+      ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}),
+      ...(profile.bannerUrl ? { bannerUrl: profile.bannerUrl } : {}),
+      ...(bio ? { bio } : {}),
+      ...(profile.location ? { location: profile.location } : {}),
+      ...(profile.websiteUrl ? { websiteUrl: profile.websiteUrl } : {}),
+      ...(profile.followingCount !== undefined ? { followingCount: profile.followingCount } : {}),
+    };
+    this.userProfiles = this.userProfiles.map((item) => (item.id === id ? next : item));
+    return next;
+  }
+
+  async uploadUserAvatar(id: UserProfileId, input: UploadAvatarInput): Promise<UserProfile> {
+    await this.wait();
+    const profile = this.requireProfile(id);
+    if (!(supportedAvatarMimeTypes as readonly string[]).includes(input.type)) {
+      throw new Error('Unsupported avatar format. Use JPG, PNG, or WebP.');
+    }
+    if (input.size <= 0) throw new Error('The selected avatar is empty.');
+    if (input.size > maxAvatarFileSizeBytes) {
+      throw new Error('Avatar is too large. Maximum size is 5 MB.');
+    }
+    const next: UserProfile = {
+      ...profile,
+      avatarUrl: input.previewUrl,
+    };
+    this.userProfiles = this.userProfiles.map((item) => (item.id === id ? next : item));
+    return next;
+  }
+
+  async getUserPreferences(id: UserProfileId): Promise<UserPreferences> {
+    await this.wait();
+    this.requireProfile(id);
+    return this.ensurePreferences(id);
+  }
+
+  async updateUserPreferences(
+    id: UserProfileId,
+    input: UpdateUserPreferencesInput,
+  ): Promise<UserPreferences> {
+    await this.wait();
+    this.requireProfile(id);
+    const current = this.ensurePreferences(id);
+    const next: UserPreferences = {
+      appearance: input.appearance ?? current.appearance,
+      language: input.language ?? current.language,
+      notifications: {
+        ...current.notifications,
+        ...input.notifications,
+      },
+      privacy: {
+        ...current.privacy,
+        ...input.privacy,
+      },
+    };
+    this.preferencesByUserId.set(id, next);
+    return next;
+  }
+
+  async listConnectedAccounts(id: UserProfileId): Promise<readonly ConnectedAccount[]> {
+    await this.wait();
+    this.requireProfile(id);
+    return this.ensureConnectedAccounts(id);
+  }
+
+  async connectAccount(
+    id: UserProfileId,
+    provider: ConnectedAccountProvider,
+  ): Promise<readonly ConnectedAccount[]> {
+    await this.wait();
+    this.requireProfile(id);
+    const accounts = this.ensureConnectedAccounts(id).map((account) =>
+      account.provider === provider
+        ? {
+            provider,
+            connected: true,
+            accountLabel: `${provider}-user@example.com`,
+            connectedAt: new Date().toISOString(),
+          }
+        : account,
+    );
+    this.connectedAccountsByUserId.set(id, accounts);
+    return accounts;
+  }
+
+  async disconnectAccount(
+    id: UserProfileId,
+    provider: ConnectedAccountProvider,
+  ): Promise<readonly ConnectedAccount[]> {
+    await this.wait();
+    this.requireProfile(id);
+    const accounts = this.ensureConnectedAccounts(id).map((account) =>
+      account.provider === provider ? { provider, connected: false } : account,
+    );
+    this.connectedAccountsByUserId.set(id, accounts);
+    return accounts;
   }
 
   async listComments(
@@ -356,9 +504,54 @@ export class MockVideoApiClient implements VideoApiClient {
     return videos;
   }
 
+  private requireProfile(id: UserProfileId): UserProfile {
+    const profile = this.userProfiles.find((candidate) => candidate.id === id);
+    if (profile) return profile;
+    const created: UserProfile = {
+      id,
+      handle: id.replace(/^user-/, ''),
+      displayName: 'Creator',
+      joinedAt: new Date().toISOString(),
+      subscriberCount: 0,
+      followingCount: 0,
+      isVerified: false,
+    };
+    this.userProfiles = [...this.userProfiles, created];
+    return created;
+  }
+
+  private ensurePreferences(id: UserProfileId): UserPreferences {
+    const existing = this.preferencesByUserId.get(id);
+    if (existing) return existing;
+    const created: UserPreferences = {
+      appearance: defaultUserPreferences.appearance,
+      language: defaultUserPreferences.language,
+      notifications: { ...defaultUserPreferences.notifications },
+      privacy: { ...defaultUserPreferences.privacy },
+    };
+    this.preferencesByUserId.set(id, created);
+    return created;
+  }
+
+  private ensureConnectedAccounts(id: UserProfileId): ConnectedAccount[] {
+    const existing = this.connectedAccountsByUserId.get(id);
+    if (existing) return existing;
+    const created = defaultConnectedAccounts.map((account) => ({ ...account }));
+    this.connectedAccountsByUserId.set(id, created);
+    return created;
+  }
+
   private async wait(): Promise<void> {
     if (this.delayMs > 0) {
       await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
     }
   }
+}
+
+function normalizeHandle(value: string): string {
+  return value
+    .trim()
+    .replace(/^@/, '')
+    .toLocaleLowerCase()
+    .replace(/[^a-z0-9_-]/g, '');
 }

@@ -5,12 +5,14 @@ import { AppShell, Button, Header, SearchInput, Sidebar } from '@w3ds/ui';
 import { usePathname, useRouter } from 'next/navigation';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
 import { useAuthentication, useCurrentUser } from '../features/auth/auth-provider';
+import { useAppearancePreference } from '../features/settings/appearance-preference';
 
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
   { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
   { label: 'Library', href: '/library', icon: '▣' },
   { label: 'Upload', href: '/upload', icon: '⇪' },
+  { label: 'Settings', href: '/settings', icon: '⚙' },
 ];
 
 export interface ApplicationShellProps {
@@ -28,20 +30,13 @@ export function ApplicationShell({
   const pathname = usePathname();
   const { isLoading, logout } = useAuthentication();
   const user = useCurrentUser();
-  const [darkMode, setDarkMode] = useState(false);
+  const { appearance, resolvedTheme, setAppearance } = useAppearancePreference();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const navigationItems = navigation.map((item) => ({
     ...item,
     current: item.href === currentHref,
   }));
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
-    return () => {
-      delete document.documentElement.dataset.theme;
-    };
-  }, [darkMode]);
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -73,6 +68,12 @@ export function ApplicationShell({
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     const query = new FormData(event.currentTarget).get('q')?.toString().trim();
     if (!query) event.preventDefault();
+  };
+
+  const cycleAppearance = () => {
+    const order = ['light', 'dark', 'system'] as const;
+    const index = order.indexOf(appearance);
+    setAppearance(order[(index + 1) % order.length] ?? 'system');
   };
 
   return (
@@ -110,11 +111,14 @@ export function ApplicationShell({
               <Button
                 size="sm"
                 variant="ghost"
-                aria-pressed={darkMode}
-                aria-label={`Switch to ${darkMode ? 'light' : 'dark'} mode`}
-                onClick={() => setDarkMode((current) => !current)}
+                aria-label={`Appearance: ${appearance}. Switch theme`}
+                onClick={cycleAppearance}
               >
-                {darkMode ? 'Light mode' : 'Dark mode'}
+                {appearance === 'system'
+                  ? `System (${resolvedTheme})`
+                  : appearance === 'dark'
+                    ? 'Dark mode'
+                    : 'Light mode'}
               </Button>
               {!isLoading &&
                 (user ? (
@@ -122,7 +126,7 @@ export function ApplicationShell({
                     <Button size="sm" variant="secondary" onClick={() => router.push('/upload')}>
                       Upload
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => router.push('/library')}>
+                    <Button size="sm" variant="ghost" onClick={() => router.push('/settings')}>
                       {user.displayName}
                     </Button>
                     <Button

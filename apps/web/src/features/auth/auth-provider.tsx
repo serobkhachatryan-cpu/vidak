@@ -30,6 +30,7 @@ interface AuthenticationContextValue {
   login(input: LoginInput): Promise<AuthSession>;
   register(input: RegisterInput): Promise<AuthSession>;
   logout(): Promise<void>;
+  updateSessionUser(user: AuthUser): void;
 }
 
 const AuthenticationContext = createContext<AuthenticationContextValue | undefined>(undefined);
@@ -75,6 +76,14 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
             predicate: (query) => query.queryKey[0] !== authSessionQueryKey[0],
           });
         }
+      },
+      updateSessionUser: (user) => {
+        const current = queryClient.getQueryData<AuthSession | null>(authSessionQueryKey);
+        if (!current) return;
+        const next = { ...current, user };
+        const stored = tokenStorage.read();
+        storeSession(tokenStorage, next, stored?.remember ?? false);
+        queryClient.setQueryData(authSessionQueryKey, next);
       },
     }),
     [

@@ -13,6 +13,28 @@ export type { Playlist, PlaylistId, PlaylistItem, PlaylistVisibility } from './p
 export type { SearchFilters, SearchResultType, SearchSort } from './search';
 export type { UserProfile, UserProfileId } from './user-profile';
 export type {
+  AppearancePreference,
+  AppLanguage,
+  AuthDeviceSession,
+  ChangeEmailInput,
+  ChangePasswordInput,
+  ConnectedAccount,
+  ConnectedAccountProvider,
+  DeleteAccountInput,
+  NotificationPreferences,
+  PrivacySettings,
+  UpdateProfileInput,
+  UpdateUserPreferencesInput,
+  UploadAvatarInput,
+  UserPreferences,
+} from './user-settings';
+export {
+  appLanguages,
+  defaultNotificationPreferences,
+  defaultPrivacySettings,
+  defaultUserPreferences,
+} from './user-settings';
+export type {
   CreateVideoInput,
   UpdateVideoInput,
   UploadVideoInput,

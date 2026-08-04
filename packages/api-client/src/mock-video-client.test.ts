@@ -102,4 +102,25 @@ describe('MockVideoApiClient', () => {
     controller.abort();
     await expect(uploadPromise).rejects.toMatchObject({ name: 'AbortError' });
   });
+
+  it('updates profile preferences and connected accounts', async () => {
+    const profile = await client.updateUserProfile('user-demo', {
+      displayName: 'Demo Creator',
+      handle: 'demo-creator',
+      bio: 'Updated bio',
+    });
+    expect(profile.bio).toBe('Updated bio');
+
+    const preferences = await client.updateUserPreferences('user-demo', {
+      appearance: 'dark',
+      notifications: { emailMarketing: true },
+    });
+    expect(preferences.appearance).toBe('dark');
+    expect(preferences.notifications.emailMarketing).toBe(true);
+
+    const connected = await client.connectAccount('user-demo', 'github');
+    expect(connected.find((account) => account.provider === 'github')?.connected).toBe(true);
+    const disconnected = await client.disconnectAccount('user-demo', 'github');
+    expect(disconnected.find((account) => account.provider === 'github')?.connected).toBe(false);
+  });
 });

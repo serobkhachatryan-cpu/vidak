@@ -1,3 +1,10 @@
+import type {
+  AuthDeviceSession,
+  ChangeEmailInput,
+  ChangePasswordInput,
+  DeleteAccountInput,
+} from '@w3ds/types';
+
 export type Role = 'creator' | 'moderator' | 'admin';
 
 export interface AuthUser {
@@ -33,12 +40,23 @@ export interface RegisterInput extends LoginInput {
   displayName: string;
 }
 
+export interface UpdateAuthProfileInput {
+  displayName: string;
+  avatarUrl?: string | null;
+}
+
 export interface AuthApi {
   login(input: LoginInput): Promise<AuthSession>;
   register(input: RegisterInput): Promise<AuthSession>;
   refresh(refreshToken: string): Promise<AuthSession>;
   getCurrentUser(accessToken: string): Promise<AuthUser>;
   logout(refreshToken?: string): Promise<void>;
+  updateProfile(accessToken: string, input: UpdateAuthProfileInput): Promise<AuthUser>;
+  changeEmail(accessToken: string, input: ChangeEmailInput): Promise<AuthUser>;
+  changePassword(accessToken: string, input: ChangePasswordInput): Promise<void>;
+  listSessions(accessToken: string): Promise<readonly AuthDeviceSession[]>;
+  revokeSession(accessToken: string, sessionId: string): Promise<readonly AuthDeviceSession[]>;
+  deleteAccount(accessToken: string, input: DeleteAccountInput): Promise<void>;
 }
 
 export interface TokenStorage {

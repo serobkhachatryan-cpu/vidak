@@ -1,0 +1,97 @@
+import type { AppearancePreference, AppLanguage, ConnectedAccountProvider } from '@w3ds/types';
+
+export const settingsSectionOrder = [
+  'profile',
+  'email',
+  'password',
+  'notifications',
+  'privacy',
+  'appearance',
+  'language',
+  'connected',
+  'sessions',
+  'danger',
+] as const;
+
+export type SettingsSectionId = (typeof settingsSectionOrder)[number];
+
+export const settingsSectionLabels: Record<SettingsSectionId, string> = {
+  profile: 'Profile',
+  email: 'Email',
+  password: 'Password',
+  notifications: 'Notifications',
+  privacy: 'Privacy',
+  appearance: 'Appearance',
+  language: 'Language',
+  connected: 'Connected accounts',
+  sessions: 'Sessions',
+  danger: 'Delete account',
+};
+
+export const settingsSectionDescriptions: Record<SettingsSectionId, string> = {
+  profile: 'Update how you appear across W3DS Video.',
+  email: 'Manage the email address used to sign in.',
+  password: 'Change your password to keep your account secure.',
+  notifications: 'Choose which updates you want to receive.',
+  privacy: 'Control what others can see about your activity.',
+  appearance: 'Choose light, dark, or match your system.',
+  language: 'Select the language used across the product.',
+  connected: 'Link or unlink third-party sign-in providers.',
+  sessions: 'Review devices that are currently signed in.',
+  danger: 'Permanently delete your account and creator data.',
+};
+
+export const appearanceOptions: readonly {
+  value: AppearancePreference;
+  label: string;
+  description: string;
+}[] = [
+  { value: 'light', label: 'Light', description: 'Bright surfaces and dark text.' },
+  { value: 'dark', label: 'Dark', description: 'Dim surfaces for low-light viewing.' },
+  { value: 'system', label: 'System', description: 'Match your device preference.' },
+];
+
+export const appLanguageLabels: Record<AppLanguage, string> = {
+  en: 'English',
+  es: 'Español',
+  fr: 'Français',
+  de: 'Deutsch',
+  ja: '日本語',
+  pt: 'Português',
+  zh: '中文',
+};
+
+export const connectedAccountLabels: Record<ConnectedAccountProvider, string> = {
+  google: 'Google',
+  github: 'GitHub',
+  apple: 'Apple',
+};
+
+export const notificationPreferenceLabels = {
+  emailMarketing: 'Marketing emails',
+  emailProductUpdates: 'Product update emails',
+  emailComments: 'Comment emails',
+  emailMentions: 'Mention emails',
+  pushComments: 'Comment push notifications',
+  pushMentions: 'Mention push notifications',
+  pushSubscriptions: 'Subscription push notifications',
+} as const;
+
+export const privacySettingLabels = {
+  showActivityStatus: 'Show activity status',
+  allowMentions: 'Allow mentions',
+  showSubscriptions: 'Show subscriptions publicly',
+  personalizedRecommendations: 'Personalized recommendations',
+  searchableByEmail: 'Allow people to find you by email',
+} as const;
+
+export const supportedAvatarMimeTypes = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export const supportedAvatarExtensions = ['.jpg', '.jpeg', '.png', '.webp'] as const;
+export const maxAvatarFileSizeBytes = 5 * 1024 * 1024;
+export const avatarFileAccept = supportedAvatarMimeTypes.join(',');
+export const deleteAccountConfirmation = 'DELETE';
+
+export const settingsNavId = (scope: string, section: SettingsSectionId) =>
+  `${scope}-nav-${section}`;
+export const settingsPanelId = (scope: string, section: SettingsSectionId) =>
+  `${scope}-panel-${section}`;

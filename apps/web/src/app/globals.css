@@ -5,6 +5,7 @@
 @source "../../../../packages/ui/src";
 @source "../../../../packages/upload-page/src";
 @source "../../../../packages/user-profile-page/src";
+@source "../../../../packages/settings-page/src";
 @source "../../../../packages/watch-page/src";
 @source "../features";
 
