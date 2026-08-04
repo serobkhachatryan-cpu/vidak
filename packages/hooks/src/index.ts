@@ -1,4 +1,5 @@
 export {
+  mergeUserPreferences,
   settingsQueryKeys,
   useConnectAccount,
   useConnectedAccounts,

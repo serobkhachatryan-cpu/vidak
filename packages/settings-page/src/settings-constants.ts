@@ -1,4 +1,12 @@
 import type { AppearancePreference, AppLanguage, ConnectedAccountProvider } from '@w3ds/types';
+import {
+  deleteAccountConfirmation as sharedDeleteAccountConfirmation,
+  maxAvatarFileSizeBytes as sharedMaxAvatarFileSizeBytes,
+  supportedAvatarExtensions as sharedSupportedAvatarExtensions,
+  supportedAvatarMimeTypes as sharedSupportedAvatarMimeTypes,
+} from '@w3ds/types';
+
+export type SettingsPageState = 'loading' | 'error' | 'empty' | 'ready';
 
 export const settingsSectionOrder = [
   'profile',
@@ -85,11 +93,13 @@ export const privacySettingLabels = {
   searchableByEmail: 'Allow people to find you by email',
 } as const;
 
-export const supportedAvatarMimeTypes = ['image/jpeg', 'image/png', 'image/webp'] as const;
-export const supportedAvatarExtensions = ['.jpg', '.jpeg', '.png', '.webp'] as const;
-export const maxAvatarFileSizeBytes = 5 * 1024 * 1024;
-export const avatarFileAccept = supportedAvatarMimeTypes.join(',');
-export const deleteAccountConfirmation = 'DELETE';
+export const supportedAvatarMimeTypes = sharedSupportedAvatarMimeTypes;
+export const supportedAvatarExtensions = sharedSupportedAvatarExtensions;
+export const maxAvatarFileSizeBytes = sharedMaxAvatarFileSizeBytes;
+export const avatarFileAccept = [...supportedAvatarMimeTypes, ...supportedAvatarExtensions].join(
+  ',',
+);
+export const deleteAccountConfirmation = sharedDeleteAccountConfirmation;
 
 export const settingsNavId = (scope: string, section: SettingsSectionId) =>
   `${scope}-nav-${section}`;

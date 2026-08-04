@@ -13,6 +13,7 @@ import type {
   ChangePasswordInput,
   DeleteAccountInput,
 } from '@w3ds/types';
+import { deleteAccountConfirmation } from '@w3ds/types';
 
 export interface MockAuthApiClientOptions {
   delayMs?: number;
@@ -216,9 +217,9 @@ export class MockAuthApiClient implements AuthApi {
     if (user.password !== input.password) {
       throw new AuthenticationError('Current password is incorrect.', 'invalid_password');
     }
-    if (input.confirmation.trim() !== 'DELETE') {
+    if (input.confirmation.trim() !== deleteAccountConfirmation) {
       throw new AuthenticationError(
-        'Type DELETE to confirm account deletion.',
+        `Type ${deleteAccountConfirmation} to confirm account deletion.`,
         'confirmation_mismatch',
       );
     }

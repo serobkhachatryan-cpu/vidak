@@ -93,6 +93,22 @@ export const Notifications: Story = {
   args: { activeSection: 'notifications' },
 };
 
+export const Privacy: Story = {
+  args: { activeSection: 'privacy' },
+};
+
+export const Email: Story = {
+  args: { activeSection: 'email' },
+};
+
+export const Password: Story = {
+  args: { activeSection: 'password' },
+};
+
+export const Language: Story = {
+  args: { activeSection: 'language', language: 'es', languageSuccess: 'Language updated.' },
+};
+
 export const Appearance: Story = {
   args: { activeSection: 'appearance', appearance: 'dark' },
 };
@@ -101,8 +117,20 @@ export const ConnectedAccounts: Story = {
   args: { activeSection: 'connected' },
 };
 
+export const ConnectedAccountsLoading: Story = {
+  args: { activeSection: 'connected', connectedAccountsLoading: true, connectedAccounts: [] },
+};
+
 export const Sessions: Story = {
   args: { activeSection: 'sessions' },
+};
+
+export const SessionsLoading: Story = {
+  args: { activeSection: 'sessions', sessionsLoading: true, sessions: [] },
+};
+
+export const SessionsEmpty: Story = {
+  args: { activeSection: 'sessions', sessionsEmpty: true, sessions: [] },
 };
 
 export const DeleteAccount: Story = {

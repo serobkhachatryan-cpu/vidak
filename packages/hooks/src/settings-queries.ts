@@ -16,8 +16,20 @@ export const settingsQueryKeys = {
   preferences: (id: UserProfileId) => [...settingsQueryKeys.all, 'preferences', id] as const,
   connectedAccounts: (id: UserProfileId) =>
     [...settingsQueryKeys.all, 'connected-accounts', id] as const,
-  sessions: (userId: string) => [...settingsQueryKeys.all, 'sessions', userId] as const,
+  sessions: (userId: UserProfileId) => [...settingsQueryKeys.all, 'sessions', userId] as const,
 };
+
+export function mergeUserPreferences(
+  previous: UserPreferences,
+  input: UpdateUserPreferencesInput,
+): UserPreferences {
+  return {
+    appearance: input.appearance ?? previous.appearance,
+    language: input.language ?? previous.language,
+    notifications: { ...previous.notifications, ...input.notifications },
+    privacy: { ...previous.privacy, ...input.privacy },
+  };
+}
 
 export function useUserPreferences(
   client: VideoApiClient,
@@ -53,12 +65,7 @@ export function useUpdateUserPreferences(client: VideoApiClient, userId: UserPro
       await queryClient.cancelQueries({ queryKey });
       const previous = queryClient.getQueryData<UserPreferences>(queryKey);
       if (previous) {
-        queryClient.setQueryData<UserPreferences>(queryKey, {
-          appearance: input.appearance ?? previous.appearance,
-          language: input.language ?? previous.language,
-          notifications: { ...previous.notifications, ...input.notifications },
-          privacy: { ...previous.privacy, ...input.privacy },
-        });
+        queryClient.setQueryData<UserPreferences>(queryKey, mergeUserPreferences(previous, input));
       }
       return previous ? { previous } : {};
     },
@@ -67,8 +74,8 @@ export function useUpdateUserPreferences(client: VideoApiClient, userId: UserPro
         queryClient.setQueryData(queryKey, context.previous);
       }
     },
-    onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey });
+    onSuccess: (preferences) => {
+      queryClient.setQueryData(queryKey, preferences);
     },
   });
 }

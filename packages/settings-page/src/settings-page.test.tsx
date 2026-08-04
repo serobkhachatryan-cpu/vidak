@@ -99,6 +99,70 @@ describe('SettingsPage', () => {
       />,
     );
     expect(emptySessions).toContain('No active sessions');
+
+    const loadingSessions = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@w3ds.video"
+        profile={profile}
+        activeSection="sessions"
+        sessionsLoading
+      />,
+    );
+    expect(loadingSessions).toContain('aria-label="Loading sessions"');
+    expect(loadingSessions).not.toContain('No active sessions');
+
+    const loadingConnected = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@w3ds.video"
+        profile={profile}
+        activeSection="connected"
+        connectedAccountsLoading
+      />,
+    );
+    expect(loadingConnected).toContain('aria-label="Loading connected accounts"');
+  });
+
+  it('renders email, password, privacy, and language sections', () => {
+    const email = renderToStaticMarkup(
+      <SettingsPage email="demo@w3ds.video" profile={profile} activeSection="email" />,
+    );
+    expect(email).toContain('demo@w3ds.video');
+
+    const password = renderToStaticMarkup(
+      <SettingsPage email="demo@w3ds.video" profile={profile} activeSection="password" />,
+    );
+    expect(password).toContain('Current password');
+    expect(password).toContain('New password');
+
+    const privacy = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@w3ds.video"
+        profile={profile}
+        privacy={defaultPrivacySettings}
+        activeSection="privacy"
+      />,
+    );
+    expect(privacy).toContain('role="switch"');
+    expect(privacy).toContain('Show activity status');
+
+    const language = renderToStaticMarkup(
+      <SettingsPage email="demo@w3ds.video" profile={profile} activeSection="language" />,
+    );
+    expect(language).toContain('English');
+    expect(language).toContain('Español');
+  });
+
+  it('associates notification switches with visible labels', () => {
+    const markup = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@w3ds.video"
+        profile={profile}
+        notifications={defaultNotificationPreferences}
+        activeSection="notifications"
+      />,
+    );
+    expect(markup).toContain('aria-labelledby=');
+    expect(markup).not.toContain('aria-label="Comment emails"');
   });
 
   it('renders delete account confirmation controls', () => {
@@ -107,6 +171,7 @@ describe('SettingsPage', () => {
     );
     expect(markup).toContain('Delete account');
     expect(markup).toContain('Deleting your account removes your profile');
+    expect(markup).toContain('aria-describedby=');
   });
 
   it('renders loading and error states', () => {

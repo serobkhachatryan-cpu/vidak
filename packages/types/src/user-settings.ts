@@ -107,3 +107,11 @@ export const defaultUserPreferences: UserPreferences = {
   notifications: defaultNotificationPreferences,
   privacy: defaultPrivacySettings,
 };
+
+/** Shared avatar upload constraints used by clients and settings validation. */
+export const supportedAvatarMimeTypes = ['image/jpeg', 'image/png', 'image/webp'] as const;
+export const supportedAvatarExtensions = ['.jpg', '.jpeg', '.png', '.webp'] as const;
+export const maxAvatarFileSizeBytes = 5 * 1024 * 1024;
+
+/** Exact confirmation token required to delete an account. */
+export const deleteAccountConfirmation = 'DELETE';

@@ -30,6 +30,7 @@ import { PrivacySection } from './sections/privacy-section';
 import { ProfileSection } from './sections/profile-section';
 import { SessionsSection } from './sections/sessions-section';
 import {
+  type SettingsPageState,
   type SettingsSectionId,
   settingsNavId,
   settingsPanelId,
@@ -49,7 +50,71 @@ import type {
 } from './settings-validation';
 import { cx } from './styles';
 
-export type SettingsPageState = 'loading' | 'error' | 'empty' | 'ready';
+export type { SettingsPageState };
+
+/** Props owned by `SettingsPageData` so the presentational page stays dumb. */
+export type SettingsPageDataOwnedProp =
+  | 'state'
+  | 'email'
+  | 'profile'
+  | 'avatarUrl'
+  | 'profileErrors'
+  | 'avatarError'
+  | 'profileSuccess'
+  | 'profileFormError'
+  | 'isSavingProfile'
+  | 'isUploadingAvatar'
+  | 'onProfileChange'
+  | 'onAvatarSelect'
+  | 'onSaveProfile'
+  | 'emailForm'
+  | 'emailErrors'
+  | 'emailSuccess'
+  | 'emailFormError'
+  | 'isSavingEmail'
+  | 'onEmailChange'
+  | 'onSaveEmail'
+  | 'passwordForm'
+  | 'passwordErrors'
+  | 'passwordSuccess'
+  | 'passwordFormError'
+  | 'isSavingPassword'
+  | 'onPasswordChange'
+  | 'onSavePassword'
+  | 'notifications'
+  | 'notificationsError'
+  | 'notificationsDisabled'
+  | 'onNotificationToggle'
+  | 'privacy'
+  | 'privacyError'
+  | 'privacyDisabled'
+  | 'onPrivacyToggle'
+  | 'appearance'
+  | 'appearanceError'
+  | 'onAppearanceChange'
+  | 'language'
+  | 'languageError'
+  | 'languageSuccess'
+  | 'onLanguageChange'
+  | 'connectedAccounts'
+  | 'connectedAccountsLoading'
+  | 'connectedAccountsPendingProvider'
+  | 'connectedAccountsError'
+  | 'onConnectAccount'
+  | 'onDisconnectAccount'
+  | 'sessions'
+  | 'sessionsLoading'
+  | 'sessionsPendingId'
+  | 'sessionsError'
+  | 'sessionsEmpty'
+  | 'onRevokeSession'
+  | 'deleteForm'
+  | 'deleteErrors'
+  | 'deleteFormError'
+  | 'isDeletingAccount'
+  | 'onDeleteFormChange'
+  | 'onDeleteAccount'
+  | 'onRetry';
 
 export interface SettingsPageProps {
   state?: SettingsPageState;
@@ -84,9 +149,11 @@ export interface SettingsPageProps {
   onSavePassword?: () => void;
   notifications?: NotificationPreferences;
   notificationsError?: string;
+  notificationsDisabled?: boolean;
   onNotificationToggle?: (key: keyof NotificationPreferences, checked: boolean) => void;
   privacy?: PrivacySettings;
   privacyError?: string;
+  privacyDisabled?: boolean;
   onPrivacyToggle?: (key: keyof PrivacySettings, checked: boolean) => void;
   appearance?: AppearancePreference;
   appearanceError?: string;
@@ -96,11 +163,13 @@ export interface SettingsPageProps {
   languageSuccess?: string;
   onLanguageChange?: (language: AppLanguage) => void;
   connectedAccounts?: readonly ConnectedAccount[];
+  connectedAccountsLoading?: boolean;
   connectedAccountsPendingProvider?: ConnectedAccountProvider;
   connectedAccountsError?: string;
   onConnectAccount?: (provider: ConnectedAccountProvider) => void;
   onDisconnectAccount?: (provider: ConnectedAccountProvider) => void;
   sessions?: readonly AuthDeviceSession[];
+  sessionsLoading?: boolean;
   sessionsPendingId?: string;
   sessionsError?: string;
   sessionsEmpty?: boolean;
@@ -193,9 +262,11 @@ export function SettingsPage({
   onSavePassword,
   notifications,
   notificationsError,
+  notificationsDisabled,
   onNotificationToggle,
   privacy,
   privacyError,
+  privacyDisabled,
   onPrivacyToggle,
   appearance = 'system',
   appearanceError,
@@ -205,11 +276,13 @@ export function SettingsPage({
   languageSuccess,
   onLanguageChange,
   connectedAccounts = [],
+  connectedAccountsLoading,
   connectedAccountsPendingProvider,
   connectedAccountsError,
   onConnectAccount,
   onDisconnectAccount,
   sessions = [],
+  sessionsLoading,
   sessionsPendingId,
   sessionsError,
   sessionsEmpty,
@@ -304,6 +377,7 @@ export function SettingsPage({
             {currentSection === 'notifications' && notifications && (
               <NotificationsSection
                 value={notifications}
+                disabled={notificationsDisabled ?? false}
                 {...(notificationsError ? { error: notificationsError } : {})}
                 onToggle={(key, checked) => onNotificationToggle?.(key, checked)}
               />
@@ -311,6 +385,7 @@ export function SettingsPage({
             {currentSection === 'privacy' && privacy && (
               <PrivacySection
                 value={privacy}
+                disabled={privacyDisabled ?? false}
                 {...(privacyError ? { error: privacyError } : {})}
                 onToggle={(key, checked) => onPrivacyToggle?.(key, checked)}
               />
@@ -333,6 +408,7 @@ export function SettingsPage({
             {currentSection === 'connected' && (
               <ConnectedAccountsSection
                 accounts={connectedAccounts}
+                isLoading={connectedAccountsLoading ?? false}
                 {...(connectedAccountsPendingProvider
                   ? { pendingProvider: connectedAccountsPendingProvider }
                   : {})}
@@ -344,6 +420,7 @@ export function SettingsPage({
             {currentSection === 'sessions' && (
               <SessionsSection
                 sessions={sessions}
+                isLoading={sessionsLoading ?? false}
                 {...(sessionsPendingId ? { pendingSessionId: sessionsPendingId } : {})}
                 {...(sessionsError ? { error: sessionsError } : {})}
                 empty={sessionsEmpty ?? false}

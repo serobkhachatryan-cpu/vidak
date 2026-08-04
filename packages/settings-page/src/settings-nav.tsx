@@ -6,15 +6,8 @@ import {
   settingsSectionLabels,
   settingsSectionOrder,
 } from './settings-constants';
+import { nextSettingsSection } from './settings-page-helpers';
 import { cx, focusRing } from './styles';
-
-function indexForKey(key: string, current: number, total: number): number | undefined {
-  if (key === 'ArrowDown' || key === 'ArrowRight') return (current + 1) % total;
-  if (key === 'ArrowUp' || key === 'ArrowLeft') return (current + total - 1) % total;
-  if (key === 'Home') return 0;
-  if (key === 'End') return total - 1;
-  return undefined;
-}
 
 export interface SettingsNavProps {
   scope: string;
@@ -26,12 +19,7 @@ export function SettingsNav({ scope, activeSection, onChange }: SettingsNavProps
   const listRef = useRef<HTMLDivElement>(null);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const nextIndex = indexForKey(
-      event.key,
-      settingsSectionOrder.indexOf(activeSection),
-      settingsSectionOrder.length,
-    );
-    const next = nextIndex === undefined ? undefined : settingsSectionOrder[nextIndex];
+    const next = nextSettingsSection(activeSection, event.key);
     if (!next) return;
     event.preventDefault();
     onChange(next);

@@ -1,4 +1,4 @@
-export type { SettingsSectionId } from './settings-constants';
+export type { SettingsPageState, SettingsSectionId } from './settings-constants';
 export {
   appearanceOptions,
   appLanguageLabels,
@@ -14,10 +14,18 @@ export {
   supportedAvatarExtensions,
   supportedAvatarMimeTypes,
 } from './settings-constants';
-export type { SettingsPageProps, SettingsPageState } from './settings-page';
+export type { SettingsPageDataOwnedProp, SettingsPageProps } from './settings-page';
 export { SettingsPage } from './settings-page';
 export type { SettingsPageDataProps } from './settings-page-data';
 export { SettingsPageData } from './settings-page-data';
+export {
+  errorMessage,
+  isAppLanguage,
+  nextSettingsSection,
+  profileFormFromProfile,
+  resolveSettingsPageState,
+  settingsNavIndexForKey,
+} from './settings-page-helpers';
 export type {
   DeleteAccountFormErrors,
   DeleteAccountFormInput,

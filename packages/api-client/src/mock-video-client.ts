@@ -28,7 +28,11 @@ import type {
   VideoId,
   VideoListFilters,
 } from '@w3ds/types';
-import { defaultUserPreferences } from '@w3ds/types';
+import {
+  defaultUserPreferences,
+  maxAvatarFileSizeBytes,
+  supportedAvatarMimeTypes,
+} from '@w3ds/types';
 import {
   mockChannels,
   mockComments,
@@ -62,9 +66,6 @@ const defaultConnectedAccounts: readonly ConnectedAccount[] = [
     connected: false,
   },
 ];
-
-const supportedAvatarMimeTypes = ['image/jpeg', 'image/png', 'image/webp'] as const;
-const maxAvatarFileSizeBytes = 5 * 1024 * 1024;
 
 export interface MockVideoApiClientOptions {
   delayMs?: number;

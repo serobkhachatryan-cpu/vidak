@@ -1,7 +1,8 @@
+import type { ChangeEmailInput, ChangePasswordInput, DeleteAccountInput } from '@w3ds/types';
 import {
-  avatarFileAccept,
   deleteAccountConfirmation,
   maxAvatarFileSizeBytes,
+  supportedAvatarExtensions,
   supportedAvatarMimeTypes,
 } from './settings-constants';
 
@@ -23,21 +24,16 @@ export interface ProfileFormErrors {
   bio?: string;
 }
 
-export interface EmailFormInput {
-  email: string;
-  password: string;
-}
+export type EmailFormInput = ChangeEmailInput;
 
 export interface EmailFormErrors {
   email?: string;
   password?: string;
 }
 
-export interface PasswordFormInput {
-  currentPassword: string;
-  newPassword: string;
+export type PasswordFormInput = ChangePasswordInput & {
   confirmPassword: string;
-}
+};
 
 export interface PasswordFormErrors {
   currentPassword?: string;
@@ -45,10 +41,7 @@ export interface PasswordFormErrors {
   confirmPassword?: string;
 }
 
-export interface DeleteAccountFormInput {
-  password: string;
-  confirmation: string;
-}
+export type DeleteAccountFormInput = DeleteAccountInput;
 
 export interface DeleteAccountFormErrors {
   password?: string;
@@ -57,6 +50,11 @@ export interface DeleteAccountFormErrors {
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const handlePattern = /^[a-z0-9][a-z0-9_-]{2,29}$/;
+
+function avatarExtensionMatches(name: string): boolean {
+  const lower = name.toLocaleLowerCase();
+  return supportedAvatarExtensions.some((extension) => lower.endsWith(extension));
+}
 
 export function validateProfile(input: ProfileFormInput): ProfileFormErrors {
   const errors: ProfileFormErrors = {};
@@ -128,7 +126,9 @@ export function hasDeleteAccountErrors(errors: DeleteAccountFormErrors): boolean
 
 export function validateAvatarFile(file: UploadFileLike | undefined): string | undefined {
   if (!file) return 'Select an image file.';
-  if (!(supportedAvatarMimeTypes as readonly string[]).includes(file.type)) {
+  const mimeOk = (supportedAvatarMimeTypes as readonly string[]).includes(file.type);
+  const extensionOk = !file.type && avatarExtensionMatches(file.name);
+  if (!mimeOk && !extensionOk) {
     return 'Unsupported avatar format. Use JPG, PNG, or WebP.';
   }
   if (file.size <= 0) return 'The selected avatar is empty.';
@@ -137,5 +137,3 @@ export function validateAvatarFile(file: UploadFileLike | undefined): string | u
   }
   return undefined;
 }
-
-export { avatarFileAccept };

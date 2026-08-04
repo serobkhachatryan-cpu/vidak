@@ -4,7 +4,7 @@ import type { AppearancePreference } from '@w3ds/types';
 import { Radio, Text } from '@w3ds/ui';
 import { useId } from 'react';
 import { appearanceOptions } from '../settings-constants';
-import { cx, focusRing } from '../styles';
+import { cx } from '../styles';
 
 export interface AppearanceSectionProps {
   value: AppearancePreference;
@@ -33,7 +33,6 @@ export function AppearanceSection({ value, error, onChange }: AppearanceSectionP
               key={option.value}
               className={cx(
                 'rounded-md border border-border p-4 transition-colors duration-fast',
-                focusRing,
                 selected ? 'border-primary bg-muted' : 'hover:border-muted-foreground',
               )}
             >

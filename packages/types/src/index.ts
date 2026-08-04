@@ -33,6 +33,10 @@ export {
   defaultNotificationPreferences,
   defaultPrivacySettings,
   defaultUserPreferences,
+  deleteAccountConfirmation,
+  maxAvatarFileSizeBytes,
+  supportedAvatarExtensions,
+  supportedAvatarMimeTypes,
 } from './user-settings';
 export type {
   CreateVideoInput,

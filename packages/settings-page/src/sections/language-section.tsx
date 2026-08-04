@@ -5,6 +5,7 @@ import { appLanguages } from '@w3ds/types';
 import { Label, Select, Text } from '@w3ds/ui';
 import { useId } from 'react';
 import { appLanguageLabels } from '../settings-constants';
+import { isAppLanguage } from '../settings-page-helpers';
 
 export interface LanguageSectionProps {
   value: AppLanguage;
@@ -24,7 +25,10 @@ export function LanguageSection({ value, error, successMessage, onChange }: Lang
           id={languageId}
           value={value}
           aria-label="Language"
-          onChange={(event) => onChange(event.target.value as AppLanguage)}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (isAppLanguage(next)) onChange(next);
+          }}
         >
           {appLanguages.map((language) => (
             <option key={language} value={language}>

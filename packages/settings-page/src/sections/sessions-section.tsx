@@ -1,24 +1,15 @@
 'use client';
 
 import type { AuthDeviceSession } from '@w3ds/types';
-import { Badge, Button, EmptyState, Text } from '@w3ds/ui';
-
-function formatTimestamp(value: string): string {
-  try {
-    return new Intl.DateTimeFormat(undefined, {
-      dateStyle: 'medium',
-      timeStyle: 'short',
-    }).format(new Date(value));
-  } catch {
-    return value;
-  }
-}
+import { Badge, Button, EmptyState, Skeleton, Text } from '@w3ds/ui';
+import { formatSettingsTimestamp } from '../format';
 
 export interface SessionsSectionProps {
   sessions: readonly AuthDeviceSession[];
   pendingSessionId?: string;
   error?: string;
   empty?: boolean;
+  isLoading?: boolean;
   onRevoke: (sessionId: string) => void;
 }
 
@@ -27,8 +18,18 @@ export function SessionsSection({
   pendingSessionId,
   error,
   empty = false,
+  isLoading = false,
   onRevoke,
 }: SessionsSectionProps) {
+  if (isLoading) {
+    return (
+      <div role="status" aria-busy="true" aria-label="Loading sessions" className="space-y-3">
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-20 w-full" />
+      </div>
+    );
+  }
+
   if (empty || sessions.length === 0) {
     return (
       <EmptyState
@@ -53,7 +54,7 @@ export function SessionsSection({
                 {session.current && <Badge tone="primary">This device</Badge>}
               </div>
               <Text size="sm" tone="muted">
-                Last active {formatTimestamp(session.lastActiveAt)}
+                Last active {formatSettingsTimestamp(session.lastActiveAt)}
                 {session.location ? ` · ${session.location}` : ''}
                 {session.ipAddress ? ` · ${session.ipAddress}` : ''}
               </Text>
@@ -64,6 +65,7 @@ export function SessionsSection({
                 size="sm"
                 isLoading={pendingSessionId === session.id}
                 loadingText="Revoking"
+                aria-label={`Sign out ${session.deviceName}`}
                 onClick={() => onRevoke(session.id)}
               >
                 Sign out

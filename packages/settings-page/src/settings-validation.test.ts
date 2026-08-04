@@ -61,5 +61,6 @@ describe('settings validation', () => {
     expect(
       validateAvatarFile({ name: 'avatar.png', size: 100, type: 'image/png' }),
     ).toBeUndefined();
+    expect(validateAvatarFile({ name: 'avatar.webp', size: 100, type: '' })).toBeUndefined();
   });
 });

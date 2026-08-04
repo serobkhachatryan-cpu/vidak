@@ -27,12 +27,13 @@ export function DeleteAccountSection({
   const [confirming, setConfirming] = useState(false);
 
   if (!confirming) {
+    const warningId = `${passwordId}-warning`;
     return (
       <div className="space-y-4 rounded-md border border-danger/40 bg-danger/5 p-4">
-        <Text size="sm" tone="muted">
+        <Text id={warningId} size="sm" tone="muted">
           Deleting your account removes your profile, videos, and settings. This cannot be undone.
         </Text>
-        <Button variant="danger" onClick={() => setConfirming(true)}>
+        <Button variant="danger" aria-describedby={warningId} onClick={() => setConfirming(true)}>
           Delete account
         </Button>
       </div>

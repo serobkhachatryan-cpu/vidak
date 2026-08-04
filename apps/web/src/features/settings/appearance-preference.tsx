@@ -37,12 +37,10 @@ const AppearancePreferenceContext = createContext<AppearancePreferenceContextVal
 );
 
 export function AppearancePreferenceProvider({ children }: { children: ReactNode }) {
-  const [appearance, setAppearanceState] = useState<AppearancePreference>('system');
-  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
-
-  useEffect(() => {
-    setAppearanceState(readStoredAppearance());
-  }, []);
+  const [appearance, setAppearanceState] = useState<AppearancePreference>(readStoredAppearance);
+  const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() =>
+    resolveTheme(readStoredAppearance()),
+  );
 
   useEffect(() => {
     const apply = () => setResolvedTheme(resolveTheme(appearance));
@@ -56,9 +54,6 @@ export function AppearancePreferenceProvider({ children }: { children: ReactNode
 
   useEffect(() => {
     document.documentElement.dataset.theme = resolvedTheme;
-    return () => {
-      delete document.documentElement.dataset.theme;
-    };
   }, [resolvedTheme]);
 
   const setAppearance = useCallback((next: AppearancePreference) => {

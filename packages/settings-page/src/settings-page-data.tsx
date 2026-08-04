@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { VideoApiClient } from '@w3ds/api-client';
-import { type AuthApi, AuthenticationError, type AuthUser } from '@w3ds/auth';
+import type { AuthApi, AuthUser } from '@w3ds/auth';
 import {
   settingsQueryKeys,
   useConnectAccount,
@@ -21,10 +21,20 @@ import type {
   ConnectedAccountProvider,
   NotificationPreferences,
   PrivacySettings,
+  UpdateUserPreferencesInput,
   UserProfileId,
 } from '@w3ds/types';
 import { useEffect, useRef, useState } from 'react';
-import { SettingsPage, type SettingsPageProps } from './settings-page';
+import {
+  SettingsPage,
+  type SettingsPageDataOwnedProp,
+  type SettingsPageProps,
+} from './settings-page';
+import {
+  errorMessage,
+  profileFormFromProfile,
+  resolveSettingsPageState,
+} from './settings-page-helpers';
 import type {
   DeleteAccountFormErrors,
   DeleteAccountFormInput,
@@ -47,67 +57,7 @@ import {
   validateProfile,
 } from './settings-validation';
 
-export interface SettingsPageDataProps
-  extends Omit<
-    SettingsPageProps,
-    | 'state'
-    | 'email'
-    | 'profile'
-    | 'avatarUrl'
-    | 'profileErrors'
-    | 'avatarError'
-    | 'profileSuccess'
-    | 'profileFormError'
-    | 'isSavingProfile'
-    | 'isUploadingAvatar'
-    | 'onProfileChange'
-    | 'onAvatarSelect'
-    | 'onSaveProfile'
-    | 'emailForm'
-    | 'emailErrors'
-    | 'emailSuccess'
-    | 'emailFormError'
-    | 'isSavingEmail'
-    | 'onEmailChange'
-    | 'onSaveEmail'
-    | 'passwordForm'
-    | 'passwordErrors'
-    | 'passwordSuccess'
-    | 'passwordFormError'
-    | 'isSavingPassword'
-    | 'onPasswordChange'
-    | 'onSavePassword'
-    | 'notifications'
-    | 'notificationsError'
-    | 'onNotificationToggle'
-    | 'privacy'
-    | 'privacyError'
-    | 'onPrivacyToggle'
-    | 'appearance'
-    | 'appearanceError'
-    | 'onAppearanceChange'
-    | 'language'
-    | 'languageError'
-    | 'languageSuccess'
-    | 'onLanguageChange'
-    | 'connectedAccounts'
-    | 'connectedAccountsPendingProvider'
-    | 'connectedAccountsError'
-    | 'onConnectAccount'
-    | 'onDisconnectAccount'
-    | 'sessions'
-    | 'sessionsPendingId'
-    | 'sessionsError'
-    | 'sessionsEmpty'
-    | 'onRevokeSession'
-    | 'deleteForm'
-    | 'deleteErrors'
-    | 'deleteFormError'
-    | 'isDeletingAccount'
-    | 'onDeleteFormChange'
-    | 'onDeleteAccount'
-    | 'onRetry'
-  > {
+export interface SettingsPageDataProps extends Omit<SettingsPageProps, SettingsPageDataOwnedProp> {
   authClient: AuthApi;
   videoClient: VideoApiClient;
   accessToken: string;
@@ -118,12 +68,6 @@ export interface SettingsPageDataProps
   onAuthUserUpdate?: (user: AuthUser) => void;
   onAppearancePreferenceChange?: (appearance: AppearancePreference) => void;
   onAccountDeleted?: () => void;
-}
-
-function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof AuthenticationError) return error.message;
-  if (error instanceof Error) return error.message;
-  return fallback;
 }
 
 export function SettingsPageData({
@@ -145,7 +89,7 @@ export function SettingsPageData({
   const connectedQuery = useConnectedAccounts(videoClient, userId);
   const sessionsQuery = useQuery({
     queryKey: settingsQueryKeys.sessions(userId),
-    queryFn: () => authClient.listSessions(accessToken),
+    queryFn: (): Promise<readonly AuthDeviceSession[]> => authClient.listSessions(accessToken),
   });
 
   const [profileForm, setProfileForm] = useState<ProfileFormInput>({
@@ -159,6 +103,8 @@ export function SettingsPageData({
   const [avatarError, setAvatarError] = useState<string | undefined>();
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | undefined>();
   const avatarObjectUrlRef = useRef<string | undefined>(undefined);
+  const profileHydratedForUserRef = useRef<UserProfileId | undefined>(undefined);
+  const syncedAppearanceRef = useRef<AppearancePreference | undefined>(undefined);
 
   const [emailForm, setEmailForm] = useState<EmailFormInput>({ email: '', password: '' });
   const [emailErrors, setEmailErrors] = useState<EmailFormErrors | undefined>();
@@ -194,16 +140,16 @@ export function SettingsPageData({
   useEffect(() => {
     const profile = profileQuery.data;
     if (!profile) return;
-    setProfileForm({
-      displayName: profile.displayName,
-      handle: profile.handle,
-      bio: profile.bio ?? '',
-    });
-  }, [profileQuery.data]);
+    if (profileHydratedForUserRef.current === userId) return;
+    profileHydratedForUserRef.current = userId;
+    setProfileForm(profileFormFromProfile(profile));
+  }, [profileQuery.data, userId]);
 
   useEffect(() => {
     const appearance = preferencesQuery.data?.appearance;
-    if (appearance) onAppearancePreferenceChange?.(appearance);
+    if (!appearance || appearance === syncedAppearanceRef.current) return;
+    syncedAppearanceRef.current = appearance;
+    onAppearancePreferenceChange?.(appearance);
   }, [onAppearancePreferenceChange, preferencesQuery.data?.appearance]);
 
   useEffect(() => {
@@ -276,6 +222,14 @@ export function SettingsPageData({
     },
   });
 
+  const clearAvatarPreview = () => {
+    if (avatarObjectUrlRef.current) {
+      URL.revokeObjectURL(avatarObjectUrlRef.current);
+      avatarObjectUrlRef.current = undefined;
+    }
+    setAvatarPreviewUrl(undefined);
+  };
+
   const saveProfile = async () => {
     const errors = validateProfile(profileForm);
     setProfileErrors(errors);
@@ -288,6 +242,7 @@ export function SettingsPageData({
         handle: profileForm.handle.trim().replace(/^@/, '').toLocaleLowerCase(),
         bio: profileForm.bio,
       });
+      setProfileForm(profileFormFromProfile(profile));
       const authUser = await authClient.updateProfile(accessToken, {
         displayName: profile.displayName,
         ...(profile.avatarUrl
@@ -318,6 +273,7 @@ export function SettingsPageData({
         type: file.type,
         previewUrl,
       });
+      clearAvatarPreview();
       const authUser = await authClient.updateProfile(accessToken, {
         displayName: profile.displayName,
         ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : { avatarUrl: null }),
@@ -356,26 +312,31 @@ export function SettingsPageData({
   };
 
   const patchPreferences = async (
-    input: Parameters<typeof updatePreferences.mutateAsync>[0],
+    input: UpdateUserPreferencesInput,
     onFail: (message: string) => void,
+    onSuccess?: () => void,
   ) => {
     try {
       await updatePreferences.mutateAsync(input);
+      onSuccess?.();
     } catch (error) {
       onFail(errorMessage(error, 'Could not update preferences.'));
     }
   };
 
-  const isLoading = profileQuery.isPending || preferencesQuery.isPending;
-  const hasError = Boolean(profileQuery.error || preferencesQuery.error);
   const profile = profileQuery.data;
   const preferences = preferencesQuery.data;
   const resolvedAvatar = avatarPreviewUrl ?? profile?.avatarUrl ?? authAvatarUrl;
+  const preferencesPending = updatePreferences.isPending;
 
   return (
     <SettingsPage
       {...pageProps}
-      state={isLoading ? 'loading' : hasError ? 'error' : profile ? 'ready' : 'empty'}
+      state={resolveSettingsPageState({
+        isPending: profileQuery.isPending || preferencesQuery.isPending,
+        error: profileQuery.error ?? preferencesQuery.error,
+        hasProfile: Boolean(profile),
+      })}
       email={email}
       profile={profileForm}
       {...(resolvedAvatar ? { avatarUrl: resolvedAvatar } : {})}
@@ -428,6 +389,8 @@ export function SettingsPageData({
       {...(appearanceError ? { appearanceError } : {})}
       {...(languageError ? { languageError } : {})}
       {...(languageSuccess ? { languageSuccess } : {})}
+      notificationsDisabled={preferencesPending}
+      privacyDisabled={preferencesPending}
       onNotificationToggle={(key: keyof NotificationPreferences, checked) => {
         setNotificationsError(undefined);
         void patchPreferences({ notifications: { [key]: checked } }, setNotificationsError);
@@ -438,18 +401,19 @@ export function SettingsPageData({
       }}
       onAppearanceChange={(appearance: AppearancePreference) => {
         setAppearanceError(undefined);
+        syncedAppearanceRef.current = appearance;
         onAppearancePreferenceChange?.(appearance);
         void patchPreferences({ appearance }, setAppearanceError);
       }}
       onLanguageChange={(language: AppLanguage) => {
         setLanguageError(undefined);
         setLanguageSuccess(undefined);
-        void updatePreferences
-          .mutateAsync({ language })
-          .then(() => setLanguageSuccess('Language updated.'))
-          .catch((error) => setLanguageError(errorMessage(error, 'Could not update preferences.')));
+        void patchPreferences({ language }, setLanguageError, () =>
+          setLanguageSuccess('Language updated.'),
+        );
       }}
       connectedAccounts={connectedQuery.data ?? []}
+      connectedAccountsLoading={connectedQuery.isPending}
       {...(pendingProvider ? { connectedAccountsPendingProvider: pendingProvider } : {})}
       {...(connectedAccountsError ? { connectedAccountsError } : {})}
       onConnectAccount={(provider) => {
@@ -470,7 +434,8 @@ export function SettingsPageData({
           onSettled: () => setPendingProvider(undefined),
         });
       }}
-      sessions={(sessionsQuery.data as readonly AuthDeviceSession[] | undefined) ?? []}
+      sessions={sessionsQuery.data ?? []}
+      sessionsLoading={sessionsQuery.isPending}
       {...(pendingSessionId ? { sessionsPendingId: pendingSessionId } : {})}
       {...(sessionsError ? { sessionsError } : {})}
       sessionsEmpty={!sessionsQuery.isPending && (sessionsQuery.data?.length ?? 0) === 0}

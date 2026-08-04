@@ -1,13 +1,14 @@
 'use client';
 
 import type { ConnectedAccount, ConnectedAccountProvider } from '@w3ds/types';
-import { Badge, Button, EmptyState, Text } from '@w3ds/ui';
+import { Badge, Button, EmptyState, Skeleton, Text } from '@w3ds/ui';
 import { connectedAccountLabels } from '../settings-constants';
 
 export interface ConnectedAccountsSectionProps {
   accounts: readonly ConnectedAccount[];
   pendingProvider?: ConnectedAccountProvider;
   error?: string;
+  isLoading?: boolean;
   onConnect: (provider: ConnectedAccountProvider) => void;
   onDisconnect: (provider: ConnectedAccountProvider) => void;
 }
@@ -16,9 +17,25 @@ export function ConnectedAccountsSection({
   accounts,
   pendingProvider,
   error,
+  isLoading = false,
   onConnect,
   onDisconnect,
 }: ConnectedAccountsSectionProps) {
+  if (isLoading) {
+    return (
+      <div
+        role="status"
+        aria-busy="true"
+        aria-label="Loading connected accounts"
+        className="space-y-3"
+      >
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-20 w-full" />
+        <Skeleton className="h-20 w-full" />
+      </div>
+    );
+  }
+
   if (accounts.length === 0) {
     return (
       <EmptyState
@@ -59,6 +76,7 @@ export function ConnectedAccountsSection({
                   size="sm"
                   isLoading={pending}
                   loadingText="Disconnecting"
+                  aria-label={`Disconnect ${label}`}
                   onClick={() => onDisconnect(account.provider)}
                 >
                   Disconnect
@@ -68,6 +86,7 @@ export function ConnectedAccountsSection({
                   size="sm"
                   isLoading={pending}
                   loadingText="Connecting"
+                  aria-label={`Connect ${label}`}
                   onClick={() => onConnect(account.provider)}
                 >
                   Connect
