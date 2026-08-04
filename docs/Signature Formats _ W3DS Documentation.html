@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en" dir="ltr" class="docs-wrapper plugin-docs plugin-id-default docs-version-current docs-doc-page docs-doc-id-W3DS Protocol/Signature-Formats" data-has-hydrated="false">
+<head>
+<meta charset="UTF-8">
+<meta name="generator" content="Docusaurus v3.9.2">
+<title data-rh="true">Signature Formats | W3DS Documentation</title><meta data-rh="true" name="viewport" content="width=device-width,initial-scale=1"><meta data-rh="true" name="twitter:card" content="summary_large_image"><meta data-rh="true" property="og:image" content="https://docs.w3ds.metastate.foundation/img/w3dslogo.svg"><meta data-rh="true" name="twitter:image" content="https://docs.w3ds.metastate.foundation/img/w3dslogo.svg"><meta data-rh="true" property="og:url" content="https://docs.w3ds.metastate.foundation/docs/W3DS Protocol/Signature-Formats"><meta data-rh="true" property="og:locale" content="en"><meta data-rh="true" name="docusaurus_locale" content="en"><meta data-rh="true" name="docsearch:language" content="en"><meta data-rh="true" name="docusaurus_version" content="current"><meta data-rh="true" name="docusaurus_tag" content="docs-default-current"><meta data-rh="true" name="docsearch:version" content="current"><meta data-rh="true" name="docsearch:docusaurus_tag" content="docs-default-current"><meta data-rh="true" property="og:title" content="Signature Formats | W3DS Documentation"><meta data-rh="true" name="description" content="This document explains the signature formats used in the eID wallet and how to verify signatures using public keys from eVault."><meta data-rh="true" property="og:description" content="This document explains the signature formats used in the eID wallet and how to verify signatures using public keys from eVault."><link data-rh="true" rel="icon" href="/img/w3dslogo.svg"><link data-rh="true" rel="canonical" href="https://docs.w3ds.metastate.foundation/docs/W3DS Protocol/Signature-Formats"><link data-rh="true" rel="alternate" href="https://docs.w3ds.metastate.foundation/docs/W3DS Protocol/Signature-Formats" hreflang="en"><link data-rh="true" rel="alternate" href="https://docs.w3ds.metastate.foundation/docs/W3DS Protocol/Signature-Formats" hreflang="x-default"><script data-rh="true" type="application/ld+json">{"@context":"https://schema.org","@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"Signature Formats","item":"https://docs.w3ds.metastate.foundation/docs/W3DS Protocol/Signature-Formats"}]}</script><link rel="stylesheet" href="/assets/css/styles.587f5b17.css">
+<script src="/assets/js/runtime~main.889a1ed9.js" defer="defer"></script>
+<script src="/assets/js/main.c00e923f.js" defer="defer"></script>
+</head>
+<body class="navigation-with-keyboard">
+<svg style="display: none;"><defs>
+<symbol id="theme-svg-external-link" viewBox="0 0 24 24"><path fill="currentColor" d="M21 13v10h-21v-19h12v2h-10v15h17v-8h2zm3-12h-10.988l4.035 4-6.977 7.07 2.828 2.828 6.977-7.07 4.125 4.172v-11z"/></symbol>
+</defs></svg>
+<script>!function(){var t=function(){try{return new URLSearchParams(window.location.search).get("docusaurus-theme")}catch(t){}}()||function(){try{return window.localStorage.getItem("theme")}catch(t){}}();document.documentElement.setAttribute("data-theme",t||(window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light")),document.documentElement.setAttribute("data-theme-choice",t||"system")}(),function(){try{const c=new URLSearchParams(window.location.search).entries();for(var[t,e]of c)if(t.startsWith("docusaurus-data-")){var a=t.replace("docusaurus-data-","data-");document.documentElement.setAttribute(a,e)}}catch(t){}}()</script><div id="__docusaurus"><div role="region" aria-label="Skip to main content"><a class="skipToContent_PTB4" href="#__docusaurus_skipToContent_fallback">Skip to main content</a></div><nav aria-label="Main" class="theme-layout-navbar navbar navbar--fixed-top"><div class="navbar__inner"><div class="theme-layout-navbar-left navbar__items"><button aria-label="Toggle navigation bar" aria-expanded="false" class="navbar__toggle clean-btn" type="button"><svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true"><path stroke="currentColor" stroke-linecap="round" stroke-miterlimit="10" stroke-width="2" d="M4 7h22M4 15h22M4 23h22"></path></svg></button><a class="navbar__brand" href="/"><div class="navbar__logo"><img src="/img/w3dslogo.svg" alt="W3DS Documentation" class="themedComponent_YmKb themedComponent--light_SG98"><img src="/img/w3dslogo.svg" alt="W3DS Documentation" class="themedComponent_YmKb themedComponent--dark_s3_t"></div><b class="navbar__title text--truncate"></b></a><a aria-current="page" class="navbar__item navbar__link navbar__link--active" href="/docs/Getting Started/getting-started">Docs</a></div><div class="theme-layout-navbar-right navbar__items navbar__items--right"><a href="https://github.com/MetaState-Prototype-Project/prototype" target="_blank" rel="noopener noreferrer" class="navbar__item navbar__link">GitHub<svg width="13.5" height="13.5" aria-label="(opens in new tab)" class="iconExternalLink_uKhC"><use href="#theme-svg-external-link"></use></svg></a><div class="toggle_bHKY colorModeToggle_MWKk"><button class="clean-btn toggleButton_JJJ1 toggleButtonDisabled_jXHj" type="button" disabled="" title="system mode" aria-label="Switch between dark and light mode (currently system mode)"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_Em0n lightToggleIcon_T4_W"><path fill="currentColor" d="M12,9c1.65,0,3,1.35,3,3s-1.35,3-3,3s-3-1.35-3-3S10.35,9,12,9 M12,7c-2.76,0-5,2.24-5,5s2.24,5,5,5s5-2.24,5-5 S14.76,7,12,7L12,7z M2,13l2,0c0.55,0,1-0.45,1-1s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S1.45,13,2,13z M20,13l2,0c0.55,0,1-0.45,1-1 s-0.45-1-1-1l-2,0c-0.55,0-1,0.45-1,1S19.45,13,20,13z M11,2v2c0,0.55,0.45,1,1,1s1-0.45,1-1V2c0-0.55-0.45-1-1-1S11,1.45,11,2z M11,20v2c0,0.55,0.45,1,1,1s1-0.45,1-1v-2c0-0.55-0.45-1-1-1C11.45,19,11,19.45,11,20z M5.99,4.58c-0.39-0.39-1.03-0.39-1.41,0 c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0s0.39-1.03,0-1.41L5.99,4.58z M18.36,16.95 c-0.39-0.39-1.03-0.39-1.41,0c-0.39,0.39-0.39,1.03,0,1.41l1.06,1.06c0.39,0.39,1.03,0.39,1.41,0c0.39-0.39,0.39-1.03,0-1.41 L18.36,16.95z M19.42,5.99c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06c-0.39,0.39-0.39,1.03,0,1.41 s1.03,0.39,1.41,0L19.42,5.99z M7.05,18.36c0.39-0.39,0.39-1.03,0-1.41c-0.39-0.39-1.03-0.39-1.41,0l-1.06,1.06 c-0.39,0.39-0.39,1.03,0,1.41s1.03,0.39,1.41,0L7.05,18.36z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_Em0n darkToggleIcon_WAtq"><path fill="currentColor" d="M9.37,5.51C9.19,6.15,9.1,6.82,9.1,7.5c0,4.08,3.32,7.4,7.4,7.4c0.68,0,1.35-0.09,1.99-0.27C17.45,17.19,14.93,19,12,19 c-3.86,0-7-3.14-7-7C5,9.07,6.81,6.55,9.37,5.51z M12,3c-4.97,0-9,4.03-9,9s4.03,9,9,9s9-4.03,9-9c0-0.46-0.04-0.92-0.1-1.36 c-0.98,1.37-2.58,2.26-4.4,2.26c-2.98,0-5.4-2.42-5.4-5.4c0-1.81,0.89-3.42,2.26-4.4C12.92,3.04,12.46,3,12,3L12,3z"></path></svg><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true" class="toggleIcon_Em0n systemToggleIcon_AtO8"><path fill="currentColor" d="m12 21c4.971 0 9-4.029 9-9s-4.029-9-9-9-9 4.029-9 9 4.029 9 9 9zm4.95-13.95c1.313 1.313 2.05 3.093 2.05 4.95s-0.738 3.637-2.05 4.95c-1.313 1.313-3.093 2.05-4.95 2.05v-14c1.857 0 3.637 0.737 4.95 2.05z"></path></svg></button></div><div class="navbarSearchContainer_f4Ea"></div></div></div><div role="presentation" class="navbar-sidebar__backdrop"></div></nav><div id="__docusaurus_skipToContent_fallback" class="theme-layout-main main-wrapper mainWrapper_NuBG"><div class="docsWrapper_NXtq"><button aria-label="Scroll back to top" class="clean-btn theme-back-to-top-button backToTopButton_6BkS" type="button"></button><div class="docRoot_oVeP"><aside class="theme-doc-sidebar-container docSidebarContainer_yEiQ"><div class="sidebarViewport_zZUk"><div class="sidebar_SIZX"><nav aria-label="Docs sidebar" class="menu thin-scrollbar menu_ezqJ"><ul class="theme-doc-sidebar-menu menu__list"><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_hhhW menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/Getting Started/getting-started"><span title="Getting Started" class="categoryLinkLabel_QZd6">Getting Started</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_hhhW menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/W3DS Basics/glossary"><span title="W3DS Basics" class="categoryLinkLabel_QZd6">W3DS Basics</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_hhhW menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/Infrastructure/eVault"><span title="Infrastructure" class="categoryLinkLabel_QZd6">Infrastructure</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item"><div class="menu__list-item-collapsible"><a class="categoryLink_hhhW menu__link menu__link--sublist menu__link--sublist-caret menu__link--active" role="button" aria-expanded="true" href="/docs/W3DS Protocol/Authentication"><span title="W3DS Protocol" class="categoryLinkLabel_QZd6">W3DS Protocol</span></a></div><ul class="menu__list"><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/W3DS Protocol/Authentication"><span title="Authentication" class="linkLabel_E3_j">Authentication</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/W3DS Protocol/Signing"><span title="Signing" class="linkLabel_E3_j">Signing</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link menu__link--active" aria-current="page" tabindex="0" href="/docs/W3DS Protocol/Signature-Formats"><span title="Signature Formats" class="linkLabel_E3_j">Signature Formats</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/W3DS Protocol/Awareness-Protocol"><span title="Awareness Protocol" class="linkLabel_E3_j">Awareness Protocol</span></a></li><li class="theme-doc-sidebar-item-link theme-doc-sidebar-item-link-level-2 menu__list-item"><a class="menu__link" tabindex="0" href="/docs/W3DS Protocol/File-URIs"><span title="File URIs" class="linkLabel_E3_j">File URIs</span></a></li></ul></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_hhhW menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/Post Platform Guide/local-dev-quick-start"><span title="Post Platforms Guide" class="categoryLinkLabel_QZd6">Post Platforms Guide</span></a></div></li><li class="theme-doc-sidebar-item-category theme-doc-sidebar-item-category-level-1 menu__list-item menu__list-item--collapsed"><div class="menu__list-item-collapsible"><a class="categoryLink_hhhW menu__link menu__link--sublist menu__link--sublist-caret" role="button" aria-expanded="false" href="/docs/Services/Awareness-as-a-Service"><span title="Services" class="categoryLinkLabel_QZd6">Services</span></a></div></li></ul></nav></div></div></aside><main class="docMainContainer_H2yg"><div class="container padding-top--md padding-bottom--lg"><div class="row"><div class="col docItemCol_Rzb0"><div class="docItemContainer_Cm5X"><article><nav class="theme-doc-breadcrumbs breadcrumbsContainer_tPNf" aria-label="Breadcrumbs"><ul class="breadcrumbs"><li class="breadcrumbs__item"><a aria-label="Home page" class="breadcrumbs__link" href="/"><svg viewBox="0 0 24 24" class="breadcrumbHomeIcon_hiUE"><path d="M10 19v-5h4v5c0 .55.45 1 1 1h3c.55 0 1-.45 1-1v-7h1.7c.46 0 .68-.57.33-.87L12.67 3.6c-.38-.34-.96-.34-1.34 0l-8.36 7.53c-.34.3-.13.87.33.87H5v7c0 .55.45 1 1 1h3c.55 0 1-.45 1-1z" fill="currentColor"></path></svg></a></li><li class="breadcrumbs__item"><span class="breadcrumbs__link">W3DS Protocol</span></li><li class="breadcrumbs__item breadcrumbs__item--active"><span class="breadcrumbs__link">Signature Formats</span></li></ul></nav><div class="tocCollapsible_zLBy theme-doc-toc-mobile tocMobile_g6dV"><button type="button" class="clean-btn tocCollapsibleButton_kdy2">On this page</button></div><div class="theme-doc-markdown markdown"><header><h1>Signature Formats</h1></header>
+<p>This document explains the signature formats used in the <a class="" href="/docs/Infrastructure/eID-Wallet">eID wallet</a> and how to verify signatures using public keys from <a class="" href="/docs/Infrastructure/eVault">eVault</a>.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="overview">Overview<a href="#overview" class="hash-link" aria-label="Direct link to Overview" title="Direct link to Overview" translate="no">​</a></h2>
+<p>Signatures in the eID wallet are created using ECDSA P-256 with SHA-256 hashing. The signature format varies depending on whether a hardware or software key is used. All signatures can be verified using the public keys stored in <a class="" href="/docs/Infrastructure/eVault">eVault</a>.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="signature-formats-1">Signature Formats<a href="#signature-formats-1" class="hash-link" aria-label="Direct link to Signature Formats" title="Direct link to Signature Formats" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="software-key-signatures">Software Key Signatures<a href="#software-key-signatures" class="hash-link" aria-label="Direct link to Software Key Signatures" title="Direct link to Software Key Signatures" translate="no">​</a></h3>
+<p>Software keys generate signatures using the Web Crypto API with ECDSA P-256 and SHA-256:</p>
+<p><strong>Algorithm</strong>: ECDSA P-256 with SHA-256<br>
+<strong>Format</strong>: P1363 (raw 64-byte r||s) base64 encoded<br>
+<strong>Length</strong>: 64 bytes (32 bytes for r, 32 bytes for s) when decoded</p>
+<p><strong>Example:</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">Signature: &quot;xK3vJZQ2F3k5L8mN9pQrS7tUvW1xY3zA5bC7dE9fG1hIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQrStUvWxYz==&quot;</span><br></span></code></pre></div></div>
+<p>The signature is created by:</p>
+<ol>
+<li class="">Encoding the payload as UTF-8</li>
+<li class="">Signing with the private key using <code>crypto.subtle.sign()</code>, which produces a raw 64-byte signature (32-byte r concatenated with 32-byte s)</li>
+<li class="">Converting the ArrayBuffer result to base64</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="hardware-key-signatures">Hardware Key Signatures<a href="#hardware-key-signatures" class="hash-link" aria-label="Direct link to Hardware Key Signatures" title="Direct link to Hardware Key Signatures" translate="no">​</a></h3>
+<p>Hardware keys (WebAuthn/Passkeys) generate signatures that are:</p>
+<p><strong>Algorithm</strong>: ECDSA P-256 with SHA-256<br>
+<strong>Format</strong>: Multibase base58btc encoded (starts with &#x27;z&#x27;)<br>
+<strong>Encoding</strong>: Can be DER format or raw format</p>
+<p><strong>Example:</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">Signature: &quot;z3K7vJZQ2F3k5L8mN9pQrS7tUvW1xY3zA5bC7dE9fG1hIjKlMnOpQrStUvWxYz&quot;</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="signature-format-detection">Signature Format Detection<a href="#signature-format-detection" class="hash-link" aria-label="Direct link to Signature Format Detection" title="Direct link to Signature Format Detection" translate="no">​</a></h3>
+<p>The signature validator automatically detects the format:</p>
+<ol>
+<li class=""><strong>DER Format</strong>: Starts with <code>0x30</code> (SEQUENCE), contains two INTEGERs (r and s)</li>
+<li class=""><strong>Raw Format</strong>: 64 bytes (32 bytes r + 32 bytes s)</li>
+<li class=""><strong>Multibase</strong>: Starts with multibase prefix:<!-- -->
+<ul>
+<li class=""><code>z</code> prefix: base58btc encoding</li>
+<li class=""><code>m</code> prefix: base64 encoding (no padding)</li>
+<li class=""><code>f</code> prefix: base16/hex encoding (lowercase)</li>
+</ul>
+</li>
+<li class=""><strong>Base64</strong>: Standard base64/base64url encoding (no multibase prefix)</li>
+</ol>
+<p>The validator normalizes DER signatures to raw format (64 bytes) before verification.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="public-key-formats">Public Key Formats<a href="#public-key-formats" class="hash-link" aria-label="Direct link to Public Key Formats" title="Direct link to Public Key Formats" translate="no">​</a></h3>
+<p>Public keys are stored in multibase format:</p>
+<p><strong>Format</strong>: Multibase encoded with appropriate prefix</p>
+<ul>
+<li class=""><strong>Base58btc</strong>: Uses &#x27;z&#x27; prefix (standard multibase encoding)</li>
+<li class=""><strong>Base64</strong>: Uses &#x27;m&#x27; prefix (no padding)</li>
+<li class=""><strong>Hex (base16)</strong>: Uses &#x27;f&#x27; prefix (lowercase)</li>
+</ul>
+<p><strong>Example (Base58btc):</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">Public Key: &quot;zDnaerx9Cp5X2chPZ8n3wK7mN9pQrS7tUvW1xY3zA5bC7dE9fG1hIjKlMnOpQrStUvWxYzAbCdEfGhIjKlMnOpQrStUvWx&quot;</span><br></span></code></pre></div></div>
+<p><strong>Example (Base64):</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">Public Key: &quot;mMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEoWsGP3hdJZRcRK4ueky9lMMxZTNhJhJPZpYJ1q+4SBVbkBatjVyexZBTs7LPJRGvDCQU/FPUq/ljI7saAxkA&quot;</span><br></span></code></pre></div></div>
+<p>The public key can be in two formats:</p>
+<ul>
+<li class=""><strong>Raw uncompressed</strong>: 65 bytes starting with <code>0x04</code></li>
+<li class=""><strong>DER SPKI</strong>: DER-encoded SubjectPublicKeyInfo format</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="signature-verification">Signature Verification<a href="#signature-verification" class="hash-link" aria-label="Direct link to Signature Verification" title="Direct link to Signature Verification" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="verification-flow">Verification Flow<a href="#verification-flow" class="hash-link" aria-label="Direct link to Verification Flow" title="Direct link to Verification Flow" translate="no">​</a></h3>
+<p>The verification process retrieves the public key from <a class="" href="/docs/Infrastructure/eVault">eVault</a> and verifies the signature (see <a class="" href="/docs/Infrastructure/Registry">Registry</a> for resolution and JWKS):</p>
+<!-- -->
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="verification-steps">Verification Steps<a href="#verification-steps" class="hash-link" aria-label="Direct link to Verification Steps" title="Direct link to Verification Steps" translate="no">​</a></h3>
+<ol>
+<li class=""><strong>Resolve eVault URL</strong>: Query Registry with eName to get eVault URI</li>
+<li class=""><strong>Get Key Binding Certificates</strong>: Request <code>/whois</code> endpoint from eVault</li>
+<li class=""><strong>Verify JWT</strong>: Verify each certificate&#x27;s signature using Registry JWKS</li>
+<li class=""><strong>Extract Public Key</strong>: Get public key from JWT payload</li>
+<li class=""><strong>Decode Public Key</strong>: Convert multibase format to bytes</li>
+<li class=""><strong>Import Public Key</strong>: Import into Web Crypto API</li>
+<li class=""><strong>Verify Signature</strong>: Use <code>crypto.subtle.verify()</code> with ECDSA P-256, SHA-256</li>
+<li class=""><strong>Return Result</strong>: Return validation result with the public key used</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="using-the-signature-validator">Using the Signature Validator<a href="#using-the-signature-validator" class="hash-link" aria-label="Direct link to Using the Signature Validator" title="Direct link to Using the Signature Validator" translate="no">​</a></h3>
+<p>The <code>signature-validator</code> package provides a simple API for verification:</p>
+<div class="language-typescript codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-typescript codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token keyword" style="color:#00009f">import</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> verifySignature </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">from</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;signature-validator&quot;</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">const</span><span class="token plain"> result </span><span class="token operator" style="color:#393A34">=</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">await</span><span class="token plain"> </span><span class="token function" style="color:#d73a49">verifySignature</span><span class="token punctuation" style="color:#393A34">(</span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  eName</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;@user.w3id&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  signature</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;z3K7vJZQ2F3k5L8mN9pQrS7tUvW1xY3zA5bC7dE9fG1hIjKlMnOpQrStUvWxYz&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  payload</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;message to verify&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  registryBaseUrl</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;https://registry.example.com&quot;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">if</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">(</span><span class="token plain">result</span><span class="token punctuation" style="color:#393A34">.</span><span class="token plain">valid</span><span class="token punctuation" style="color:#393A34">)</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token builtin">console</span><span class="token punctuation" style="color:#393A34">.</span><span class="token function" style="color:#d73a49">log</span><span class="token punctuation" style="color:#393A34">(</span><span class="token string" style="color:#e3116c">&quot;Signature is valid!&quot;</span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token builtin">console</span><span class="token punctuation" style="color:#393A34">.</span><span class="token function" style="color:#d73a49">log</span><span class="token punctuation" style="color:#393A34">(</span><span class="token string" style="color:#e3116c">&quot;Public key used:&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"> result</span><span class="token punctuation" style="color:#393A34">.</span><span class="token plain">publicKey</span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">else</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token builtin">console</span><span class="token punctuation" style="color:#393A34">.</span><span class="token function" style="color:#d73a49">error</span><span class="token punctuation" style="color:#393A34">(</span><span class="token string" style="color:#e3116c">&quot;Signature invalid:&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"> result</span><span class="token punctuation" style="color:#393A34">.</span><span class="token plain">error</span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="verification-result">Verification Result<a href="#verification-result" class="hash-link" aria-label="Direct link to Verification Result" title="Direct link to Verification Result" translate="no">​</a></h3>
+<p>The verification function returns:</p>
+<div class="language-typescript codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-typescript codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token keyword" style="color:#00009f">interface</span><span class="token plain"> </span><span class="token class-name">VerifySignatureResult</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  valid</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token builtin">boolean</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  error</span><span class="token operator" style="color:#393A34">?</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token builtin">string</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  publicKey</span><span class="token operator" style="color:#393A34">?</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token builtin">string</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><br></span></code></pre></div></div>
+<ul>
+<li class=""><strong>valid</strong>: <code>true</code> if signature is valid, <code>false</code> otherwise</li>
+<li class=""><strong>error</strong>: Error message if verification failed</li>
+<li class=""><strong>publicKey</strong>: The public key (multibase format) that successfully verified the signature</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="multiple-certificates">Multiple Certificates<a href="#multiple-certificates" class="hash-link" aria-label="Direct link to Multiple Certificates" title="Direct link to Multiple Certificates" translate="no">​</a></h3>
+<p>eVault can store multiple key binding certificates for the same eName (e.g., from different devices). The verifier tries each certificate until one succeeds or all fail.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="code-examples">Code Examples<a href="#code-examples" class="hash-link" aria-label="Direct link to Code Examples" title="Direct link to Code Examples" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="creating-a-signature">Creating a Signature<a href="#creating-a-signature" class="hash-link" aria-label="Direct link to Creating a Signature" title="Direct link to Creating a Signature" translate="no">​</a></h3>
+<div class="language-typescript codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-typescript codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token comment" style="color:#999988;font-style:italic">// Software key signing</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">const</span><span class="token plain"> keyService </span><span class="token operator" style="color:#393A34">=</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">new</span><span class="token plain"> </span><span class="token class-name">KeyService</span><span class="token punctuation" style="color:#393A34">(</span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">const</span><span class="token plain"> signature </span><span class="token operator" style="color:#393A34">=</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">await</span><span class="token plain"> keyService</span><span class="token punctuation" style="color:#393A34">.</span><span class="token function" style="color:#d73a49">signPayload</span><span class="token punctuation" style="color:#393A34">(</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token string" style="color:#e3116c">&quot;default&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token string" style="color:#e3116c">&quot;onboarding&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token string" style="color:#e3116c">&quot;message to sign&quot;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token comment" style="color:#999988;font-style:italic">// Returns: Base64 encoded signature</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token comment" style="color:#999988;font-style:italic">// Hardware key signing (same API)</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">const</span><span class="token plain"> signature </span><span class="token operator" style="color:#393A34">=</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">await</span><span class="token plain"> keyService</span><span class="token punctuation" style="color:#393A34">.</span><span class="token function" style="color:#d73a49">signPayload</span><span class="token punctuation" style="color:#393A34">(</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token string" style="color:#e3116c">&quot;default&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token string" style="color:#e3116c">&quot;onboarding&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token string" style="color:#e3116c">&quot;message to sign&quot;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token comment" style="color:#999988;font-style:italic">// Returns: Multibase encoded signature (starts with &#x27;z&#x27;)</span><br></span></code></pre></div></div>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="verifying-a-signature">Verifying a Signature<a href="#verifying-a-signature" class="hash-link" aria-label="Direct link to Verifying a Signature" title="Direct link to Verifying a Signature" translate="no">​</a></h3>
+<div class="language-typescript codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-typescript codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token keyword" style="color:#00009f">import</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"> verifySignature </span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">from</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;signature-validator&quot;</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">const</span><span class="token plain"> result </span><span class="token operator" style="color:#393A34">=</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">await</span><span class="token plain"> </span><span class="token function" style="color:#d73a49">verifySignature</span><span class="token punctuation" style="color:#393A34">(</span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  eName</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;@user.w3id&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  signature</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;z3K7vJZQ2F3k5L8mN9pQrS7tUvW1xY3zA5bC7dE9fG1hIjKlMnOpQrStUvWxYz&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  payload</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;userId_md5hash&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  registryBaseUrl</span><span class="token operator" style="color:#393A34">:</span><span class="token plain"> </span><span class="token string" style="color:#e3116c">&quot;https://registry.example.com&quot;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain" style="display:inline-block"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token keyword" style="color:#00009f">if</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">(</span><span class="token plain">result</span><span class="token punctuation" style="color:#393A34">.</span><span class="token plain">valid</span><span class="token punctuation" style="color:#393A34">)</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token comment" style="color:#999988;font-style:italic">// Signature is valid, proceed with operation</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token builtin">console</span><span class="token punctuation" style="color:#393A34">.</span><span class="token function" style="color:#d73a49">log</span><span class="token punctuation" style="color:#393A34">(</span><span class="token string" style="color:#e3116c">&quot;Verified with public key:&quot;</span><span class="token punctuation" style="color:#393A34">,</span><span class="token plain"> result</span><span class="token punctuation" style="color:#393A34">.</span><span class="token plain">publicKey</span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">else</span><span class="token plain"> </span><span class="token punctuation" style="color:#393A34">{</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token comment" style="color:#999988;font-style:italic">// Signature is invalid, reject operation</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain">  </span><span class="token keyword" style="color:#00009f">throw</span><span class="token plain"> </span><span class="token keyword" style="color:#00009f">new</span><span class="token plain"> </span><span class="token class-name">Error</span><span class="token punctuation" style="color:#393A34">(</span><span class="token template-string template-punctuation string" style="color:#e3116c">`</span><span class="token template-string string" style="color:#e3116c">Signature verification failed: </span><span class="token template-string interpolation interpolation-punctuation punctuation" style="color:#393A34">${</span><span class="token template-string interpolation">result</span><span class="token template-string interpolation punctuation" style="color:#393A34">.</span><span class="token template-string interpolation">error</span><span class="token template-string interpolation interpolation-punctuation punctuation" style="color:#393A34">}</span><span class="token template-string template-punctuation string" style="color:#e3116c">`</span><span class="token punctuation" style="color:#393A34">)</span><span class="token punctuation" style="color:#393A34">;</span><span class="token plain"></span><br></span><span class="token-line" style="color:#393A34"><span class="token plain"></span><span class="token punctuation" style="color:#393A34">}</span><br></span></code></pre></div></div>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="cryptographic-details">Cryptographic Details<a href="#cryptographic-details" class="hash-link" aria-label="Direct link to Cryptographic Details" title="Direct link to Cryptographic Details" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="ecdsa-p-256">ECDSA P-256<a href="#ecdsa-p-256" class="hash-link" aria-label="Direct link to ECDSA P-256" title="Direct link to ECDSA P-256" translate="no">​</a></h3>
+<ul>
+<li class=""><strong>Curve</strong>: secp256r1 (NIST P-256)</li>
+<li class=""><strong>Key Size</strong>: 256 bits (32 bytes)</li>
+<li class=""><strong>Public Key</strong>: 65 bytes uncompressed (0x04 + 64 bytes), or DER SPKI format</li>
+<li class=""><strong>Private Key</strong>: 32 bytes (stored securely, never transmitted)</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="sha-256-hashing">SHA-256 Hashing<a href="#sha-256-hashing" class="hash-link" aria-label="Direct link to SHA-256 Hashing" title="Direct link to SHA-256 Hashing" translate="no">​</a></h3>
+<p>All signatures use SHA-256 for hashing the payload before signing:</p>
+<ul>
+<li class=""><strong>Algorithm</strong>: SHA-256</li>
+<li class=""><strong>Output</strong>: 256 bits (32 bytes)</li>
+<li class=""><strong>Usage</strong>: Hash the UTF-8 encoded payload before ECDSA signing</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="signature-components">Signature Components<a href="#signature-components" class="hash-link" aria-label="Direct link to Signature Components" title="Direct link to Signature Components" translate="no">​</a></h3>
+<p>ECDSA signatures consist of two components:</p>
+<ul>
+<li class=""><strong>r</strong>: 32 bytes (256 bits)</li>
+<li class=""><strong>s</strong>: 32 bytes (256 bits)</li>
+<li class=""><strong>Total</strong>: 64 bytes (512 bits) in raw format</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="troubleshooting">Troubleshooting<a href="#troubleshooting" class="hash-link" aria-label="Direct link to Troubleshooting" title="Direct link to Troubleshooting" translate="no">​</a></h2>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="common-issues">Common Issues<a href="#common-issues" class="hash-link" aria-label="Direct link to Common Issues" title="Direct link to Common Issues" translate="no">​</a></h3>
+<ol>
+<li class="">
+<p><strong>Signature verification fails</strong></p>
+<ul>
+<li class="">Check that the payload matches exactly what was signed</li>
+<li class="">Verify the eName is correct</li>
+<li class="">Ensure the signature format is supported (base64 or multibase)</li>
+<li class="">Check that the public key exists in eVault</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Key binding certificate not found</strong></p>
+<ul>
+<li class="">Verify the public key was synced to eVault</li>
+<li class="">Check that the Registry service is accessible</li>
+<li class="">Ensure the eName matches the one used during key sync</li>
+</ul>
+</li>
+<li class="">
+<p><strong>JWT verification fails</strong></p>
+<ul>
+<li class="">Verify the Registry JWKS endpoint is accessible</li>
+<li class="">Check that the certificate hasn&#x27;t expired (1 hour validity)</li>
+<li class="">Ensure the Registry&#x27;s public key is correctly configured</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Public key import fails</strong></p>
+<ul>
+<li class="">Verify the public key format (multibase, hex, or DER SPKI)</li>
+<li class="">Check that the key is for ECDSA P-256 curve</li>
+<li class="">Ensure the key is properly decoded from multibase format</li>
+</ul>
+</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="debugging-tips">Debugging Tips<a href="#debugging-tips" class="hash-link" aria-label="Direct link to Debugging Tips" title="Direct link to Debugging Tips" translate="no">​</a></h3>
+<ul>
+<li class="">Enable verbose logging in the signature validator</li>
+<li class="">Check the eVault <code>/whois</code> endpoint response</li>
+<li class="">Verify the Registry JWKS endpoint returns valid keys</li>
+<li class="">Inspect the JWT payload to ensure ename and publicKey are present</li>
+<li class="">Compare the signature format with expected format (base64 vs multibase)</li>
+</ul>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="security-considerations">Security Considerations<a href="#security-considerations" class="hash-link" aria-label="Direct link to Security Considerations" title="Direct link to Security Considerations" translate="no">​</a></h2>
+<ol>
+<li class="">
+<p><strong>Signature Replay</strong>: Applications should include nonces or timestamps in signed payloads to prevent replay attacks.</p>
+</li>
+<li class="">
+<p><strong>Payload Validation</strong>: Always verify that the signed payload matches the expected content before processing.</p>
+</li>
+<li class="">
+<p><strong>Certificate Expiration</strong>: Key binding certificates expire after 1 hour. Ensure your verification logic handles expired certificates gracefully.</p>
+</li>
+</ol>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="desktop-development-managing-keys-locally">Desktop Development: Managing Keys Locally<a href="#desktop-development-managing-keys-locally" class="hash-link" aria-label="Direct link to Desktop Development: Managing Keys Locally" title="Direct link to Desktop Development: Managing Keys Locally" translate="no">​</a></h2>
+<p>For desktop development and testing, you can generate keys, create an eVault, and sign requests locally without using a mobile wallet. This section explains the algorithms and workflows for desktop-based authentication.</p>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="key-generation-algorithm">Key Generation Algorithm<a href="#key-generation-algorithm" class="hash-link" aria-label="Direct link to Key Generation Algorithm" title="Direct link to Key Generation Algorithm" translate="no">​</a></h3>
+<p>The key generation process uses the Web Crypto API to create an ECDSA P-256 key pair:</p>
+<p><strong>Algorithm Steps:</strong></p>
+<ol>
+<li class="">
+<p><strong>Generate Key Pair</strong></p>
+<ul>
+<li class="">Algorithm: ECDSA with named curve P-256 (secp256r1)</li>
+<li class="">Key usage: <code>sign</code> and <code>verify</code></li>
+<li class="">Extractable: <code>true</code> (to allow exporting)</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Export Public Key</strong></p>
+<ul>
+<li class="">Format: SPKI (SubjectPublicKeyInfo) DER encoding</li>
+<li class="">Convert DER binary to base64 string</li>
+<li class="">Prepend multibase prefix <code>m</code> to create multibase-encoded public key</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Store Private Key</strong></p>
+<ul>
+<li class="">Keep private key in memory (CryptoKey object)</li>
+<li class="">Optionally export as PKCS8 format for persistent storage</li>
+<li class="">Never transmit or expose the private key</li>
+</ul>
+</li>
+</ol>
+<p><strong>Key Format:</strong></p>
+<ul>
+<li class=""><strong>Public Key</strong>: Multibase format <code>m{base64-encoded-SPKI}</code> (or <code>z{base58btc-encoded-SPKI}</code> for base58btc)</li>
+<li class=""><strong>Private Key</strong>: PKCS8 format (for storage) or CryptoKey object (for signing)</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="evault-provisioning-algorithm">eVault Provisioning Algorithm<a href="#evault-provisioning-algorithm" class="hash-link" aria-label="Direct link to eVault Provisioning Algorithm" title="Direct link to eVault Provisioning Algorithm" translate="no">​</a></h3>
+<p>The provisioning process creates an eVault tied to your generated public key:</p>
+<p><strong>Algorithm Steps:</strong></p>
+<ol>
+<li class="">
+<p><strong>Request Entropy</strong></p>
+<ul>
+<li class="">Send GET request to Registry <code>/entropy</code> endpoint</li>
+<li class="">Receive JWT token containing entropy value</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Generate Namespace</strong></p>
+<ul>
+<li class="">Create a unique identifier for the namespace</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Provision eVault</strong></p>
+<ul>
+<li class="">Send POST request to Provisioner <code>/provision</code> endpoint with:<!-- -->
+<ul>
+<li class=""><code>registryEntropy</code>: JWT token from step 1</li>
+<li class=""><code>namespace</code>: Identifier from step 2</li>
+<li class=""><code>verificationId</code>: Verification code (demo code or your verification ID)</li>
+<li class=""><code>publicKey</code> (optional): Multibase-encoded public key from key generation</li>
+</ul>
+</li>
+<li class="">Provisioner validates entropy, generates W3ID, creates eVault, and if publicKey is provided, stores it and requests key binding certificate from Registry</li>
+<li class=""><strong>Note</strong>: <code>publicKey</code> is required for user eVaults that need signature verification, but optional for keyless eVaults (platforms, groups)</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Receive Credentials</strong></p>
+<ul>
+<li class="">Receive <code>w3id</code> (eName) and <code>uri</code> (eVault URI) in response</li>
+</ul>
+</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="signature-generation-algorithm">Signature Generation Algorithm<a href="#signature-generation-algorithm" class="hash-link" aria-label="Direct link to Signature Generation Algorithm" title="Direct link to Signature Generation Algorithm" translate="no">​</a></h3>
+<p>The signing process creates a cryptographic signature for authentication:</p>
+<p><strong>Algorithm Steps:</strong></p>
+<ol>
+<li class="">
+<p><strong>Encode Payload</strong></p>
+<ul>
+<li class="">Convert payload string to UTF-8 byte array</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Hash Payload</strong></p>
+<ul>
+<li class="">Apply SHA-256 hashing to the UTF-8 encoded payload</li>
+<li class="">Result: 32-byte hash digest</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Sign Hash</strong></p>
+<ul>
+<li class="">Use ECDSA P-256 with the private key to sign the hash</li>
+<li class="">Algorithm parameters: <code>{ name: &#x27;ECDSA&#x27;, hash: &#x27;SHA-256&#x27; }</code></li>
+<li class="">Result: 64-byte raw signature (32 bytes r + 32 bytes s)</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Encode Signature</strong></p>
+<ul>
+<li class="">Convert signature ArrayBuffer to base64 string</li>
+<li class="">Format: Base64-encoded raw signature (software key format)</li>
+</ul>
+</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="authentication-flow">Authentication Flow<a href="#authentication-flow" class="hash-link" aria-label="Direct link to Authentication Flow" title="Direct link to Authentication Flow" translate="no">​</a></h3>
+<p>The complete authentication workflow from key generation to platform authentication:</p>
+<!-- -->
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="key-storage-algorithm">Key Storage Algorithm<a href="#key-storage-algorithm" class="hash-link" aria-label="Direct link to Key Storage Algorithm" title="Direct link to Key Storage Algorithm" translate="no">​</a></h3>
+<p>For persistent storage of keys on desktop:</p>
+<p><strong>Storage Format:</strong></p>
+<ul>
+<li class=""><strong>File Structure</strong>: JSON object containing:<!-- -->
+<ul>
+<li class=""><code>ename</code>: W3ID identifier</li>
+<li class=""><code>evaultUri</code>: eVault URI</li>
+<li class=""><code>publicKey</code>: Multibase-encoded public key</li>
+<li class=""><code>privateKey</code>: Base64-encoded PKCS8 private key</li>
+<li class=""><code>createdAt</code>: ISO timestamp</li>
+</ul>
+</li>
+</ul>
+<p><strong>Storage Algorithm:</strong></p>
+<ol>
+<li class="">
+<p><strong>Export Private Key</strong></p>
+<ul>
+<li class="">Export CryptoKey as PKCS8 format</li>
+<li class="">Convert to base64 string</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Serialize Data</strong></p>
+<ul>
+<li class="">Create JSON object with all key data</li>
+<li class="">Stringify to JSON format</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Write to File</strong></p>
+<ul>
+<li class="">Set file permissions to 0o600 (owner read/write only)</li>
+<li class="">Write JSON to file system</li>
+</ul>
+</li>
+</ol>
+<p><strong>Retrieval Algorithm:</strong></p>
+<ol>
+<li class="">
+<p><strong>Read File</strong></p>
+<ul>
+<li class="">Read JSON file from file system</li>
+<li class="">Parse JSON to object</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Import Private Key</strong></p>
+<ul>
+<li class="">Decode base64 private key to ArrayBuffer</li>
+<li class="">Import as PKCS8 format with ECDSA P-256 parameters</li>
+<li class="">Result: CryptoKey object for signing</li>
+</ul>
+</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="complete-desktop-authentication-workflow">Complete Desktop Authentication Workflow<a href="#complete-desktop-authentication-workflow" class="hash-link" aria-label="Direct link to Complete Desktop Authentication Workflow" title="Direct link to Complete Desktop Authentication Workflow" translate="no">​</a></h3>
+<!-- -->
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="algorithm-details">Algorithm Details<a href="#algorithm-details" class="hash-link" aria-label="Direct link to Algorithm Details" title="Direct link to Algorithm Details" translate="no">​</a></h3>
+<h4 class="anchor anchorTargetStickyNavbar_Oc0V" id="ecdsa-p-256-key-generation">ECDSA P-256 Key Generation<a href="#ecdsa-p-256-key-generation" class="hash-link" aria-label="Direct link to ECDSA P-256 Key Generation" title="Direct link to ECDSA P-256 Key Generation" translate="no">​</a></h4>
+<p><strong>Parameters:</strong></p>
+<ul>
+<li class="">Curve: secp256r1 (NIST P-256)</li>
+<li class="">Key size: 256 bits</li>
+<li class="">Public key size: 65 bytes uncompressed (0x04 + 64 bytes)</li>
+<li class="">Private key size: 32 bytes</li>
+</ul>
+<p><strong>Key Export Formats:</strong></p>
+<ul>
+<li class=""><strong>SPKI (Public)</strong>: DER-encoded SubjectPublicKeyInfo structure</li>
+<li class=""><strong>PKCS8 (Private)</strong>: DER-encoded PrivateKeyInfo structure</li>
+</ul>
+<h4 class="anchor anchorTargetStickyNavbar_Oc0V" id="signature-algorithm">Signature Algorithm<a href="#signature-algorithm" class="hash-link" aria-label="Direct link to Signature Algorithm" title="Direct link to Signature Algorithm" translate="no">​</a></h4>
+<p><strong>ECDSA Signature Process:</strong></p>
+<ol>
+<li class="">
+<p><strong>Message Preparation</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">message → UTF-8 encoding → byte array</span><br></span></code></pre></div></div>
+</li>
+<li class="">
+<p><strong>Hashing</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">byte array → SHA-256 → 32-byte hash</span><br></span></code></pre></div></div>
+</li>
+<li class="">
+<p><strong>Signing</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">hash + privateKey + curve parameters → ECDSA sign → (r, s) tuple</span><br></span></code></pre></div></div>
+</li>
+<li class="">
+<p><strong>Encoding</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">(r, s) → concatenate → 64-byte raw signature → base64 encode</span><br></span></code></pre></div></div>
+</li>
+</ol>
+<p><strong>Signature Format:</strong></p>
+<ul>
+<li class="">Raw format: 64 bytes (32 bytes r + 32 bytes s)</li>
+<li class="">Encoded: Base64 string</li>
+<li class="">Example length: ~88 characters (base64 encoding of 64 bytes)</li>
+</ul>
+<h4 class="anchor anchorTargetStickyNavbar_Oc0V" id="public-key-encoding">Public Key Encoding<a href="#public-key-encoding" class="hash-link" aria-label="Direct link to Public Key Encoding" title="Direct link to Public Key Encoding" translate="no">​</a></h4>
+<p><strong>Multibase Encoding Process:</strong></p>
+<ol>
+<li class="">
+<p><strong>Export Public Key</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">CryptoKey (public) → exportKey(&#x27;spki&#x27;) → ArrayBuffer</span><br></span></code></pre></div></div>
+</li>
+<li class="">
+<p><strong>Base64 Encode</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">ArrayBuffer → base64 string</span><br></span></code></pre></div></div>
+</li>
+<li class="">
+<p><strong>Add Multibase Prefix</strong></p>
+<div class="language-text codeBlockContainer_WWBQ theme-code-block" style="--prism-color:#393A34;--prism-background-color:#f6f8fa"><div class="codeBlockContent_Qh9q"><pre tabindex="0" class="prism-code language-text codeBlock_gxPr thin-scrollbar" style="color:#393A34;background-color:#f6f8fa"><code class="codeBlockLines_OYDy"><span class="token-line" style="color:#393A34"><span class="token plain">base64 string → &#x27;m&#x27; + base64 → multibase string</span><br></span></code></pre></div></div>
+</li>
+</ol>
+<p><strong>Format:</strong></p>
+<ul>
+<li class="">Prefix: <code>m</code> (base64, no padding)</li>
+<li class="">Content: Base64-encoded SPKI DER structure</li>
+<li class="">Example: <code>mMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...</code> (starts with <code>m</code>)</li>
+</ul>
+<p><strong>Alternative Formats:</strong></p>
+<ul>
+<li class="">Prefix: <code>z</code> (base58btc) - for base58btc-encoded public keys</li>
+<li class="">Prefix: <code>f</code> (base16/hex) - for hex-encoded public keys (lowercase)</li>
+</ul>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="security-considerations-1">Security Considerations<a href="#security-considerations-1" class="hash-link" aria-label="Direct link to Security Considerations" title="Direct link to Security Considerations" translate="no">​</a></h3>
+<ol>
+<li class="">
+<p><strong>Private Key Protection</strong></p>
+<ul>
+<li class="">Never commit private keys to version control</li>
+<li class="">Use file permissions (chmod 600) to restrict access</li>
+<li class="">Consider encrypting stored private keys with a passphrase</li>
+<li class="">Store keys in secure location (e.g., <code>~/.config/</code> or encrypted volume)</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Key Generation</strong></p>
+<ul>
+<li class="">Use cryptographically secure random number generators</li>
+<li class="">Never reuse keys across different environments</li>
+<li class="">Generate new keys for production vs development</li>
+</ul>
+</li>
+<li class="">
+<p><strong>Environment Variables</strong></p>
+<ul>
+<li class="">Store sensitive values (verification IDs, URLs) in environment variables</li>
+<li class="">Never hardcode credentials in source code</li>
+<li class="">Use <code>.env</code> files with <code>.gitignore</code></li>
+</ul>
+</li>
+<li class="">
+<p><strong>Production Usage</strong></p>
+<ul>
+<li class="">Desktop key management is for development/testing only</li>
+<li class="">Production should use the actual eID wallet</li>
+<li class="">Desktop keys should never be used in production systems</li>
+</ul>
+</li>
+</ol>
+<h3 class="anchor anchorTargetStickyNavbar_Oc0V" id="workflow-summary">Workflow Summary<a href="#workflow-summary" class="hash-link" aria-label="Direct link to Workflow Summary" title="Direct link to Workflow Summary" translate="no">​</a></h3>
+<p>The complete desktop authentication workflow consists of four main phases:</p>
+<ol>
+<li class=""><strong>Key Generation</strong>: Generate ECDSA P-256 key pair and export public key in multibase format</li>
+<li class=""><strong>eVault Provisioning</strong>: Request entropy, provision eVault with public key, receive eName and eVault URI</li>
+<li class=""><strong>Session Signing</strong>: Request session from platform, sign session ID with private key</li>
+<li class=""><strong>Authentication</strong>: Send signed session to platform, receive authentication token</li>
+</ol>
+<p>This workflow enables full desktop-based development and testing of authentication flows without requiring a mobile device.</p>
+<h2 class="anchor anchorTargetStickyNavbar_Oc0V" id="references">References<a href="#references" class="hash-link" aria-label="Direct link to References" title="Direct link to References" translate="no">​</a></h2>
+<ul>
+<li class=""><a class="" href="/docs/Infrastructure/eID-Wallet">eID Wallet</a> — Key management and signature creation</li>
+<li class=""><a class="" href="/docs/Infrastructure/eVault">eVault</a> — Public keys and key binding certificates</li>
+<li class=""><a class="" href="/docs/Infrastructure/Registry">Registry</a> — JWKS for JWT verification</li>
+<li class=""><a class="" href="/docs/W3DS Protocol/Signing">Signing</a> — Verification flow</li>
+<li class=""><a class="" href="/docs/W3DS Protocol/Authentication">Authentication</a> — How platforms verify signatures</li>
+<li class=""><a href="https://tools.ietf.org/html/rfc6979" target="_blank" rel="noopener noreferrer" class="">ECDSA Specification</a></li>
+<li class=""><a href="https://github.com/multiformats/multibase" target="_blank" rel="noopener noreferrer" class="">Multibase Encoding</a></li>
+<li class=""><a href="https://tools.ietf.org/html/rfc7519" target="_blank" rel="noopener noreferrer" class="">JWT Specification</a></li>
+<li class=""><a href="https://www.w3.org/TR/WebCryptoAPI/" target="_blank" rel="noopener noreferrer" class="">Web Crypto API</a></li>
+</ul></div><footer class="theme-doc-footer docusaurus-mt-lg"><div class="row margin-top--sm theme-doc-footer-edit-meta-row"><div class="col noPrint_piSQ"><a href="https://github.com/MetaState-Prototype-Project/prototype/tree/main/docs/docs/W3DS Protocol/Signature-Formats.md" target="_blank" rel="noopener noreferrer" class="theme-edit-this-page"><svg fill="currentColor" height="20" width="20" viewBox="0 0 40 40" class="iconEdit_DUmk" aria-hidden="true"><g><path d="m34.5 11.7l-3 3.1-6.3-6.3 3.1-3q0.5-0.5 1.2-0.5t1.1 0.5l3.9 3.9q0.5 0.4 0.5 1.1t-0.5 1.2z m-29.5 17.1l18.4-18.5 6.3 6.3-18.4 18.4h-6.3v-6.2z"></path></g></svg>Edit this page</a></div><div class="col lastUpdated_nxgD"></div></div></footer></article><nav class="docusaurus-mt-lg pagination-nav" aria-label="Docs pages"><a class="pagination-nav__link pagination-nav__link--prev" href="/docs/W3DS Protocol/Signing"><div class="pagination-nav__sublabel">Previous</div><div class="pagination-nav__label">Signing</div></a><a class="pagination-nav__link pagination-nav__link--next" href="/docs/W3DS Protocol/Awareness-Protocol"><div class="pagination-nav__sublabel">Next</div><div class="pagination-nav__label">Awareness Protocol</div></a></nav></div></div><div class="col col--3"><div class="tableOfContents_RSNs thin-scrollbar theme-doc-toc-desktop"><ul class="table-of-contents table-of-contents__left-border"><li><a href="#overview" class="table-of-contents__link toc-highlight">Overview</a></li><li><a href="#signature-formats-1" class="table-of-contents__link toc-highlight">Signature Formats</a><ul><li><a href="#software-key-signatures" class="table-of-contents__link toc-highlight">Software Key Signatures</a></li><li><a href="#hardware-key-signatures" class="table-of-contents__link toc-highlight">Hardware Key Signatures</a></li><li><a href="#signature-format-detection" class="table-of-contents__link toc-highlight">Signature Format Detection</a></li><li><a href="#public-key-formats" class="table-of-contents__link toc-highlight">Public Key Formats</a></li></ul></li><li><a href="#signature-verification" class="table-of-contents__link toc-highlight">Signature Verification</a><ul><li><a href="#verification-flow" class="table-of-contents__link toc-highlight">Verification Flow</a></li><li><a href="#verification-steps" class="table-of-contents__link toc-highlight">Verification Steps</a></li><li><a href="#using-the-signature-validator" class="table-of-contents__link toc-highlight">Using the Signature Validator</a></li><li><a href="#verification-result" class="table-of-contents__link toc-highlight">Verification Result</a></li><li><a href="#multiple-certificates" class="table-of-contents__link toc-highlight">Multiple Certificates</a></li></ul></li><li><a href="#code-examples" class="table-of-contents__link toc-highlight">Code Examples</a><ul><li><a href="#creating-a-signature" class="table-of-contents__link toc-highlight">Creating a Signature</a></li><li><a href="#verifying-a-signature" class="table-of-contents__link toc-highlight">Verifying a Signature</a></li></ul></li><li><a href="#cryptographic-details" class="table-of-contents__link toc-highlight">Cryptographic Details</a><ul><li><a href="#ecdsa-p-256" class="table-of-contents__link toc-highlight">ECDSA P-256</a></li><li><a href="#sha-256-hashing" class="table-of-contents__link toc-highlight">SHA-256 Hashing</a></li><li><a href="#signature-components" class="table-of-contents__link toc-highlight">Signature Components</a></li></ul></li><li><a href="#troubleshooting" class="table-of-contents__link toc-highlight">Troubleshooting</a><ul><li><a href="#common-issues" class="table-of-contents__link toc-highlight">Common Issues</a></li><li><a href="#debugging-tips" class="table-of-contents__link toc-highlight">Debugging Tips</a></li></ul></li><li><a href="#security-considerations" class="table-of-contents__link toc-highlight">Security Considerations</a></li><li><a href="#desktop-development-managing-keys-locally" class="table-of-contents__link toc-highlight">Desktop Development: Managing Keys Locally</a><ul><li><a href="#key-generation-algorithm" class="table-of-contents__link toc-highlight">Key Generation Algorithm</a></li><li><a href="#evault-provisioning-algorithm" class="table-of-contents__link toc-highlight">eVault Provisioning Algorithm</a></li><li><a href="#signature-generation-algorithm" class="table-of-contents__link toc-highlight">Signature Generation Algorithm</a></li><li><a href="#authentication-flow" class="table-of-contents__link toc-highlight">Authentication Flow</a></li><li><a href="#key-storage-algorithm" class="table-of-contents__link toc-highlight">Key Storage Algorithm</a></li><li><a href="#complete-desktop-authentication-workflow" class="table-of-contents__link toc-highlight">Complete Desktop Authentication Workflow</a></li><li><a href="#algorithm-details" class="table-of-contents__link toc-highlight">Algorithm Details</a></li><li><a href="#security-considerations-1" class="table-of-contents__link toc-highlight">Security Considerations</a></li><li><a href="#workflow-summary" class="table-of-contents__link toc-highlight">Workflow Summary</a></li></ul></li><li><a href="#references" class="table-of-contents__link toc-highlight">References</a></li></ul></div></div></div></div></main></div></div></div><footer class="theme-layout-footer footer footer--dark"><div class="container container-fluid"><div class="row footer__links"><div class="theme-layout-footer-column col footer__col"><div class="footer__title">Docs</div><ul class="footer__items clean-list"><li class="footer__item"><a class="footer__link-item" href="/docs/Getting Started/getting-started">Getting Started</a></li><li class="footer__item"><a class="footer__link-item" href="/docs/W3DS Basics/getting-started">W3DS Basics</a></li><li class="footer__item"><a class="footer__link-item" href="/docs/Infrastructure/eVault">Infrastructure</a></li><li class="footer__item"><a class="footer__link-item" href="/docs/W3DS Basics/Links">Links</a></li></ul></div></div><div class="footer__bottom text--center"><div class="footer__copyright">Copyright © 2026 Stichting MetaState Foundation.</div></div></div></footer></div>
+</body>
+</html>
