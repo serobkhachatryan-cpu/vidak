@@ -157,6 +157,15 @@ importers:
         specifier: 6.0.3
         version: 6.0.3
 
+  packages/design-tokens:
+    devDependencies:
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: latest
+        version: 4.1.10(@types/node@26.1.2)(vite@8.2.0(@types/node@26.1.2)(esbuild@0.28.1)(jiti@2.7.0))
+
   packages/hooks:
     devDependencies:
       typescript:
