@@ -22,7 +22,8 @@ flowchart TB
     UI["@w3ds/ui"]
     Tokens["@w3ds/design-tokens"]
     Foundation["@w3ds/types · @w3ds/utils · @w3ds/hooks · @w3ds/icons"]
-    Future["@w3ds/auth · @w3ds/api-client · @w3ds/player · @w3ds/sdk"]
+    Platform["@w3ds/auth · @w3ds/api-client"]
+    Future["@w3ds/player · @w3ds/sdk"]
   end
 
   UI --> Tokens
@@ -44,19 +45,40 @@ flowchart TB
 | `apps/docs` | Bootstrap Next.js documentation application. |
 | `packages/design-tokens` | Framework-agnostic design tokens, generated CSS custom properties, and a Tailwind preset. |
 | `packages/ui` | Shared React primitives and layout components, with Storybook stories and unit tests. |
-| `packages/{auth,api-client,player,sdk}` | Public package boundaries reserved for their named concerns; their current exports are empty. |
+| `packages/auth` | Authentication contracts, token-storage adapters, role helpers, and session restoration utilities. |
+| `packages/api-client` | Typed mock API clients for the current frontend, including the in-memory authentication client. |
+| `packages/{player,sdk}` | Public package boundaries reserved for their named concerns; their current exports are empty. |
 | `packages/{config,hooks,icons,types,utils}` | Shared package boundaries; `config` exports the platform name and `utils` exports `identity`. |
 
 ## Application boundary
 
-Each application uses the Next.js App Router under `src/app`. The current pages
-are intentionally minimal bootstrap screens. Apps depend on `@w3ds/config` and
-include Tailwind CSS, but they do not yet import the shared UI or token packages.
+Each application uses the Next.js App Router under `src/app`. Apps depend on
+`@w3ds/config` and include Tailwind CSS. `apps/web` also consumes the shared UI,
+tokens, hooks, and typed mock API packages.
 
 The repository does not currently contain a server-side API, database schema,
-storage adapter, authentication implementation, or video-processing pipeline.
-Those capabilities should not be inferred from package names or the product
-description.
+storage adapter, production authentication service, or video-processing
+pipeline. Those capabilities should not be inferred from package names or the
+product description.
+
+## Web authentication
+
+`apps/web` composes the React Query provider outside `AuthenticationProvider`.
+The authentication provider restores an existing browser session once and
+exposes login, registration, logout, user, and role hooks to application
+components. Route guards redirect unauthenticated users to `/login` and
+preserve a local return path.
+
+The current client is deliberately mock-only: `MockAuthApiClient` owns
+in-memory users and sessions, and the browser stores the returned session in
+`localStorage` when “remember me” is selected or `sessionStorage` otherwise.
+On restoration, the provider refreshes the stored refresh token and preserves
+that storage preference. A failed restore clears the stored session; logout
+clears all non-auth React Query data to prevent cross-session cache leakage.
+
+This is a frontend development seam, not a production token architecture:
+tokens are browser-readable and there is no server-issued HTTP-only cookie,
+cross-tab session synchronization, background renewal, or backend enforcement.
 
 ## Build and delivery
 

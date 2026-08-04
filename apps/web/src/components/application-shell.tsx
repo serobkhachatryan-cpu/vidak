@@ -4,7 +4,7 @@ import { platformName } from '@w3ds/config';
 import { AppShell, Button, Header, SearchInput, Sidebar } from '@w3ds/ui';
 import { usePathname, useRouter } from 'next/navigation';
 import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
-import { useAuthentication, useUserProfile } from '../features/auth/auth-provider';
+import { useAuthentication, useCurrentUser } from '../features/auth/auth-provider';
 
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
@@ -26,7 +26,7 @@ export function ApplicationShell({
   const router = useRouter();
   const pathname = usePathname();
   const { isLoading, logout } = useAuthentication();
-  const user = useUserProfile();
+  const user = useCurrentUser();
   const [darkMode, setDarkMode] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);

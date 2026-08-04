@@ -116,3 +116,5 @@ export const hasRole = (user: AuthUser | undefined, role: Role) =>
 
 export const hasAnyRole = (user: AuthUser | undefined, roles: readonly Role[]) =>
   roles.some((role) => hasRole(user, role));
+
+export { restoreStoredSession, storeSession } from './session';

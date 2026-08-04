@@ -2,16 +2,20 @@
 
 import { Card, Heading, Page, Text } from '@w3ds/ui';
 import { ApplicationShell } from '../../components/application-shell';
-import { AuthenticationGuard, useUserProfile } from '../../features/auth/auth-provider';
+import { AuthenticationGuard, useCurrentUser } from '../../features/auth/auth-provider';
 
 function LibraryContent() {
-  const user = useUserProfile();
+  const user = useCurrentUser();
   return (
     <ApplicationShell currentHref="/library">
       <Page title="Your library" description="Your saved videos and viewing activity.">
         <Card className="max-w-xl">
-          <Heading as="h2" size="md">Welcome, {user?.displayName}</Heading>
-          <Text tone="muted" className="mt-2">Your library is ready for saved videos, playlists, and watch history.</Text>
+          <Heading as="h2" size="md">
+            Welcome, {user?.displayName}
+          </Heading>
+          <Text tone="muted" className="mt-2">
+            Your library is ready for saved videos, playlists, and watch history.
+          </Text>
         </Card>
       </Page>
     </ApplicationShell>

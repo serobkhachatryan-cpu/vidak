@@ -10,13 +10,15 @@ import {
   type LoginInput,
   type RegisterInput,
   type Role,
+  restoreStoredSession,
+  storeSession,
 } from '@w3ds/auth';
 import { Skeleton } from '@w3ds/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { createContext, type ReactNode, useContext, useEffect } from 'react';
+import { createContext, type ReactNode, useContext, useEffect, useMemo } from 'react';
 import { authApiClient } from '../../lib/auth-api-client';
 
-const authQueryKey = ['auth', 'session'] as const;
+const authSessionQueryKey = ['auth', 'session'] as const;
 const tokenStorage = createBrowserTokenStorage();
 
 export function getSafeReturnTo(returnTo: string | null): string {
@@ -35,31 +37,18 @@ interface AuthenticationContextValue {
 
 const AuthenticationContext = createContext<AuthenticationContextValue | undefined>(undefined);
 
-async function restoreSession(): Promise<AuthSession | null> {
-  const stored = tokenStorage.read();
-  if (!stored) return null;
-  try {
-    const session = await authApiClient.refresh(stored.tokens.refreshToken);
-    tokenStorage.write({ ...session, remember: stored.remember });
-    return session;
-  } catch {
-    tokenStorage.clear();
-    return null;
-  }
-}
-
 export function AuthenticationProvider({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const sessionQuery = useQuery({
-    queryKey: authQueryKey,
-    queryFn: restoreSession,
+    queryKey: authSessionQueryKey,
+    queryFn: () => restoreStoredSession(authApiClient, tokenStorage),
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
   });
 
   const persist = (session: AuthSession, remember: boolean) => {
-    tokenStorage.write({ ...session, remember });
-    queryClient.setQueryData(authQueryKey, session);
+    storeSession(tokenStorage, session, remember);
+    queryClient.setQueryData(authSessionQueryKey, session);
     return session;
   };
 
@@ -70,26 +59,36 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
     mutationFn: (input: RegisterInput) => authApiClient.register(input),
   });
 
-  const value: AuthenticationContextValue = {
-    user: sessionQuery.data?.user,
-    session: sessionQuery.data ?? undefined,
-    isLoading: sessionQuery.isPending,
-    error: sessionQuery.error,
-    login: async (input) => persist(await loginMutation.mutateAsync(input), input.remember),
-    register: async (input) => persist(await registerMutation.mutateAsync(input), input.remember),
-    logout: async () => {
-      const stored = tokenStorage.read();
-      try {
-        await authApiClient.logout(stored?.tokens.refreshToken);
-      } finally {
-        tokenStorage.clear();
-        queryClient.setQueryData(authQueryKey, null);
-        queryClient.removeQueries({
-          predicate: (query) => query.queryKey[0] !== 'auth',
-        });
-      }
-    },
-  };
+  const value = useMemo<AuthenticationContextValue>(
+    () => ({
+      user: sessionQuery.data?.user,
+      session: sessionQuery.data ?? undefined,
+      isLoading: sessionQuery.isPending,
+      error: sessionQuery.error,
+      login: async (input) => persist(await loginMutation.mutateAsync(input), input.remember),
+      register: async (input) => persist(await registerMutation.mutateAsync(input), input.remember),
+      logout: async () => {
+        const stored = tokenStorage.read();
+        try {
+          await authApiClient.logout(stored?.tokens.refreshToken);
+        } finally {
+          tokenStorage.clear();
+          queryClient.setQueryData(authSessionQueryKey, null);
+          queryClient.removeQueries({
+            predicate: (query) => query.queryKey[0] !== authSessionQueryKey[0],
+          });
+        }
+      },
+    }),
+    [
+      loginMutation,
+      queryClient,
+      registerMutation,
+      sessionQuery.data,
+      sessionQuery.error,
+      sessionQuery.isPending,
+    ],
+  );
 
   return <AuthenticationContext.Provider value={value}>{children}</AuthenticationContext.Provider>;
 }
@@ -105,7 +104,7 @@ export function usePermission(role: Role | readonly Role[]) {
   return typeof role === 'string' ? hasRole(user, role) : hasAnyRole(user, role);
 }
 
-export function useUserProfile() {
+export function useCurrentUser() {
   return useAuthentication().user;
 }
 

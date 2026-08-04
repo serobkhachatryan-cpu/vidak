@@ -56,7 +56,16 @@ Planned for this release:
 
 ### v0.2 — Create
 
-- Authentication
+**Status:** In Progress
+
+Implemented foundation:
+
+- Browser authentication UI with login, registration, protected routes, and
+  session restoration backed by a typed in-memory mock API
+
+Planned for this release:
+
+- Production authentication service
 - Upload
 - Video processing
 - Creator Studio
@@ -100,11 +109,11 @@ Production-ready decentralized platform.
 ### In Progress
 
 - [ ] v0.1 Browse release completion
+- [ ] v0.2 Create release completion
 - [ ] Product roadmap maintenance
 
 ### Future
 
-- [ ] v0.2 Create
 - [ ] v0.3 Community
 - [ ] v0.4 Federation
 - [ ] v1.0 Production readiness
@@ -118,7 +127,7 @@ Production-ready decentralized platform.
 | Watch Page | Planned | High | v0.1 |
 | Channel Page | Planned | High | v0.1 |
 | Search | Planned | High | v0.1 |
-| Authentication | Planned | High | v0.2 |
+| Authentication | In Progress — mock frontend flow | High | v0.2 |
 | Upload and processing | Planned | High | v0.2 |
 | Creator Studio and video management | Planned | High | v0.2 |
 | Comments, likes, and playlists | Planned | Medium | v0.3 |
