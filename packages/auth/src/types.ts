@@ -134,7 +134,8 @@ export type LoginChallengeStatus =
 
 /**
  * Capability matrix for the active authentication provider.
- * Feature UI should gate password vs challenge flows on these flags.
+ * Feature UI should gate password vs challenge flows on these flags —
+ * never on ad-hoc `provider === '…'` checks in feature components.
  */
 export interface AuthProviderCapabilities {
   emailPasswordLogin: boolean;
@@ -142,6 +143,10 @@ export interface AuthProviderCapabilities {
   w3dsAuthChallenge: boolean;
   changePassword: boolean;
   changeEmail: boolean;
+  /** Password-confirmed account deletion (development provider). */
+  deleteAccount: boolean;
+  /** List / revoke device sessions through the AuthClient. */
+  manageSessions: boolean;
 }
 
 /**

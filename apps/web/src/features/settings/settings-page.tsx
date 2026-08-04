@@ -22,6 +22,7 @@ export function SettingsPageFeature() {
         videoClient={videoApiClient}
         accessToken={session.tokens.accessToken ?? ''}
         userId={session.user.id}
+        authUser={session.user}
         email={session.user.email ?? ''}
         displayName={session.user.displayName}
         {...(session.user.avatarUrl ? { avatarUrl: session.user.avatarUrl } : {})}

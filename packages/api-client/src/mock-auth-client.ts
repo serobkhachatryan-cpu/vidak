@@ -94,7 +94,8 @@ export class MockAuthApiClient implements AuthClient {
 
   constructor(options: MockAuthApiClientOptions = {}) {
     this.delayMs = options.delayMs ?? 0;
-    this.users = [...(options.users ?? defaultUsers)];
+    // Deep-clone so password/email mutations never leak across client instances.
+    this.users = (options.users ?? defaultUsers).map((user) => ({ ...user }));
   }
 
   async login(input: LoginInput): Promise<AuthSession> {

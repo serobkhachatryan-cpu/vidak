@@ -2,7 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { VideoApiClient } from '@w3ds/api-client';
-import type { AuthApi, AuthUser } from '@w3ds/auth';
+import { type AuthClient, AuthenticationError, type AuthUser } from '@w3ds/auth';
 import {
   settingsQueryKeys,
   useConnectAccount,
@@ -22,18 +22,21 @@ import type {
   NotificationPreferences,
   PrivacySettings,
   UpdateUserPreferencesInput,
+  UserProfile,
   UserProfileId,
 } from '@w3ds/types';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   SettingsPage,
   type SettingsPageDataOwnedProp,
   type SettingsPageProps,
 } from './settings-page';
 import {
+  authUserFromProductProfile,
   errorMessage,
   profileFormFromProfile,
   resolveSettingsPageState,
+  settingsSectionsForCapabilities,
 } from './settings-page-helpers';
 import type {
   DeleteAccountFormErrors,
@@ -58,10 +61,12 @@ import {
 } from './settings-validation';
 
 export interface SettingsPageDataProps extends Omit<SettingsPageProps, SettingsPageDataOwnedProp> {
-  authClient: AuthApi;
+  authClient: AuthClient;
   videoClient: VideoApiClient;
   accessToken: string;
   userId: UserProfileId;
+  /** Current auth session user — used to sync profile when AuthClient profile APIs are unavailable. */
+  authUser: AuthUser;
   email: string;
   displayName: string;
   avatarUrl?: string;
@@ -70,11 +75,19 @@ export interface SettingsPageDataProps extends Omit<SettingsPageProps, SettingsP
   onAccountDeleted?: () => void;
 }
 
+function isAuthProfileUnavailable(error: unknown): boolean {
+  return (
+    error instanceof AuthenticationError &&
+    (error.code === 'provider_unavailable' || error.code === 'unsupported_capability')
+  );
+}
+
 export function SettingsPageData({
   authClient,
   videoClient,
   accessToken,
   userId,
+  authUser,
   email,
   displayName,
   avatarUrl: authAvatarUrl,
@@ -84,12 +97,15 @@ export function SettingsPageData({
   ...pageProps
 }: SettingsPageDataProps) {
   const queryClient = useQueryClient();
+  const capabilities = authClient.capabilities;
+  const sections = useMemo(() => settingsSectionsForCapabilities(capabilities), [capabilities]);
   const profileQuery = useUserProfile(videoClient, userId);
   const preferencesQuery = useUserPreferences(videoClient, userId);
   const connectedQuery = useConnectedAccounts(videoClient, userId);
   const sessionsQuery = useQuery({
     queryKey: settingsQueryKeys.sessions(userId),
     queryFn: (): Promise<readonly AuthDeviceSession[]> => authClient.listSessions(accessToken),
+    enabled: capabilities.manageSessions,
   });
 
   const [profileForm, setProfileForm] = useState<ProfileFormInput>({
@@ -163,6 +179,19 @@ export function SettingsPageData({
   const uploadAvatar = useUploadUserAvatar(videoClient, userId);
   const connectAccount = useConnectAccount(videoClient, userId);
   const disconnectAccount = useDisconnectAccount(videoClient, userId);
+
+  const syncAuthProjection = async (
+    input: { displayName: string; avatarUrl?: string | null },
+    productProfile: UserProfile,
+  ) => {
+    try {
+      const next = await authClient.updateProfile(accessToken, input);
+      onAuthUserUpdate?.(next);
+    } catch (error) {
+      if (!isAuthProfileUnavailable(error)) throw error;
+      onAuthUserUpdate?.(authUserFromProductProfile(authUser, productProfile));
+    }
+  };
 
   const changeEmailMutation = useMutation({
     mutationFn: () => authClient.changeEmail(accessToken, emailForm),
@@ -243,15 +272,17 @@ export function SettingsPageData({
         bio: profileForm.bio,
       });
       setProfileForm(profileFormFromProfile(profile));
-      const authUser = await authClient.updateProfile(accessToken, {
-        displayName: profile.displayName,
-        ...(profile.avatarUrl
-          ? { avatarUrl: profile.avatarUrl }
-          : authAvatarUrl
-            ? { avatarUrl: null }
-            : {}),
-      });
-      onAuthUserUpdate?.(authUser);
+      await syncAuthProjection(
+        {
+          displayName: profile.displayName,
+          ...(profile.avatarUrl
+            ? { avatarUrl: profile.avatarUrl }
+            : authAvatarUrl
+              ? { avatarUrl: null }
+              : {}),
+        },
+        profile,
+      );
       setProfileSuccess('Profile saved.');
     } catch (error) {
       setProfileFormError(errorMessage(error, 'Could not save profile.'));
@@ -274,11 +305,13 @@ export function SettingsPageData({
         previewUrl,
       });
       clearAvatarPreview();
-      const authUser = await authClient.updateProfile(accessToken, {
-        displayName: profile.displayName,
-        ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : { avatarUrl: null }),
-      });
-      onAuthUserUpdate?.(authUser);
+      await syncAuthProjection(
+        {
+          displayName: profile.displayName,
+          ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : { avatarUrl: null }),
+        },
+        profile,
+      );
       setProfileSuccess('Avatar updated.');
     } catch (reason) {
       setAvatarError(errorMessage(reason, 'Could not upload avatar.'));
@@ -286,6 +319,7 @@ export function SettingsPageData({
   };
 
   const saveEmail = () => {
+    if (!capabilities.changeEmail) return;
     const errors = validateEmailChange(emailForm);
     setEmailErrors(errors);
     if (hasEmailErrors(errors)) return;
@@ -295,6 +329,7 @@ export function SettingsPageData({
   };
 
   const savePassword = () => {
+    if (!capabilities.changePassword) return;
     const errors = validatePasswordChange(passwordForm);
     setPasswordErrors(errors);
     if (hasPasswordErrors(errors)) return;
@@ -304,6 +339,7 @@ export function SettingsPageData({
   };
 
   const deleteAccount = () => {
+    if (!capabilities.deleteAccount) return;
     const errors = validateDeleteAccount(deleteForm);
     setDeleteErrors(errors);
     if (hasDeleteAccountErrors(errors)) return;
@@ -332,6 +368,7 @@ export function SettingsPageData({
   return (
     <SettingsPage
       {...pageProps}
+      sections={sections}
       state={resolveSettingsPageState({
         isPending: profileQuery.isPending || preferencesQuery.isPending,
         error: profileQuery.error ?? preferencesQuery.error,
@@ -450,7 +487,7 @@ export function SettingsPageData({
         void profileQuery.refetch();
         void preferencesQuery.refetch();
         void connectedQuery.refetch();
-        void sessionsQuery.refetch();
+        if (capabilities.manageSessions) void sessionsQuery.refetch();
       }}
     />
   );

@@ -35,6 +35,8 @@ describe('W3dsAuthClient', () => {
       w3dsAuthChallenge: true,
       changePassword: false,
       changeEmail: false,
+      deleteAccount: false,
+      manageSessions: false,
     });
 
     await expect(
@@ -58,6 +60,12 @@ describe('W3dsAuthClient', () => {
       client.changeEmail('access', {
         email: 'new@example.com',
         password: 'password123',
+      }),
+    ).rejects.toMatchObject({ code: 'unsupported_capability' });
+    await expect(
+      client.deleteAccount('access', {
+        password: 'password123',
+        confirmation: 'DELETE',
       }),
     ).rejects.toMatchObject({ code: 'unsupported_capability' });
   });

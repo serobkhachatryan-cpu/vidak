@@ -36,8 +36,10 @@ import {
   settingsPanelId,
   settingsSectionDescriptions,
   settingsSectionLabels,
+  settingsSectionOrder,
 } from './settings-constants';
 import { SettingsNav } from './settings-nav';
+import { resolveActiveSettingsSection } from './settings-page-helpers';
 import type {
   DeleteAccountFormErrors,
   DeleteAccountFormInput,
@@ -55,6 +57,7 @@ export type { SettingsPageState };
 /** Props owned by `SettingsPageData` so the presentational page stays dumb. */
 export type SettingsPageDataOwnedProp =
   | 'state'
+  | 'sections'
   | 'email'
   | 'profile'
   | 'avatarUrl'
@@ -118,6 +121,8 @@ export type SettingsPageDataOwnedProp =
 
 export interface SettingsPageProps {
   state?: SettingsPageState;
+  /** Capability-filtered section list. Defaults to the full settings nav. */
+  sections?: readonly SettingsSectionId[];
   activeSection?: SettingsSectionId;
   defaultSection?: SettingsSectionId;
   onSectionChange?: (section: SettingsSectionId) => void;
@@ -231,6 +236,7 @@ function SettingsPageSkeleton() {
 
 export function SettingsPage({
   state = 'ready',
+  sections = settingsSectionOrder,
   activeSection,
   defaultSection = 'profile',
   onSectionChange,
@@ -301,8 +307,10 @@ export function SettingsPage({
   className,
 }: SettingsPageProps) {
   const scope = useId();
-  const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(defaultSection);
-  const currentSection = activeSection ?? selectedSection;
+  const initialSection = resolveActiveSettingsSection(sections, defaultSection);
+  const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(initialSection);
+  const preferredSection = activeSection ?? selectedSection;
+  const currentSection = resolveActiveSettingsSection(sections, preferredSection);
 
   const changeSection = (section: SettingsSectionId) => {
     if (activeSection === undefined) setSelectedSection(section);
@@ -326,7 +334,12 @@ export function SettingsPage({
       />
     ) : (
       <div className="grid gap-6 md:grid-cols-[14rem_minmax(0,1fr)]">
-        <SettingsNav scope={scope} activeSection={currentSection} onChange={changeSection} />
+        <SettingsNav
+          scope={scope}
+          sections={sections}
+          activeSection={currentSection}
+          onChange={changeSection}
+        />
         <div
           role="tabpanel"
           id={settingsPanelId(scope, currentSection)}
@@ -351,7 +364,7 @@ export function SettingsPage({
                 onSubmit={() => onSaveProfile?.()}
               />
             )}
-            {currentSection === 'email' && (
+            {currentSection === 'email' && sections.includes('email') && (
               <EmailSection
                 currentEmail={email}
                 value={emailForm}
@@ -363,7 +376,7 @@ export function SettingsPage({
                 onSubmit={() => onSaveEmail?.()}
               />
             )}
-            {currentSection === 'password' && (
+            {currentSection === 'password' && sections.includes('password') && (
               <PasswordSection
                 value={passwordForm}
                 {...(passwordErrors ? { errors: passwordErrors } : {})}
@@ -417,7 +430,7 @@ export function SettingsPage({
                 onDisconnect={(provider) => onDisconnectAccount?.(provider)}
               />
             )}
-            {currentSection === 'sessions' && (
+            {currentSection === 'sessions' && sections.includes('sessions') && (
               <SessionsSection
                 sessions={sessions}
                 isLoading={sessionsLoading ?? false}
@@ -427,7 +440,7 @@ export function SettingsPage({
                 onRevoke={(sessionId) => onRevokeSession?.(sessionId)}
               />
             )}
-            {currentSection === 'danger' && (
+            {currentSection === 'danger' && sections.includes('danger') && (
               <DeleteAccountSection
                 value={deleteForm}
                 {...(deleteErrors ? { errors: deleteErrors } : {})}

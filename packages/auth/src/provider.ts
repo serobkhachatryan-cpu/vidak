@@ -14,6 +14,8 @@ export const authProviderCapabilities = {
     w3dsAuthChallenge: false,
     changePassword: true,
     changeEmail: true,
+    deleteAccount: true,
+    manageSessions: true,
   },
   w3ds: {
     emailPasswordLogin: false,
@@ -21,6 +23,9 @@ export const authProviderCapabilities = {
     w3dsAuthChallenge: true,
     changePassword: false,
     changeEmail: false,
+    deleteAccount: false,
+    // Platform session listing/revocation is not wired yet; hide until supported.
+    manageSessions: false,
   },
 } as const satisfies Record<AuthProviderId, AuthProviderCapabilities>;
 

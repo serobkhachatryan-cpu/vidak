@@ -19,12 +19,15 @@ export { SettingsPage } from './settings-page';
 export type { SettingsPageDataProps } from './settings-page-data';
 export { SettingsPageData } from './settings-page-data';
 export {
+  authUserFromProductProfile,
   errorMessage,
   isAppLanguage,
   nextSettingsSection,
   profileFormFromProfile,
+  resolveActiveSettingsSection,
   resolveSettingsPageState,
   settingsNavIndexForKey,
+  settingsSectionsForCapabilities,
 } from './settings-page-helpers';
 export type {
   DeleteAccountFormErrors,

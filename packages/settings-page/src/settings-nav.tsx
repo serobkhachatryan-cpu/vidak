@@ -12,14 +12,20 @@ import { cx, focusRing } from './styles';
 export interface SettingsNavProps {
   scope: string;
   activeSection: SettingsSectionId;
+  sections?: readonly SettingsSectionId[];
   onChange: (section: SettingsSectionId) => void;
 }
 
-export function SettingsNav({ scope, activeSection, onChange }: SettingsNavProps) {
+export function SettingsNav({
+  scope,
+  activeSection,
+  sections = settingsSectionOrder,
+  onChange,
+}: SettingsNavProps) {
   const listRef = useRef<HTMLDivElement>(null);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const next = nextSettingsSection(activeSection, event.key);
+    const next = nextSettingsSection(activeSection, event.key, sections);
     if (!next) return;
     event.preventDefault();
     onChange(next);
@@ -35,7 +41,7 @@ export function SettingsNav({ scope, activeSection, onChange }: SettingsNavProps
         onKeyDown={onKeyDown}
         className="flex gap-1 overflow-x-auto border-b border-border pb-2 md:flex-col md:overflow-visible md:border-b-0 md:border-r md:pb-0 md:pr-4"
       >
-        {settingsSectionOrder.map((section) => {
+        {sections.map((section) => {
           const selected = activeSection === section;
           return (
             <button

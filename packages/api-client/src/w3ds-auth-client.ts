@@ -131,7 +131,7 @@ export class W3dsAuthClient implements AuthClient {
   }
 
   async deleteAccount(_accessToken: string, _input: DeleteAccountInput): Promise<void> {
-    throw unavailable('W3DS account deletion requires the platform authentication API.');
+    throw unsupported('Account deletion is not available with W3DS authentication.');
   }
 
   private refreshWithCookies(): Promise<AuthSession> {

@@ -106,9 +106,24 @@ describe('authentication utilities', () => {
     expect(parseAuthProviderId('w3ds')).toBe('w3ds');
     expect(() => parseAuthProviderId('ldap')).toThrow(/Unsupported auth provider/);
 
-    expect(getAuthProviderCapabilities('dev').emailPasswordLogin).toBe(true);
-    expect(getAuthProviderCapabilities('w3ds').w3dsAuthChallenge).toBe(true);
-    expect(getAuthProviderCapabilities('w3ds').emailPasswordLogin).toBe(false);
+    expect(getAuthProviderCapabilities('dev')).toMatchObject({
+      emailPasswordLogin: true,
+      passwordRegistration: true,
+      w3dsAuthChallenge: false,
+      changePassword: true,
+      changeEmail: true,
+      deleteAccount: true,
+      manageSessions: true,
+    });
+    expect(getAuthProviderCapabilities('w3ds')).toMatchObject({
+      emailPasswordLogin: false,
+      passwordRegistration: false,
+      w3dsAuthChallenge: true,
+      changePassword: false,
+      changeEmail: false,
+      deleteAccount: false,
+      manageSessions: false,
+    });
   });
 
   it('builds platform auth users with synthetic W3DS identity fields', () => {

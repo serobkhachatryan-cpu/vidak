@@ -25,6 +25,9 @@ export function AuthPage({ mode }: { mode: Mode }) {
   const isRegister = mode === 'register';
   const returnTo = getSafeReturnTo(searchParams.get('returnTo'));
   const useW3dsLogin = capabilities.w3dsAuthChallenge && !isRegister;
+  const usePasswordForm =
+    (isRegister && capabilities.passwordRegistration) ||
+    (!isRegister && capabilities.emailPasswordLogin);
   const blockPasswordRegistration = isRegister && !capabilities.passwordRegistration;
 
   useEffect(() => {
@@ -108,7 +111,7 @@ export function AuthPage({ mode }: { mode: Mode }) {
 
           {useW3dsLogin ? (
             <W3dsLoginPanel returnTo={returnTo} />
-          ) : (
+          ) : usePasswordForm ? (
             <>
               {error && (
                 <div
@@ -169,6 +172,8 @@ export function AuthPage({ mode }: { mode: Mode }) {
                 </Text>
               )}
             </>
+          ) : (
+            <Text tone="muted">Sign-in is not available for the configured auth provider.</Text>
           )}
         </Card>
       </main>

@@ -1,14 +1,17 @@
-import { AuthenticationError } from '@w3ds/auth';
+import { AuthenticationError, createAuthUser, getAuthProviderCapabilities } from '@w3ds/auth';
 import type { UserProfile } from '@w3ds/types';
 import { describe, expect, it } from 'vitest';
 import { formatSettingsTimestamp } from './format';
 import {
+  authUserFromProductProfile,
   errorMessage,
   isAppLanguage,
   nextSettingsSection,
   profileFormFromProfile,
+  resolveActiveSettingsSection,
   resolveSettingsPageState,
   settingsNavIndexForKey,
+  settingsSectionsForCapabilities,
 } from './settings-page-helpers';
 
 const profile = (overrides: Partial<UserProfile> = {}): UserProfile => ({
@@ -68,6 +71,50 @@ describe('settings navigation helpers', () => {
     expect(settingsNavIndexForKey('Enter', 0, 3)).toBeUndefined();
     expect(nextSettingsSection('profile', 'ArrowDown')).toBe('email');
     expect(nextSettingsSection('danger', 'ArrowDown')).toBe('profile');
+  });
+
+  it('gates password, email, sessions, and delete sections from auth capabilities', () => {
+    const devSections = settingsSectionsForCapabilities(getAuthProviderCapabilities('dev'));
+    expect(devSections).toContain('email');
+    expect(devSections).toContain('password');
+    expect(devSections).toContain('sessions');
+    expect(devSections).toContain('danger');
+
+    const w3dsSections = settingsSectionsForCapabilities(getAuthProviderCapabilities('w3ds'));
+    expect(w3dsSections).not.toContain('email');
+    expect(w3dsSections).not.toContain('password');
+    expect(w3dsSections).not.toContain('sessions');
+    expect(w3dsSections).not.toContain('danger');
+    expect(w3dsSections).toContain('profile');
+    expect(resolveActiveSettingsSection(w3dsSections, 'password')).toBe('profile');
+  });
+
+  it('patches auth users from product profiles without inventing password fields', () => {
+    const user = createAuthUser({
+      id: 'user-1',
+      displayName: 'Old',
+      roles: ['creator'],
+      eName: '@old.w3id',
+      eVaultId: 'evault-1',
+      avatarUrl: 'https://example.com/old.png',
+    });
+    const next = authUserFromProductProfile(user, {
+      id: 'user-1',
+      handle: 'new-handle',
+      displayName: 'New Name',
+      joinedAt: '2025-01-01T00:00:00.000Z',
+      subscriberCount: 0,
+      isVerified: false,
+      bio: 'Updated bio',
+    });
+    expect(next.displayName).toBe('New Name');
+    expect(next.profile).toMatchObject({
+      displayName: 'New Name',
+      handle: 'new-handle',
+      bio: 'Updated bio',
+    });
+    expect(next.avatarUrl).toBeUndefined();
+    expect(next.eName).toBe('@old.w3id');
   });
 });
 

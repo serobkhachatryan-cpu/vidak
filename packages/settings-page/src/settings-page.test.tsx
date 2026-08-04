@@ -1,7 +1,9 @@
+import { getAuthProviderCapabilities } from '@w3ds/auth';
 import { defaultNotificationPreferences, defaultPrivacySettings } from '@w3ds/types';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { SettingsPage } from './settings-page';
+import { settingsSectionsForCapabilities } from './settings-page-helpers';
 
 const profile = {
   displayName: 'Demo Creator',
@@ -172,6 +174,24 @@ describe('SettingsPage', () => {
     expect(markup).toContain('Delete account');
     expect(markup).toContain('Deleting your account removes your profile');
     expect(markup).toContain('aria-describedby=');
+  });
+
+  it('hides password and email panels when the W3DS capability matrix is applied', () => {
+    const sections = settingsSectionsForCapabilities(getAuthProviderCapabilities('w3ds'));
+    const markup = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@w3ds.video"
+        profile={profile}
+        sections={sections}
+        activeSection="profile"
+      />,
+    );
+    expect(markup).not.toContain('>Email<');
+    expect(markup).not.toContain('>Password<');
+    expect(markup).not.toContain('>Delete account<');
+    expect(markup).not.toContain('>Sessions<');
+    expect(markup).toContain('>Profile<');
+    expect(markup).toContain('>Appearance<');
   });
 
   it('renders loading and error states', () => {

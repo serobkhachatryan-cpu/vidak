@@ -1,4 +1,4 @@
-import { AuthenticationError } from '@w3ds/auth';
+import { AuthenticationError, type AuthProviderCapabilities, type AuthUser } from '@w3ds/auth';
 import type { AppLanguage, UserProfile } from '@w3ds/types';
 import { appLanguages } from '@w3ds/types';
 import {
@@ -36,6 +36,55 @@ export function resolveSettingsPageState({
   return hasProfile ? 'ready' : 'empty';
 }
 
+/**
+ * Resolves which settings sections the active auth provider supports.
+ * Password/email/delete/session panels are gated solely by {@link AuthProviderCapabilities}.
+ */
+export function settingsSectionsForCapabilities(
+  capabilities: AuthProviderCapabilities,
+): readonly SettingsSectionId[] {
+  return settingsSectionOrder.filter((section) => {
+    switch (section) {
+      case 'email':
+        return capabilities.changeEmail;
+      case 'password':
+        return capabilities.changePassword;
+      case 'danger':
+        return capabilities.deleteAccount;
+      case 'sessions':
+        return capabilities.manageSessions;
+      default:
+        return true;
+    }
+  });
+}
+
+export function resolveActiveSettingsSection(
+  sections: readonly SettingsSectionId[],
+  preferred: SettingsSectionId,
+): SettingsSectionId {
+  if (sections.includes(preferred)) return preferred;
+  return sections[0] ?? 'profile';
+}
+
+/** Patches the auth session projection after a product-profile save when AuthClient profile APIs are unavailable. */
+export function authUserFromProductProfile(user: AuthUser, profile: UserProfile): AuthUser {
+  const { avatarUrl: _previousAvatar, ...userWithoutAvatar } = user;
+  const { avatarUrl: _previousProfileAvatar, ...profileWithoutAvatar } = user.profile;
+  return {
+    ...userWithoutAvatar,
+    displayName: profile.displayName,
+    ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}),
+    profile: {
+      ...profileWithoutAvatar,
+      displayName: profile.displayName,
+      handle: profile.handle,
+      ...(profile.avatarUrl ? { avatarUrl: profile.avatarUrl } : {}),
+      ...(profile.bio !== undefined ? { bio: profile.bio } : {}),
+    },
+  };
+}
+
 export function isAppLanguage(value: string): value is AppLanguage {
   return (appLanguages as readonly string[]).includes(value);
 }
@@ -56,11 +105,8 @@ export function settingsNavIndexForKey(
 export function nextSettingsSection(
   current: SettingsSectionId,
   key: string,
+  sections: readonly SettingsSectionId[] = settingsSectionOrder,
 ): SettingsSectionId | undefined {
-  const index = settingsNavIndexForKey(
-    key,
-    settingsSectionOrder.indexOf(current),
-    settingsSectionOrder.length,
-  );
-  return index === undefined ? undefined : settingsSectionOrder[index];
+  const index = settingsNavIndexForKey(key, sections.indexOf(current), sections.length);
+  return index === undefined ? undefined : sections[index];
 }
