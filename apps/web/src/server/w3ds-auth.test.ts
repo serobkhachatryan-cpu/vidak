@@ -121,6 +121,18 @@ describe('W3dsAuthService', () => {
     expect(reused.eName).toBe('@creator.w3id');
   });
 
+  it('reconstructs a pending offer for a server-rendered login page', async () => {
+    const { service } = createService();
+    const created = await service.createOffer('https://vidak.example');
+
+    await expect(
+      service.getOfferForLogin(created.offerId, 'https://vidak.example'),
+    ).resolves.toEqual(created);
+    await expect(
+      service.getOfferForLogin('missing', 'https://vidak.example'),
+    ).resolves.toBeUndefined();
+  });
+
   it('finds or creates platform users uniquely by eName', async () => {
     const store = new InMemoryW3dsAuthStore();
     const first = await store.findOrCreateUser(

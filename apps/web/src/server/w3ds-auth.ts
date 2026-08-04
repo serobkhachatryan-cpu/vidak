@@ -123,23 +123,37 @@ export class W3dsAuthService {
   }
 
   async createOffer(publicBaseUrl: string): Promise<LoginOffer> {
-    const baseUrl = parseHttpUrl(publicBaseUrl, 'The platform public URL');
     const offerId = randomUUID();
     const sessionId = randomUUID();
     const expiresAt = this.now() + this.config.offerLifetimeMs;
+    const offer = await this.store.createOffer({ id: offerId, sessionId, expiresAt });
+    return this.toLoginOffer(offer, publicBaseUrl);
+  }
+
+  /**
+   * Reconstructs the public eID request for a pending offer. This supports
+   * server-rendered login pages, where JavaScript may be unavailable, without
+   * storing the URI itself or exposing any server credentials.
+   */
+  async getOfferForLogin(offerId: string, publicBaseUrl: string): Promise<LoginOffer | undefined> {
+    const offer = await this.expireOfferIfNeeded(await this.store.getOfferById(offerId));
+    if (!offer || (offer.status !== 'pending' && offer.status !== 'verifying')) return undefined;
+    return this.toLoginOffer(offer, publicBaseUrl);
+  }
+
+  private toLoginOffer(offer: StoredOffer, publicBaseUrl: string): LoginOffer {
+    const baseUrl = parseHttpUrl(publicBaseUrl, 'The platform public URL');
     const callbackUrl = new URL('/api/auth/callback', baseUrl).toString();
     const offerUri = new URL('w3ds://auth');
     offerUri.searchParams.set('redirect', callbackUrl);
-    offerUri.searchParams.set('session', sessionId);
+    offerUri.searchParams.set('session', offer.sessionId);
     offerUri.searchParams.set('platform', this.config.platformName);
 
-    await this.store.createOffer({ id: offerId, sessionId, expiresAt });
-
     return {
-      offerId,
-      sessionId,
+      offerId: offer.id,
+      sessionId: offer.sessionId,
       uri: offerUri.toString(),
-      expiresAt: new Date(expiresAt).toISOString(),
+      expiresAt: new Date(offer.expiresAt).toISOString(),
     };
   }
 
