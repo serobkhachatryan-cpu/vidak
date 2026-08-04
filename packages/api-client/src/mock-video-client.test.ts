@@ -64,4 +64,42 @@ describe('MockVideoApiClient', () => {
   it('returns undefined for an unknown resource', async () => {
     await expect(client.getVideo('missing-video')).resolves.toBeUndefined();
   });
+
+  it('uploads a video with progress and creates a published video', async () => {
+    const progress: number[] = [];
+    const upload = await client.uploadVideo(
+      { name: 'demo.mp4', size: 1_000_000, type: 'video/mp4' },
+      { onProgress: (event) => progress.push(event.percent) },
+    );
+    const video = await client.createVideo({
+      channelId: 'channel-studio',
+      uploadId: upload.uploadId,
+      title: 'New upload',
+      description: 'Fresh from the studio',
+      tags: ['demo'],
+      category: 'education',
+      language: 'en',
+      visibility: 'public',
+      thumbnailUrl: upload.autoThumbnails[0] ?? '',
+      status: 'published',
+    });
+
+    expect(upload.uploadId).toMatch(/^upload-/);
+    expect(upload.autoThumbnails.length).toBeGreaterThan(0);
+    expect(progress.at(-1)).toBe(100);
+    expect(video.status).toBe('published');
+    expect(video.publishedAt).toBeDefined();
+    expect(video.category).toBe('education');
+    await expect(client.getVideo(video.id)).resolves.toMatchObject({ title: 'New upload' });
+  });
+
+  it('cancels an in-flight upload when aborted', async () => {
+    const controller = new AbortController();
+    const uploadPromise = client.uploadVideo(
+      { name: 'large.mp4', size: 50_000_000, type: 'video/mp4' },
+      { signal: controller.signal },
+    );
+    controller.abort();
+    await expect(uploadPromise).rejects.toMatchObject({ name: 'AbortError' });
+  });
 });

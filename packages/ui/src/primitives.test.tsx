@@ -8,7 +8,9 @@ import {
   IconButton,
   Input,
   LoadingButton,
+  Progress,
   Radio,
+  Select,
   Skeleton,
   Spinner,
   Tag,
@@ -60,5 +62,23 @@ describe('UI primitives', () => {
     const button = renderToStaticMarkup(<Button disabled>Publish</Button>);
     expect(tag).toContain('aria-label="Remove tag"');
     expect(button).toContain('disabled=""');
+  });
+
+  it('exposes progressbar semantics and clamps the visual value', () => {
+    const markup = renderToStaticMarkup(<Progress value={40} max={100} label="Upload progress" />);
+    expect(markup).toContain('role="progressbar"');
+    expect(markup).toContain('aria-valuenow="40"');
+    expect(markup).toContain('aria-label="Upload progress"');
+    expect(markup).toContain('width:40%');
+  });
+
+  it('marks invalid selects for assistive tech', () => {
+    const markup = renderToStaticMarkup(
+      <Select invalid aria-label="Category" defaultValue="education">
+        <option value="education">Education</option>
+      </Select>,
+    );
+    expect(markup).toContain('aria-invalid="true"');
+    expect(markup).toContain('Education');
   });
 });

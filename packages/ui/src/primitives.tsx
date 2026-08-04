@@ -5,6 +5,7 @@ import {
   type InputHTMLAttributes,
   type LabelHTMLAttributes,
   type ReactNode,
+  type SelectHTMLAttributes,
   type TextareaHTMLAttributes,
   useId,
   useState,
@@ -494,3 +495,61 @@ export function Skeleton({ circle = false, className, ...props }: SkeletonProps)
     />
   );
 }
+
+export interface ProgressProps extends HTMLAttributes<HTMLDivElement> {
+  value: number;
+  max?: number;
+  label?: string;
+}
+
+export function Progress({
+  value,
+  max = 100,
+  label = 'Progress',
+  className,
+  ...props
+}: ProgressProps) {
+  const safeMax = max > 0 ? max : 100;
+  const clamped = Math.min(Math.max(value, 0), safeMax);
+  const percent = (clamped / safeMax) * 100;
+
+  return (
+    <div
+      role="progressbar"
+      aria-valuenow={Math.round(clamped)}
+      aria-valuemin={0}
+      aria-valuemax={Math.round(safeMax)}
+      aria-label={label}
+      className={cx('h-2 w-full overflow-hidden rounded-full bg-muted', className)}
+      {...props}
+    >
+      <div
+        className="h-full rounded-full bg-primary transition-[width] duration-fast"
+        style={{ width: `${percent}%` }}
+      />
+    </div>
+  );
+}
+
+export interface SelectProps extends Omit<SelectHTMLAttributes<HTMLSelectElement>, 'size'> {
+  invalid?: boolean;
+}
+
+export const Select = forwardRef<HTMLSelectElement, SelectProps>(
+  ({ invalid = false, className, children, ...props }, ref) => (
+    <select
+      ref={ref}
+      aria-invalid={invalid || undefined}
+      className={cx(
+        'h-10 w-full rounded-md border border-border bg-surface px-3 font-sans text-sm text-foreground transition-colors duration-fast hover:border-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+        focusRing,
+        invalid && 'border-danger focus-visible:ring-danger',
+        className,
+      )}
+      {...props}
+    >
+      {children}
+    </select>
+  ),
+);
+Select.displayName = 'Select';

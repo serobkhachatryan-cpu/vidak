@@ -6,11 +6,16 @@ import type {
   CommentListFilters,
   CommentReaction,
   CreateCommentInput,
+  CreateVideoInput,
   CursorPage,
   PaginationParams,
   Playlist,
   PlaylistId,
   SearchFilters,
+  UpdateVideoInput,
+  UploadVideoInput,
+  UploadVideoOptions,
+  UploadVideoResult,
   UserProfile,
   UserProfileId,
   Video,
@@ -39,4 +44,8 @@ export interface VideoApiClient {
   ): Promise<CursorPage<Comment>>;
   createComment(videoId: VideoId, input: CreateCommentInput): Promise<Comment>;
   reactToComment(id: CommentId, reaction: CommentReaction | undefined): Promise<Comment>;
+  uploadVideo(file: UploadVideoInput, options?: UploadVideoOptions): Promise<UploadVideoResult>;
+  createVideo(input: CreateVideoInput): Promise<Video>;
+  updateVideo(id: VideoId, input: UpdateVideoInput): Promise<Video>;
+  publishVideo(id: VideoId): Promise<Video>;
 }

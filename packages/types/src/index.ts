@@ -12,4 +12,19 @@ export type { CursorPage, PaginationParams } from './pagination';
 export type { Playlist, PlaylistId, PlaylistItem, PlaylistVisibility } from './playlist';
 export type { SearchFilters, SearchResultType, SearchSort } from './search';
 export type { UserProfile, UserProfileId } from './user-profile';
-export type { Video, VideoId, VideoListFilters, VideoStatus, VideoVisibility } from './video';
+export type {
+  CreateVideoInput,
+  UpdateVideoInput,
+  UploadVideoInput,
+  UploadVideoOptions,
+  UploadVideoResult,
+  Video,
+  VideoCategory,
+  VideoId,
+  VideoLanguage,
+  VideoListFilters,
+  VideoStatus,
+  VideoUploadProgress,
+  VideoVisibility,
+} from './video';
+export { videoCategories, videoLanguages } from './video';

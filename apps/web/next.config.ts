@@ -7,8 +7,10 @@ const nextConfig: NextConfig = {
   transpilePackages: [
     '@w3ds/api-client',
     '@w3ds/auth',
+    '@w3ds/channel-page',
     '@w3ds/hooks',
     '@w3ds/ui',
+    '@w3ds/upload-page',
     '@w3ds/user-profile-page',
     '@w3ds/watch-page',
   ],

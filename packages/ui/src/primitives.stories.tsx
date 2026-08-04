@@ -11,8 +11,10 @@ import {
   Input,
   Label,
   LoadingButton,
+  Progress,
   Radio,
   SearchInput,
+  Select,
   Skeleton,
   Spinner,
   Switch,
@@ -76,6 +78,29 @@ export const SwitchStory: Story = {
 export const RadioStory: Story = {
   name: 'Radio',
   render: () => <Radio name="visibility" label="Public" />,
+};
+export const ProgressStory: Story = {
+  name: 'Progress',
+  render: () => (
+    <div className="w-72 space-y-2">
+      <Text size="sm" tone="muted">
+        Uploading…
+      </Text>
+      <Progress value={62} label="Upload progress" />
+    </div>
+  ),
+};
+export const SelectStory: Story = {
+  name: 'Select',
+  render: () => (
+    <div className="w-72 space-y-2">
+      <Label htmlFor="demo-category">Category</Label>
+      <Select id="demo-category" defaultValue="education">
+        <option value="education">Education</option>
+        <option value="entertainment">Entertainment</option>
+      </Select>
+    </div>
+  ),
 };
 export const CardStory: Story = {
   name: 'Card',

@@ -6,11 +6,16 @@ import type {
   CommentListFilters,
   CommentReaction,
   CreateCommentInput,
+  CreateVideoInput,
   CursorPage,
   PaginationParams,
   Playlist,
   PlaylistId,
   SearchFilters,
+  UpdateVideoInput,
+  UploadVideoInput,
+  UploadVideoOptions,
+  UploadVideoResult,
   UserProfile,
   UserProfileId,
   Video,
@@ -27,6 +32,13 @@ import {
 import { createCursorPage } from './pagination';
 import type { VideoApiClient } from './video-client';
 
+const autoThumbnailUrls = [
+  'https://images.unsplash.com/photo-1558655146-d09347e92766?w=1280&h=720&fit=crop',
+  'https://images.unsplash.com/photo-1555066931-4365d14bab8c?w=1280&h=720&fit=crop',
+  'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1280&h=720&fit=crop',
+  'https://images.unsplash.com/photo-1551288049-bebda4e38f71?w=1280&h=720&fit=crop',
+] as const;
+
 export interface MockVideoApiClientOptions {
   delayMs?: number;
   channels?: readonly Channel[];
@@ -39,21 +51,26 @@ export interface MockVideoApiClientOptions {
 
 export class MockVideoApiClient implements VideoApiClient {
   private readonly delayMs: number;
-  private readonly channels: readonly Channel[];
+  private channels: Channel[];
   private comments: Comment[];
   private readonly currentUserId: UserProfileId;
   private readonly playlists: readonly Playlist[];
   private readonly userProfiles: readonly UserProfile[];
-  private readonly videos: readonly Video[];
+  private videos: Video[];
+  private uploadSequence = 0;
+  private readonly completedUploads = new Map<
+    string,
+    { fileName: string; durationSeconds: number }
+  >();
 
   constructor(options: MockVideoApiClientOptions = {}) {
     this.delayMs = options.delayMs ?? 0;
-    this.channels = options.channels ?? mockChannels;
+    this.channels = [...(options.channels ?? mockChannels)];
     this.comments = [...(options.comments ?? mockComments)];
     this.currentUserId = options.currentUserId ?? 'user-grace';
     this.playlists = options.playlists ?? mockPlaylists;
     this.userProfiles = options.userProfiles ?? mockUserProfiles;
-    this.videos = options.videos ?? mockVideos;
+    this.videos = [...(options.videos ?? mockVideos)];
   }
 
   async getVideo(id: VideoId): Promise<Video | undefined> {
@@ -174,6 +191,122 @@ export class MockVideoApiClient implements VideoApiClient {
     if (reaction) next.viewerReaction = reaction;
     else delete next.viewerReaction;
     this.comments = this.comments.map((item) => (item.id === id ? next : item));
+    return next;
+  }
+
+  async uploadVideo(
+    file: UploadVideoInput,
+    options: UploadVideoOptions = {},
+  ): Promise<UploadVideoResult> {
+    const total = Math.max(file.size, 1);
+    const steps = 20;
+    const chunk = Math.max(Math.floor(total / steps), 1);
+    let uploaded = 0;
+    const startedAt = Date.now();
+    const tickMs = this.delayMs > 0 ? Math.max(Math.floor(this.delayMs / 4), 16) : 16;
+
+    while (uploaded < total) {
+      if (options.signal?.aborted) {
+        throw new DOMException('Upload cancelled', 'AbortError');
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, tickMs));
+      uploaded = Math.min(total, uploaded + chunk);
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+      const bytesPerSecond = uploaded / elapsedSeconds;
+      options.onProgress?.({
+        bytesUploaded: uploaded,
+        bytesTotal: total,
+        percent: Math.round((uploaded / total) * 100),
+        bytesPerSecond,
+        remainingSeconds: (total - uploaded) / Math.max(bytesPerSecond, 1),
+      });
+    }
+
+    this.uploadSequence += 1;
+    const uploadId = `upload-${this.uploadSequence}`;
+    const durationSeconds = Math.max(30, Math.min(900, Math.round(file.size / 250_000)));
+    this.completedUploads.set(uploadId, { fileName: file.name, durationSeconds });
+
+    return {
+      uploadId,
+      fileName: file.name,
+      durationSeconds,
+      autoThumbnails: autoThumbnailUrls,
+    };
+  }
+
+  async createVideo(input: CreateVideoInput): Promise<Video> {
+    await this.wait();
+    const upload = this.completedUploads.get(input.uploadId);
+    if (!upload) throw new Error(`Upload ${input.uploadId} was not found`);
+    if (!this.channels.some((channel) => channel.id === input.channelId)) {
+      throw new Error(`Channel ${input.channelId} was not found`);
+    }
+
+    const now = new Date().toISOString();
+    const status = input.status ?? 'draft';
+    const video: Video = {
+      id: `video-${this.videos.length + 1}`,
+      channelId: input.channelId,
+      title: input.title.trim(),
+      description: input.description.trim(),
+      thumbnailUrl: input.thumbnailUrl,
+      durationSeconds: input.durationSeconds ?? upload.durationSeconds,
+      status,
+      visibility: input.visibility,
+      category: input.category,
+      language: input.language,
+      ...(status === 'published' ? { publishedAt: now } : {}),
+      createdAt: now,
+      updatedAt: now,
+      viewCount: 0,
+      likeCount: 0,
+      commentCount: 0,
+      tags: input.tags.map((tag) => tag.trim()).filter(Boolean),
+    };
+
+    this.videos = [video, ...this.videos];
+    this.channels = this.channels.map((channel) =>
+      channel.id === input.channelId ? { ...channel, videoCount: channel.videoCount + 1 } : channel,
+    );
+    return video;
+  }
+
+  async updateVideo(id: VideoId, input: UpdateVideoInput): Promise<Video> {
+    await this.wait();
+    const video = this.videos.find((item) => item.id === id);
+    if (!video) throw new Error(`Video ${id} was not found`);
+
+    const next: Video = {
+      ...video,
+      ...(input.title !== undefined ? { title: input.title.trim() } : {}),
+      ...(input.description !== undefined ? { description: input.description.trim() } : {}),
+      ...(input.tags !== undefined
+        ? { tags: input.tags.map((tag) => tag.trim()).filter(Boolean) }
+        : {}),
+      ...(input.category !== undefined ? { category: input.category } : {}),
+      ...(input.language !== undefined ? { language: input.language } : {}),
+      ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
+      ...(input.thumbnailUrl !== undefined ? { thumbnailUrl: input.thumbnailUrl } : {}),
+      ...(input.status !== undefined ? { status: input.status } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    this.videos = this.videos.map((item) => (item.id === id ? next : item));
+    return next;
+  }
+
+  async publishVideo(id: VideoId): Promise<Video> {
+    await this.wait();
+    const video = this.videos.find((item) => item.id === id);
+    if (!video) throw new Error(`Video ${id} was not found`);
+    const now = new Date().toISOString();
+    const next: Video = {
+      ...video,
+      status: 'published',
+      publishedAt: video.publishedAt ?? now,
+      updatedAt: now,
+    };
+    this.videos = this.videos.map((item) => (item.id === id ? next : item));
     return next;
   }
 

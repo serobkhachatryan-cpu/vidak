@@ -10,6 +10,7 @@ const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
   { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
   { label: 'Library', href: '/library', icon: '▣' },
+  { label: 'Upload', href: '/upload', icon: '⇪' },
 ];
 
 export interface ApplicationShellProps {
@@ -118,6 +119,9 @@ export function ApplicationShell({
               {!isLoading &&
                 (user ? (
                   <>
+                    <Button size="sm" variant="secondary" onClick={() => router.push('/upload')}>
+                      Upload
+                    </Button>
                     <Button size="sm" variant="ghost" onClick={() => router.push('/library')}>
                       {user.displayName}
                     </Button>
