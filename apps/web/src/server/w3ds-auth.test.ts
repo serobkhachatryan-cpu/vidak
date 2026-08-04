@@ -61,7 +61,7 @@ describe('W3dsAuthService', () => {
 
     expect(uri.protocol).toBe('w3ds:');
     expect(uri.searchParams.get('platform')).toBe('vidak');
-    expect(uri.searchParams.get('redirect')).toBe('https://vidak.example/api/auth/callback');
+    expect(uri.searchParams.get('redirect')).toBe('https://vidak.example/api/auth');
     await expect(service.getOfferStatus(offer.offerId)).resolves.toEqual({ status: 'pending' });
 
     await service.completeOffer({

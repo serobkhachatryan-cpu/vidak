@@ -1,17 +1,13 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import {
-  getW3dsAuthService,
-  W3dsAuthError,
-  type W3dsCallbackInput,
-} from '../../../../server/w3ds-auth';
+import { normalizeEidAuthPayload } from '../../../server/eid-auth-transport';
+import { getW3dsAuthService, W3dsAuthError } from '../../../server/w3ds-auth';
 
 export const runtime = 'nodejs';
 
 /**
- * eID is a Tauri webview and posts from its own origin. This callback does
- * not use cookies: it only accepts a unique signed session and returns the
- * resulting short-lived token to the wallet. It is therefore intentionally
- * separate from the same-origin cookie APIs.
+ * The eID Wallet is a Tauri webview and posts from its own origin. This
+ * narrowly scoped gateway is credential-free: it accepts only a one-time,
+ * signed offer session, so no browser cookies are involved in this exchange.
  */
 const walletCorsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -29,22 +25,21 @@ function walletJson(body: unknown, init?: ResponseInit): NextResponse {
   return response;
 }
 
-/** Handles the eID webview's CORS preflight before the documented JSON POST. */
+/** Handles the eID Wallet webview's CORS preflight. */
 export function OPTIONS(): NextResponse {
   return new NextResponse(null, { status: 204, headers: walletCorsHeaders });
 }
 
+/** Accepts an eID Wallet signed approval for the authenticated offer. */
 export async function POST(request: NextRequest) {
   try {
-    const input = (await request.json()) as W3dsCallbackInput;
-    const service = getW3dsAuthService();
-    const offerId = await service.completeOffer(input);
-    const session = await service.getOfferSessionForCookie(offerId);
+    const input = normalizeEidAuthPayload(await request.json());
+    await getW3dsAuthService().completeOffer(input);
 
-    // The eID Wallet protocol consumes an authentication token from the
-    // callback response after it posts the signed session. Do not return the
-    // refresh credential: the wallet only needs the short-lived access token.
-    return walletJson({ token: session.tokens.accessToken });
+    // The current eID Wallet transport only requires a successful response.
+    // The browser that initiated the offer receives its cookies through the
+    // same-origin offer continuation route, never through this cross-origin call.
+    return walletJson({ ok: true });
   } catch (error) {
     if (error instanceof W3dsAuthError) {
       return walletJson(
@@ -53,7 +48,7 @@ export async function POST(request: NextRequest) {
       );
     }
     return walletJson(
-      { error: { code: 'validation_failed', message: 'Invalid authentication callback.' } },
+      { error: { code: 'validation_failed', message: 'Invalid eID authentication response.' } },
       { status: 400 },
     );
   }

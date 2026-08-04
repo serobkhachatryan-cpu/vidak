@@ -4,6 +4,7 @@ import { getW3dsAuthService, type LoginOffer } from '../../server/w3ds-auth';
 export interface W3dsServerLoginPageProps {
   publicOrigin: string;
   returnTo: string;
+  errorMessage?: string;
   offerId?: string;
 }
 
@@ -35,6 +36,7 @@ async function resolveOffer(publicOrigin: string, offerId?: string): Promise<Log
 export async function W3dsServerLoginPage({
   publicOrigin,
   returnTo,
+  errorMessage,
   offerId,
 }: W3dsServerLoginPageProps) {
   const offer = await resolveOffer(publicOrigin, offerId);
@@ -51,6 +53,11 @@ export async function W3dsServerLoginPage({
       <section className="w-full space-y-6 rounded-xl border border-border bg-surface p-6 shadow-sm">
         <div className="space-y-2">
           <h1 className="font-sans text-2xl font-semibold text-foreground">Sign in with eID</h1>
+          {errorMessage ? (
+            <p className="font-sans text-sm text-destructive" role="alert">
+              {errorMessage}
+            </p>
+          ) : null}
           <p className="font-sans text-sm text-muted-foreground">
             Scan the QR code with your eID wallet, or open the sign-in link on this device.
           </p>

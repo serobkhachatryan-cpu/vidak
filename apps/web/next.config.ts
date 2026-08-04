@@ -15,8 +15,8 @@ const nextConfig: NextConfig = {
     // Expose only the provider id to the client bundle — never secrets or origins.
     [authProviderEnvVars.public]: authProvider,
   },
-  // Cookie-authenticated APIs remain same-origin only. The W3DS eID callback
-  // handles its own narrow, token-only CORS response in its route handler.
+  // Cookie-authenticated APIs remain same-origin only. The W3DS eID gateway
+  // at /api/auth handles its own narrow, credential-free CORS response.
   async headers() {
     return [
       {

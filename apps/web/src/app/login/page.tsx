@@ -13,7 +13,7 @@ function safeReturnTo(value: string | undefined): string {
 export default async function LoginPage({
   searchParams,
 }: {
-  searchParams: Promise<{ offer?: string; returnTo?: string }>;
+  searchParams: Promise<{ error?: string; offer?: string; returnTo?: string }>;
 }) {
   const query = await searchParams;
   const config = loadServerSecurityConfig();
@@ -26,6 +26,12 @@ export default async function LoginPage({
         publicOrigin={publicOrigin}
         returnTo={safeReturnTo(query.returnTo)}
         {...(query.offer ? { offerId: query.offer } : {})}
+        {...(query.error === 'eid'
+          ? {
+              errorMessage:
+                'The eID approval could not be verified. Create a new request and try again.',
+            }
+          : {})}
       />
     );
   }

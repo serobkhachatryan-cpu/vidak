@@ -143,7 +143,10 @@ export class W3dsAuthService {
 
   private toLoginOffer(offer: StoredOffer, publicBaseUrl: string): LoginOffer {
     const baseUrl = parseHttpUrl(publicBaseUrl, 'The platform public URL');
-    const callbackUrl = new URL('/api/auth/callback', baseUrl).toString();
+    // The eID Wallet protocol posts signed QR approvals to /api/auth and
+    // navigates deep-link approvals through /deeplink-login. Keep the
+    // callback path in lockstep with the wallet transport contract.
+    const callbackUrl = new URL('/api/auth', baseUrl).toString();
     const offerUri = new URL('w3ds://auth');
     offerUri.searchParams.set('redirect', callbackUrl);
     offerUri.searchParams.set('session', offer.sessionId);
