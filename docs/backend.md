@@ -520,6 +520,55 @@ Package scripts:
 | `db:generate` | root / `@w3ds/web` | Generate SQL from the Drizzle schema |
 | `db:migrate` | root / `@w3ds/web` | Apply migrations with `drizzle-orm` migrator |
 
+## Integration and migration verification
+
+Vitest covers the authenticated creator workflow and migration validation without a
+browser runner or live W3DS Registry/eVault/ACL service.
+
+| Suite | Path | What it proves |
+| --- | --- | --- |
+| Authenticated workflow | `apps/web/src/app/api/videos/authenticated-video-workflow.test.ts` | Development W3DS offer auth → draft save → streamed media upload (cookie + bearer) → public publish → discovery/detail/playback → unpublish → cross-user isolation; W3DS authz fail-closed |
+| Migrations | `apps/web/src/server/db/migrations.test.ts` | Empty embedded Postgres (PGlite) → full `apps/web/drizzle` journal → auth / video / media / authorization-sync tables and indexes |
+
+Shared harness: `apps/web/src/server/test/integration-harness.ts`
+
+- Starts from an empty in-process PGlite database and applies the complete migration set
+- Wires Postgres-backed auth, video, media, and authorization-sync stores
+- Uses a temporary media root under the OS temp directory (never `.data/media` or
+  a developer `MEDIA_STORAGE_ROOT`)
+- Authenticates with a deterministic identity verifier (no live Registry)
+- Leaves remote ACL capability unavailable so sync stays fail-closed (`sdk_unavailable`)
+
+### Repeatable local / CI commands
+
+```bash
+# Full quality gate (also what CI `quality` runs)
+pnpm lint
+pnpm typecheck
+pnpm test
+pnpm build
+pnpm storybook:build
+
+# Optional: Playwright smoke only (separate CI job; not required for workflow coverage)
+pnpm test:e2e
+
+# Optional: apply migrations to a real local Postgres for manual exploration
+docker compose --profile postgres up -d postgres
+# DATABASE_URL=postgresql://vidak:vidak@127.0.0.1:5432/vidak
+pnpm db:migrate
+```
+
+### Test-only environment notes
+
+| Variable | Used by production runtime? | Test behavior |
+| --- | --- | --- |
+| `DATABASE_URL` | Yes (W3DS mode) | Workflow/migration Vitest suites use embedded PGlite and do **not** require `DATABASE_URL` |
+| `MEDIA_STORAGE_ROOT` | Optional (defaults to `.data/media`) | Integration harness always uses `os.tmpdir()` and deletes it in `afterEach` |
+| `W3DS_REGISTRY_BASE_URL` / `W3DS_AUTH_JWT_SECRET` | Yes (W3DS mode) | Injected only inside test harness config / fake verifier — never call a live Registry |
+| `AUTH_PROVIDER` | Yes | Workflow exercises the W3DS offer/session path with fakes; browser `dev` mock client is unchanged |
+
+Do not point integration tests at production databases or shared developer media directories.
+
 ## Production operational requirements
 
 1. Provision a shared PostgreSQL database reachable by every W3DS app instance.

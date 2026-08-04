@@ -34,6 +34,7 @@
     "react-dom": "latest"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "0.5.4",
     "@tailwindcss/postcss": "latest",
     "@types/pg": "^8.20.3",
     "@types/qrcode": "^1.5.6",
