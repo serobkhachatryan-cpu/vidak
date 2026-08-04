@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import type { Video } from '@w3ds/types';
-import { Badge, Card, Heading, Stack, Text } from './index.js';
+import { Badge, Card, Heading, Stack, Text } from './index';
 
 const sampleVideo: Video = {
   id: 'video-design-system',
@@ -35,7 +35,9 @@ export const VideoSummary: Story = {
       <Stack className="p-4" gap={2}>
         <div className="flex items-center justify-between gap-3">
           <Badge>{sampleVideo.status}</Badge>
-          <Text size="sm" tone="muted">{Math.floor(sampleVideo.durationSeconds / 60)} min</Text>
+          <Text size="sm" tone="muted">
+            {Math.floor(sampleVideo.durationSeconds / 60)} min
+          </Text>
         </div>
         <Heading as="h3">{sampleVideo.title}</Heading>
         <Text tone="muted">{sampleVideo.description}</Text>

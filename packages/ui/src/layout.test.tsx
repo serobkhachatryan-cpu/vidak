@@ -11,7 +11,7 @@ import {
   MobileNavigationDrawer,
   Sidebar,
   SplitPane,
-} from './layout.js';
+} from './layout';
 
 describe('layout components', () => {
   it('renders semantic application regions and current navigation state', () => {
@@ -43,10 +43,14 @@ describe('layout components', () => {
 
   it('renders an accessible modal drawer only when open', () => {
     const openMarkup = renderToStaticMarkup(
-      <MobileNavigationDrawer open onClose={() => undefined}>Menu links</MobileNavigationDrawer>,
+      <MobileNavigationDrawer open onClose={() => undefined}>
+        Menu links
+      </MobileNavigationDrawer>,
     );
     const closedMarkup = renderToStaticMarkup(
-      <MobileNavigationDrawer open={false} onClose={() => undefined}>Menu links</MobileNavigationDrawer>,
+      <MobileNavigationDrawer open={false} onClose={() => undefined}>
+        Menu links
+      </MobileNavigationDrawer>,
     );
 
     expect(openMarkup).toContain('role="dialog"');
@@ -66,7 +70,9 @@ describe('layout components', () => {
 
   it('communicates empty, error, and loading feedback states', () => {
     const empty = renderToStaticMarkup(<EmptyState title="Nothing here" />);
-    const error = renderToStaticMarkup(<ErrorState title="Unable to load" retry={() => undefined} />);
+    const error = renderToStaticMarkup(
+      <ErrorState title="Unable to load" retry={() => undefined} />,
+    );
     const loading = renderToStaticMarkup(<LoadingState label="Loading videos" />);
 
     expect(empty).toContain('Nothing here');

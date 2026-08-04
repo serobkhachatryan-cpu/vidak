@@ -1,5 +1,5 @@
-import type { UserProfileId } from './user-profile.js';
-import type { VideoId } from './video.js';
+import type { UserProfileId } from './user-profile';
+import type { VideoId } from './video';
 
 export type CommentId = string;
 

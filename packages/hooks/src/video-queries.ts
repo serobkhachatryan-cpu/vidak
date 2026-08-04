@@ -1,13 +1,8 @@
-import {
-  useInfiniteQuery,
-  useQuery,
-  type UseQueryOptions,
-} from '@tanstack/react-query';
+import { type UseQueryOptions, useInfiniteQuery, useQuery } from '@tanstack/react-query';
 import { getNextPageParam, type VideoApiClient } from '@w3ds/api-client';
 import type {
   Channel,
   ChannelId,
-  Comment,
   CursorPage,
   PaginationParams,
   Playlist,
@@ -61,8 +56,12 @@ export function useInfiniteVideos(
 ) {
   return useInfiniteQuery({
     queryKey: videoQueryKeys.videos(filters),
-    initialPageParam: undefined,
-    queryFn: ({ pageParam }) => client.listVideos(filters, { cursor: pageParam, limit: pageSize }),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      client.listVideos(filters, {
+        ...(pageParam ? { cursor: pageParam } : {}),
+        limit: pageSize,
+      }),
     getNextPageParam,
   });
 }
@@ -103,15 +102,15 @@ export function useUserProfile(
   });
 }
 
-export function useInfiniteVideoComments(
-  client: VideoApiClient,
-  videoId: VideoId,
-  pageSize = 20,
-) {
+export function useInfiniteVideoComments(client: VideoApiClient, videoId: VideoId, pageSize = 20) {
   return useInfiniteQuery({
     queryKey: videoQueryKeys.comments(videoId),
-    initialPageParam: undefined,
-    queryFn: ({ pageParam }) => client.listComments(videoId, { cursor: pageParam, limit: pageSize }),
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam }) =>
+      client.listComments(videoId, {
+        ...(pageParam ? { cursor: pageParam } : {}),
+        limit: pageSize,
+      }),
     getNextPageParam,
   });
 }

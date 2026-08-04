@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MockVideoApiClient } from './mock-video-client.js';
+import { MockVideoApiClient } from './mock-video-client';
 
 describe('MockVideoApiClient', () => {
   const client = new MockVideoApiClient();
@@ -8,7 +8,7 @@ describe('MockVideoApiClient', () => {
     const firstPage = await client.listVideos({ status: 'published' }, { limit: 1 });
     const secondPage = await client.listVideos(
       { status: 'published' },
-      { cursor: firstPage.nextCursor, limit: 1 },
+      { ...(firstPage.nextCursor ? { cursor: firstPage.nextCursor } : {}), limit: 1 },
     );
 
     expect(firstPage.items).toHaveLength(1);

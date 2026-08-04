@@ -76,7 +76,8 @@ export const mockVideos: readonly Video[] = [
     channelId: 'channel-studio',
     title: 'Accessibility checks for custom video players',
     description: 'The keyboard, captions, and focus behaviors every player should support.',
-    thumbnailUrl: 'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1280&h=720&fit=crop',
+    thumbnailUrl:
+      'https://images.unsplash.com/photo-1516321318423-f06f85e504b3?w=1280&h=720&fit=crop',
     durationSeconds: 686,
     status: 'processing',
     visibility: 'unlisted',

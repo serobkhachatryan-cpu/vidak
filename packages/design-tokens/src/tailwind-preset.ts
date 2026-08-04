@@ -1,4 +1,4 @@
-import { breakpoints, elevation, radius, spacing, typography, zIndex } from './tokens.js';
+import { breakpoints, elevation, radius, spacing, typography, zIndex } from './tokens';
 
 const semanticColor = (name: string) => `var(--w3ds-color-${name})`;
 

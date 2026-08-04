@@ -1,5 +1,5 @@
-import type { ChannelId } from './channel.js';
-import type { VideoId } from './video.js';
+import type { ChannelId } from './channel';
+import type { VideoId } from './video';
 
 export type PlaylistId = string;
 export type PlaylistVisibility = 'public' | 'unlisted' | 'private';

@@ -1,7 +1,8 @@
 import type { Channel, Video } from '@w3ds/types';
-import { Avatar, Badge, Skeleton } from './primitives.js';
+import { Avatar, Badge, Skeleton } from './primitives';
 
-const cx = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' ');
+const cx = (...classes: Array<string | false | null | undefined>) =>
+  classes.filter(Boolean).join(' ');
 const focusRing =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background';
 
@@ -45,7 +46,9 @@ export function VideoCard({
   channelHref = `/channel/${video.channelId}`,
   className,
 }: VideoCardProps) {
-  const metadata = [formatViews(video.viewCount), formatPublishedAt(video.publishedAt)].filter(Boolean).join(' · ');
+  const metadata = [formatViews(video.viewCount), formatPublishedAt(video.publishedAt)]
+    .filter(Boolean)
+    .join(' · ');
   const channelName = channel?.name ?? 'Unknown channel';
 
   return (
@@ -70,14 +73,35 @@ export function VideoCard({
         </Badge>
       </a>
       <div className="flex gap-3 pt-3">
-        <a href={channelHref} aria-label={`Visit ${channelName}`} className={cx('shrink-0 rounded-full', focusRing)}>
-          <Avatar {...(channel?.avatarUrl ? { src: channel.avatarUrl } : {})} alt="" name={channelName} size="md" />
+        <a
+          href={channelHref}
+          aria-label={`Visit ${channelName}`}
+          className={cx('shrink-0 rounded-full', focusRing)}
+        >
+          <Avatar
+            {...(channel?.avatarUrl ? { src: channel.avatarUrl } : {})}
+            alt=""
+            name={channelName}
+            size="md"
+          />
         </a>
         <div className="min-w-0">
-          <a href={href} className={cx('line-clamp-2 block font-sans font-semibold text-foreground hover:text-primary', focusRing)}>
+          <a
+            href={href}
+            className={cx(
+              'line-clamp-2 block font-sans font-semibold text-foreground hover:text-primary',
+              focusRing,
+            )}
+          >
             {video.title}
           </a>
-          <a href={channelHref} className={cx('mt-1 block truncate font-sans text-sm text-muted-foreground hover:text-foreground', focusRing)}>
+          <a
+            href={channelHref}
+            className={cx(
+              'mt-1 block truncate font-sans text-sm text-muted-foreground hover:text-foreground',
+              focusRing,
+            )}
+          >
             {channelName}
           </a>
           <p className="mt-0.5 font-sans text-sm text-muted-foreground">{metadata}</p>
@@ -93,7 +117,7 @@ export interface VideoCardSkeletonProps {
 
 export function VideoCardSkeleton({ className }: VideoCardSkeletonProps) {
   return (
-    <div className={cx('min-w-0', className)} aria-label="Loading video">
+    <div role="status" className={cx('min-w-0', className)} aria-label="Loading video">
       <Skeleton className="aspect-video w-full" />
       <div className="flex gap-3 pt-3">
         <Skeleton circle className="h-10 w-10 shrink-0" />

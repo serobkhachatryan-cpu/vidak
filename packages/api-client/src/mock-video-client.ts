@@ -12,9 +12,15 @@ import type {
   VideoId,
   VideoListFilters,
 } from '@w3ds/types';
-import { mockChannels, mockComments, mockPlaylists, mockUserProfiles, mockVideos } from './mock-data.js';
-import { createCursorPage } from './pagination.js';
-import type { VideoApiClient } from './video-client.js';
+import {
+  mockChannels,
+  mockComments,
+  mockPlaylists,
+  mockUserProfiles,
+  mockVideos,
+} from './mock-data';
+import { createCursorPage } from './pagination';
+import type { VideoApiClient } from './video-client';
 
 export interface MockVideoApiClientOptions {
   delayMs?: number;
@@ -88,7 +94,12 @@ export class MockVideoApiClient implements VideoApiClient {
       if (filters.channelId && video.channelId !== filters.channelId) return false;
       if (filters.status && video.status !== filters.status) return false;
       if (filters.visibility && video.visibility !== filters.visibility) return false;
-      if (search && !`${video.title} ${video.description} ${video.tags.join(' ')}`.toLocaleLowerCase().includes(search)) {
+      if (
+        search &&
+        !`${video.title} ${video.description} ${video.tags.join(' ')}`
+          .toLocaleLowerCase()
+          .includes(search)
+      ) {
         return false;
       }
 

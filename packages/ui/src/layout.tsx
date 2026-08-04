@@ -1,14 +1,8 @@
-import {
-  forwardRef,
-  useEffect,
-  useId,
-  useRef,
-  type HTMLAttributes,
-  type ReactNode,
-} from 'react';
-import { Button, Heading, IconButton, Spinner, Text } from './primitives.js';
+import { forwardRef, type HTMLAttributes, type ReactNode, useEffect, useId, useRef } from 'react';
+import { Button, Heading, IconButton, Spinner, Text } from './primitives';
 
-const cx = (...classes: Array<string | false | null | undefined>) => classes.filter(Boolean).join(' ');
+const cx = (...classes: Array<string | false | null | undefined>) =>
+  classes.filter(Boolean).join(' ');
 const focusRing =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background';
 
@@ -59,7 +53,11 @@ export const Header = forwardRef<HTMLElement, HeaderProps>(
         </IconButton>
       )}
       {brand && <div className="shrink-0">{brand}</div>}
-      {navigation && <nav aria-label="Primary navigation" className="hidden min-w-0 flex-1 md:block">{navigation}</nav>}
+      {navigation && (
+        <nav aria-label="Primary navigation" className="hidden min-w-0 flex-1 md:block">
+          {navigation}
+        </nav>
+      )}
       {actions && <div className="ml-auto flex shrink-0 items-center gap-2">{actions}</div>}
     </header>
   ),
@@ -76,7 +74,10 @@ export const Sidebar = forwardRef<HTMLElement, SidebarProps>(
   ({ items, footer, label = 'Sidebar navigation', className, children, ...props }, ref) => (
     <aside
       ref={ref}
-      className={cx('flex h-full w-64 shrink-0 flex-col border-r border-border bg-surface', className)}
+      className={cx(
+        'flex h-full w-64 shrink-0 flex-col border-r border-border bg-surface',
+        className,
+      )}
       {...props}
     >
       <nav aria-label={label} className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto p-3">
@@ -91,7 +92,11 @@ export const Sidebar = forwardRef<HTMLElement, SidebarProps>(
               item.current && 'bg-muted text-foreground',
             )}
           >
-            {item.icon && <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center">{item.icon}</span>}
+            {item.icon && (
+              <span aria-hidden="true" className="flex h-5 w-5 items-center justify-center">
+                {item.icon}
+              </span>
+            )}
             {item.label}
           </a>
         ))}
@@ -134,8 +139,9 @@ export function MobileNavigationDrawer({
         'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
       );
       if (!focusable?.length) return;
-      const first = focusable[0]!;
-      const last = focusable[focusable.length - 1]!;
+      const first = focusable.item(0);
+      const last = focusable.item(focusable.length - 1);
+      if (!first || !last) return;
       if (event.shiftKey && document.activeElement === first) {
         event.preventDefault();
         last.focus();
@@ -161,11 +167,23 @@ export function MobileNavigationDrawer({
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
-        className={cx('relative flex h-full w-80 max-w-[85vw] flex-col bg-surface shadow-xl', className)}
+        className={cx(
+          'relative flex h-full w-80 max-w-[85vw] flex-col bg-surface shadow-xl',
+          className,
+        )}
       >
         <div className="flex min-h-16 items-center justify-between border-b border-border px-4">
-          <Heading id={titleId} size="sm">{title}</Heading>
-          <IconButton ref={closeButtonRef} aria-label={closeLabel} variant="ghost" onClick={onClose}>×</IconButton>
+          <Heading id={titleId} size="sm">
+            {title}
+          </Heading>
+          <IconButton
+            ref={closeButtonRef}
+            aria-label={closeLabel}
+            variant="ghost"
+            onClick={onClose}
+          >
+            ×
+          </IconButton>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
       </div>
@@ -194,7 +212,10 @@ export function AppShell({
   ...props
 }: AppShellProps) {
   return (
-    <div className={cx('flex min-h-screen flex-col bg-background text-foreground', className)} {...props}>
+    <div
+      className={cx('flex min-h-screen flex-col bg-background text-foreground', className)}
+      {...props}
+    >
       {header}
       <div className="flex min-h-0 flex-1">
         {sidebar && <div className="hidden min-h-0 md:block">{sidebar}</div>}
@@ -230,12 +251,26 @@ export const Breadcrumbs = forwardRef<HTMLElement, BreadcrumbsProps>(
         {items.map((item, index) => {
           const current = index === items.length - 1;
           return (
-            <li key={`${index}-${typeof item.label === 'string' ? item.label : 'item'}`} className="flex items-center gap-1">
-              {index > 0 && <span aria-hidden="true" className="select-none">/</span>}
+            <li
+              key={item.href ?? (typeof item.label === 'string' ? item.label : 'current')}
+              className="flex items-center gap-1"
+            >
+              {index > 0 && (
+                <span aria-hidden="true" className="select-none">
+                  /
+                </span>
+              )}
               {item.href && !current ? (
-                <a href={item.href} className={cx('rounded hover:text-foreground', focusRing)}>{item.label}</a>
+                <a href={item.href} className={cx('rounded hover:text-foreground', focusRing)}>
+                  {item.label}
+                </a>
               ) : (
-                <span aria-current={current ? 'page' : undefined} className={current ? 'text-foreground' : undefined}>{item.label}</span>
+                <span
+                  aria-current={current ? 'page' : undefined}
+                  className={current ? 'text-foreground' : undefined}
+                >
+                  {item.label}
+                </span>
               )}
             </li>
           );
@@ -256,7 +291,9 @@ export const Container = forwardRef<HTMLDivElement, ContainerProps>(
       ref={ref}
       className={cx(
         'mx-auto w-full px-4 sm:px-6 lg:px-8',
-        { sm: 'max-w-2xl', md: 'max-w-3xl', lg: 'max-w-5xl', xl: 'max-w-7xl', full: 'max-w-none' }[size],
+        { sm: 'max-w-2xl', md: 'max-w-3xl', lg: 'max-w-5xl', xl: 'max-w-7xl', full: 'max-w-none' }[
+          size
+        ],
         className,
       )}
       {...props}
@@ -273,17 +310,34 @@ export interface PageProps extends Omit<HTMLAttributes<HTMLDivElement>, 'title'>
   containerSize?: ContainerProps['size'];
 }
 
-export function Page({ title, description, actions, breadcrumbs, containerSize, className, children, ...props }: PageProps) {
+export function Page({
+  title,
+  description,
+  actions,
+  breadcrumbs,
+  containerSize,
+  className,
+  children,
+  ...props
+}: PageProps) {
   return (
     <div className={cx('py-6 sm:py-8', className)} {...props}>
-      <Container size={containerSize}>
+      <Container {...(containerSize ? { size: containerSize } : {})}>
         {(breadcrumbs || title || description || actions) && (
           <header className="mb-8">
             {breadcrumbs && <div className="mb-4">{breadcrumbs}</div>}
             <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
               <div className="min-w-0">
-                {title && <Heading as="h1" size="xl">{title}</Heading>}
-                {description && <Text tone="muted" className="mt-2 max-w-3xl">{description}</Text>}
+                {title && (
+                  <Heading as="h1" size="xl">
+                    {title}
+                  </Heading>
+                )}
+                {description && (
+                  <Text tone="muted" className="mt-2 max-w-3xl">
+                    {description}
+                  </Text>
+                )}
               </div>
               {actions && <div className="flex shrink-0 flex-wrap gap-2">{actions}</div>}
             </div>
@@ -307,8 +361,16 @@ export const Section = forwardRef<HTMLElement, SectionProps>(
       {(title || description || action) && (
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            {title && <Heading as="h2" size="lg">{title}</Heading>}
-            {description && <Text size="sm" tone="muted" className="mt-1">{description}</Text>}
+            {title && (
+              <Heading as="h2" size="lg">
+                {title}
+              </Heading>
+            )}
+            {description && (
+              <Text size="sm" tone="muted" className="mt-1">
+                {description}
+              </Text>
+            )}
           </div>
           {action && <div className="shrink-0">{action}</div>}
         </div>
@@ -333,7 +395,12 @@ export const Stack = forwardRef<HTMLDivElement, StackProps>(
         'flex',
         direction === 'vertical' ? 'flex-col' : 'flex-row',
         { 0: 'gap-0', 1: 'gap-1', 2: 'gap-2', 3: 'gap-3', 4: 'gap-4', 6: 'gap-6', 8: 'gap-8' }[gap],
-        { start: 'items-start', center: 'items-center', end: 'items-end', stretch: 'items-stretch' }[align],
+        {
+          start: 'items-start',
+          center: 'items-center',
+          end: 'items-end',
+          stretch: 'items-stretch',
+        }[align],
         className,
       )}
       {...props}
@@ -389,7 +456,11 @@ export function SplitPane({
   const responsive = { sm: 'sm:flex-row', md: 'md:flex-row', lg: 'lg:flex-row', never: 'flex-row' };
   return (
     <div className={cx('flex flex-col gap-6', responsive[collapseBelow], className)} {...props}>
-      <aside className={cx('shrink-0', widths[asideWidth], asidePosition === 'end' && 'order-last')}>{aside}</aside>
+      <aside
+        className={cx('shrink-0', widths[asideWidth], asidePosition === 'end' && 'order-last')}
+      >
+        {aside}
+      </aside>
       <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
@@ -411,8 +482,14 @@ function StateContainer({ title, description, action, className, children, ...pr
       {...props}
     >
       {children}
-      <Heading as="h2" size="lg" className="mt-4">{title}</Heading>
-      {description && <Text tone="muted" className="mt-2 max-w-md">{description}</Text>}
+      <Heading as="h2" size="lg" className="mt-4">
+        {title}
+      </Heading>
+      {description && (
+        <Text tone="muted" className="mt-2 max-w-md">
+          {description}
+        </Text>
+      )}
       {action && <div className="mt-5">{action}</div>}
     </div>
   );
@@ -423,7 +500,15 @@ export interface EmptyStateProps extends StateProps {
 }
 
 export function EmptyState({ icon, ...props }: EmptyStateProps) {
-  return <StateContainer {...props}>{icon && <div aria-hidden="true" className="text-3xl text-muted-foreground">{icon}</div>}</StateContainer>;
+  return (
+    <StateContainer {...props}>
+      {icon && (
+        <div aria-hidden="true" className="text-3xl text-muted-foreground">
+          {icon}
+        </div>
+      )}
+    </StateContainer>
+  );
 }
 
 export interface ErrorStateProps extends StateProps {
@@ -435,9 +520,18 @@ export function ErrorState({ retry, retryLabel = 'Try again', action, ...props }
   return (
     <StateContainer
       {...props}
-      action={action ?? (retry && <Button variant="secondary" onClick={retry}>{retryLabel}</Button>)}
+      action={
+        action ??
+        (retry && (
+          <Button variant="secondary" onClick={retry}>
+            {retryLabel}
+          </Button>
+        ))
+      }
     >
-      <div aria-hidden="true" className="text-3xl text-danger">!</div>
+      <div aria-hidden="true" className="text-3xl text-danger">
+        !
+      </div>
     </StateContainer>
   );
 }
@@ -446,17 +540,26 @@ export interface LoadingStateProps extends Omit<HTMLAttributes<HTMLDivElement>, 
   label?: string;
 }
 
-export function LoadingState({ label = 'Loading content', className, ...props }: LoadingStateProps) {
+export function LoadingState({
+  label = 'Loading content',
+  className,
+  ...props
+}: LoadingStateProps) {
   return (
     <div
       role="status"
       aria-live="polite"
       aria-label={label}
-      className={cx('flex min-h-56 flex-col items-center justify-center gap-3 rounded-lg bg-surface-raised text-muted-foreground', className)}
+      className={cx(
+        'flex min-h-56 flex-col items-center justify-center gap-3 rounded-lg bg-surface-raised text-muted-foreground',
+        className,
+      )}
       {...props}
     >
       <Spinner aria-hidden="true" />
-      <Text size="sm" tone="muted">{label}</Text>
+      <Text size="sm" tone="muted">
+        {label}
+      </Text>
     </div>
   );
 }

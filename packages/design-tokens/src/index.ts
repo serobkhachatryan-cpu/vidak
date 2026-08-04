@@ -1,10 +1,9 @@
-export { createCssVariables, cssVariables } from './css.js';
-export { default as tailwindPreset } from './tailwind-preset.js';
-export { tailwindPreset as tailwind } from './tailwind-preset.js';
+export { createCssVariables, cssVariables } from './css';
+export { default as tailwindPreset, tailwindPreset as tailwind } from './tailwind-preset';
 export {
   breakpoints,
-  colors,
   colorPrimitives,
+  colors,
   colorThemes,
   elevation,
   motion,
@@ -12,4 +11,4 @@ export {
   spacing,
   typography,
   zIndex,
-} from './tokens.js';
+} from './tokens';

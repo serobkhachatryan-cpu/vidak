@@ -1,12 +1,26 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
-  Avatar, Badge, Button, Checkbox, IconButton, Input, LoadingButton, Radio, Skeleton, Spinner, Tag,
-} from './primitives.js';
+  Avatar,
+  Badge,
+  Button,
+  Checkbox,
+  IconButton,
+  Input,
+  LoadingButton,
+  Radio,
+  Skeleton,
+  Spinner,
+  Tag,
+} from './primitives';
 
 describe('UI primitives', () => {
   it('renders button states with accessible loading semantics', () => {
-    const markup = renderToStaticMarkup(<LoadingButton loading loadingText="Saving">Save</LoadingButton>);
+    const markup = renderToStaticMarkup(
+      <LoadingButton loading loadingText="Saving">
+        Save
+      </LoadingButton>,
+    );
     expect(markup).toContain('disabled=""');
     expect(markup).toContain('aria-busy="true"');
     expect(markup).toContain('Saving');
@@ -33,7 +47,9 @@ describe('UI primitives', () => {
   });
 
   it('renders feedback and display primitives with ARIA labels', () => {
-    expect(renderToStaticMarkup(<Spinner aria-label="Loading library" />)).toContain('role="status"');
+    expect(renderToStaticMarkup(<Spinner aria-label="Loading library" />)).toContain(
+      'role="status"',
+    );
     expect(renderToStaticMarkup(<Skeleton />)).toContain('aria-busy="true"');
     expect(renderToStaticMarkup(<Avatar name="Ada Lovelace" />)).toContain('AL');
     expect(renderToStaticMarkup(<Badge tone="success">Live</Badge>)).toContain('bg-success');

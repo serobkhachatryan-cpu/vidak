@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from '@storybook/react-vite';
 import type { Channel, Video } from '@w3ds/types';
-import { Grid, VideoCard, VideoCardSkeleton } from './index.js';
+import { Grid, VideoCard, VideoCardSkeleton } from './index';
 
 const video: Video = {
   id: 'video-design-system',
@@ -31,6 +31,11 @@ const channel: Channel = {
   createdAt: '2025-01-12T09:00:00.000Z',
 };
 
+const responsiveVideos = Array.from({ length: 5 }, (_, index) => ({
+  ...video,
+  id: `${video.id}-${index}`,
+}));
+
 const meta = {
   title: 'Domain/Video card',
   component: VideoCard,
@@ -45,14 +50,16 @@ export const Default: Story = {
 };
 
 export const Loading: Story = {
+  args: { video, channel },
   render: () => <VideoCardSkeleton className="w-80" />,
 };
 
 export const ResponsiveGrid: Story = {
+  args: { video, channel },
   render: () => (
     <Grid columns={5} gap={6}>
-      {Array.from({ length: 5 }, (_, index) => (
-        <VideoCard key={index} video={{ ...video, id: `${video.id}-${index}` }} channel={channel} />
+      {responsiveVideos.map((responsiveVideo) => (
+        <VideoCard key={responsiveVideo.id} video={responsiveVideo} channel={channel} />
       ))}
     </Grid>
   ),

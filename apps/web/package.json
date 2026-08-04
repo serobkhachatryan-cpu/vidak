@@ -15,7 +15,9 @@
     "@w3ds/config": "workspace:*",
     "@w3ds/design-tokens": "workspace:*",
     "@w3ds/hooks": "workspace:*",
+    "@w3ds/types": "workspace:*",
     "@w3ds/ui": "workspace:*",
+    "@w3ds/watch-page": "workspace:*",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest"

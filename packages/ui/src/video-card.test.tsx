@@ -1,7 +1,7 @@
+import type { Channel, Video } from '@w3ds/types';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import type { Channel, Video } from '@w3ds/types';
-import { VideoCard, VideoCardSkeleton } from './video-card.js';
+import { VideoCard, VideoCardSkeleton } from './video-card';
 
 const video: Video = {
   id: 'video-design-system',

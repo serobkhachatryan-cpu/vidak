@@ -7,4 +7,4 @@ export {
   useVideo,
   useVideos,
   videoQueryKeys,
-} from './video-queries.js';
+} from './video-queries';

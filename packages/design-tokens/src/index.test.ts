@@ -1,5 +1,5 @@
-import { createCssVariables, colorThemes, spacing, tailwindPreset, zIndex } from './index.js';
 import { describe, expect, it } from 'vitest';
+import { colorThemes, createCssVariables, spacing, tailwindPreset, zIndex } from './index';
 
 describe('design tokens', () => {
   it('exports the full spacing and layering scales', () => {
@@ -13,8 +13,12 @@ describe('design tokens', () => {
   });
 
   it('generates namespaced CSS custom properties for each theme', () => {
-    expect(createCssVariables('light')).toContain('--w3ds-color-primary: var(--w3ds-color-blue-600)');
-    expect(createCssVariables('dark')).toContain('--w3ds-color-primary: var(--w3ds-color-blue-500)');
+    expect(createCssVariables('light')).toContain(
+      '--w3ds-color-primary: var(--w3ds-color-blue-600)',
+    );
+    expect(createCssVariables('dark')).toContain(
+      '--w3ds-color-primary: var(--w3ds-color-blue-500)',
+    );
     expect(createCssVariables()).toContain('--w3ds-spacing-4: 1rem');
   });
 

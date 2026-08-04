@@ -2,6 +2,7 @@
 @import "@w3ds/design-tokens/styles.css";
 
 @source "../../../../packages/ui/src";
+@source "../../../../packages/watch-page/src";
 @source "../features";
 
 @theme inline {

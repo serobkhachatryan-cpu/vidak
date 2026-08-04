@@ -110,7 +110,14 @@ export const spacing = {
   24: '6rem',
 } as const;
 
-export const radius = { none: '0', sm: '0.125rem', md: '0.375rem', lg: '0.5rem', xl: '0.75rem', full: '9999px' } as const;
+export const radius = {
+  none: '0',
+  sm: '0.125rem',
+  md: '0.375rem',
+  lg: '0.5rem',
+  xl: '0.75rem',
+  full: '9999px',
+} as const;
 
 export const elevation = {
   none: 'none',
@@ -122,9 +129,29 @@ export const elevation = {
 
 export const motion = {
   duration: { instant: '0ms', fast: '150ms', normal: '200ms', slow: '300ms', slower: '500ms' },
-  easing: { linear: 'linear', in: 'cubic-bezier(0.4, 0, 1, 1)', out: 'cubic-bezier(0, 0, 0.2, 1)', inOut: 'cubic-bezier(0.4, 0, 0.2, 1)' },
+  easing: {
+    linear: 'linear',
+    in: 'cubic-bezier(0.4, 0, 1, 1)',
+    out: 'cubic-bezier(0, 0, 0.2, 1)',
+    inOut: 'cubic-bezier(0.4, 0, 0.2, 1)',
+  },
 } as const;
 
-export const breakpoints = { sm: '40rem', md: '48rem', lg: '64rem', xl: '80rem', '2xl': '96rem' } as const;
+export const breakpoints = {
+  sm: '40rem',
+  md: '48rem',
+  lg: '64rem',
+  xl: '80rem',
+  '2xl': '96rem',
+} as const;
 
-export const zIndex = { base: 0, dropdown: 1000, sticky: 1100, fixed: 1200, modalBackdrop: 1300, modal: 1400, popover: 1500, tooltip: 1600 } as const;
+export const zIndex = {
+  base: 0,
+  dropdown: 1000,
+  sticky: 1100,
+  fixed: 1200,
+  modalBackdrop: 1300,
+  modal: 1400,
+  popover: 1500,
+  tooltip: 1600,
+} as const;

@@ -1,11 +1,28 @@
-import { breakpoints, colorPrimitives, colorThemes, elevation, motion, radius, spacing, typography, zIndex } from './tokens.js';
+import {
+  breakpoints,
+  colorPrimitives,
+  colorThemes,
+  elevation,
+  motion,
+  radius,
+  spacing,
+  typography,
+  zIndex,
+} from './tokens';
 
 type TokenValue = string | number;
 type TokenTree = { readonly [key: string]: TokenValue | TokenTree };
 
-const kebabCase = (value: string) => value.replaceAll(/([a-z])([A-Z])/g, '$1-$2').toLowerCase();
+const kebabCase = (value: string) =>
+  value
+    .replaceAll(/([a-z])([A-Z])/g, '$1-$2')
+    .replaceAll('.', '-')
+    .toLowerCase();
 
-function flattenTokens(tokens: TokenTree, prefix: string[] = []): Array<readonly [string, TokenValue]> {
+function flattenTokens(
+  tokens: TokenTree,
+  prefix: string[] = [],
+): Array<readonly [string, TokenValue]> {
   return Object.entries(tokens).flatMap(([key, value]) =>
     typeof value === 'object' && value !== null
       ? flattenTokens(value as TokenTree, [...prefix, kebabCase(key)])

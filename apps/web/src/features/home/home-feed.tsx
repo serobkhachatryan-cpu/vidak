@@ -1,6 +1,7 @@
 'use client';
 
 import { useChannel, useInfiniteVideos } from '@w3ds/hooks';
+import type { Video } from '@w3ds/types';
 import {
   AppShell,
   Button,
@@ -14,7 +15,6 @@ import {
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
-import type { Video } from '@w3ds/types';
 import { useEffect, useRef, useState } from 'react';
 import { videoApiClient } from '../../lib/video-api-client';
 
@@ -32,7 +32,9 @@ function FeedVideoCard({ video }: { video: Video }) {
 function FeedGridSkeleton() {
   return (
     <Grid columns={5} gap={6} aria-label="Loading videos">
-      {Array.from({ length: 10 }, (_, index) => <VideoCardSkeleton key={index} />)}
+      {Array.from({ length: 10 }, (_, index) => (
+        <VideoCardSkeleton key={index} />
+      ))}
     </Grid>
   );
 }
@@ -41,15 +43,8 @@ export function HomeFeed() {
   const [darkMode, setDarkMode] = useState(false);
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  const {
-    data,
-    error,
-    fetchNextPage,
-    hasNextPage,
-    isFetchingNextPage,
-    isPending,
-    refetch,
-  } = useInfiniteVideos(videoApiClient, { status: 'published', visibility: 'public' }, 1);
+  const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, isPending, refetch } =
+    useInfiniteVideos(videoApiClient, { status: 'published', visibility: 'public' }, 1);
 
   useEffect(() => {
     document.documentElement.dataset.theme = darkMode ? 'dark' : 'light';
@@ -78,7 +73,14 @@ export function HomeFeed() {
     <AppShell
       header={
         <Header
-          brand={<a href="/" className="rounded font-sans text-lg font-bold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary">W3DS Video</a>}
+          brand={
+            <a
+              href="/"
+              className="rounded font-sans text-lg font-bold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              W3DS Video
+            </a>
+          }
           onMenuClick={() => setMobileNavigationOpen(true)}
           actions={
             <Button
@@ -117,9 +119,15 @@ export function HomeFeed() {
         ) : (
           <>
             <Grid columns={5} gap={6}>
-              {videos.map((video) => <FeedVideoCard key={video.id} video={video} />)}
+              {videos.map((video) => (
+                <FeedVideoCard key={video.id} video={video} />
+              ))}
             </Grid>
-            <div ref={loadMoreRef} className="flex min-h-20 items-center justify-center" aria-live="polite">
+            <div
+              ref={loadMoreRef}
+              className="flex min-h-20 items-center justify-center"
+              aria-live="polite"
+            >
               {isFetchingNextPage && (
                 <span className="flex items-center gap-2 font-sans text-sm text-muted-foreground">
                   <Spinner size="sm" aria-hidden="true" />

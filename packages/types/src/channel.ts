@@ -1,4 +1,4 @@
-import type { UserProfileId } from './user-profile.js';
+import type { UserProfileId } from './user-profile';
 
 export type ChannelId = string;
 

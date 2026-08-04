@@ -1,4 +1,4 @@
-import type { ChannelId } from './channel.js';
+import type { ChannelId } from './channel';
 
 export type VideoId = string;
 export type VideoStatus = 'draft' | 'processing' | 'published' | 'archived';
