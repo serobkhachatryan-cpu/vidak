@@ -1,0 +1,10 @@
+.git
+.github
+node_modules
+**/node_modules
+.next
+**/.next
+.turbo
+.tools
+playwright-report
+storybook-static
