@@ -10,6 +10,7 @@ services:
       NODE_ENV: production
       # Production requires an explicit provider (no silent `dev` fallback).
       AUTH_PROVIDER: dev
+      NEXT_PUBLIC_AUTH_PROVIDER: dev
 
   # Optional local PostgreSQL for W3DS auth persistence.
   # Start with: docker compose --profile postgres up -d postgres

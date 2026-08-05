@@ -2,8 +2,8 @@ import { authProviderEnvVars, defaultAuthProvider } from '@w3ds/config';
 import type { NextConfig } from 'next';
 
 const authProvider =
-  process.env[authProviderEnvVars.public] ??
-  process.env[authProviderEnvVars.shared] ??
+  process.env[authProviderEnvVars.public]?.trim() ||
+  process.env[authProviderEnvVars.shared]?.trim() ||
   defaultAuthProvider;
 
 const nextConfig: NextConfig = {
