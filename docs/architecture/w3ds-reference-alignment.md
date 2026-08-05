@@ -48,10 +48,13 @@ The baseline already supplies:
   server-only configuration.
 - A fail-closed authorization synchronization boundary, intentionally inactive
   until the documented official ACL client is available.
+- An opt-in server-only platform eVault bootstrap: Registry entropy,
+  Provisioner registration, public PlatformProfile creation, and a durable
+  local mapping. It is disabled until the operator supplies the documented
+  Provisioner verification credentials and discovery profile.
 
 The following Post-Platform requirements are not yet implemented:
 
-- platform eVault registration/certification lifecycle;
 - a documented eVault client for MetaEnvelope and file operations;
 - ontology schema discovery and explicit Video/Channel/Playlist/Comment
   schema ownership;

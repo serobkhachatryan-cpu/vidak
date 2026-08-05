@@ -123,6 +123,52 @@ describe('server security configuration', () => {
     expect(config.mediaUploadLimits.maxUploadBytes).toBe(2048);
   });
 
+  it('keeps platform eVault provisioning disabled until explicitly enabled', () => {
+    const config = loadServerSecurityConfig({
+      NODE_ENV: 'production',
+      ...w3dsEnv,
+    });
+    expect(config.w3ds?.platformEVault).toBeNull();
+  });
+
+  it('validates the complete server-only platform eVault profile when enabled', () => {
+    const config = loadServerSecurityConfig({
+      NODE_ENV: 'production',
+      ...w3dsEnv,
+      W3DS_PLATFORM_EVAULT_ENABLED: 'true',
+      W3DS_PROVISIONER_BASE_URL: 'https://provisioner.example.com',
+      W3DS_PLATFORM_EVAULT_VERIFICATION_ID: 'provision-only-secret',
+      W3DS_PLATFORM_EVAULT_DISPLAY_NAME: 'Vidak',
+      W3DS_PLATFORM_EVAULT_DESCRIPTION: 'Decentralized video publishing',
+      W3DS_PLATFORM_EVAULT_LOGO_URL: 'https://vidak.example/logo.png',
+      W3DS_PLATFORM_EVAULT_CATEGORY: 'Social',
+    });
+
+    expect(config.w3ds?.platformEVault).toEqual({
+      provisionerBaseUrl: 'https://provisioner.example.com/',
+      verificationId: 'provision-only-secret',
+      profile: {
+        platformName: 'vidak',
+        displayName: 'Vidak',
+        description: 'Decentralized video publishing',
+        version: '1.0.0',
+        url: 'https://vidak.example/',
+        logoUrl: 'https://vidak.example/logo.png',
+        category: 'Social',
+      },
+    });
+  });
+
+  it('rejects incomplete platform eVault provisioning configuration', () => {
+    expect(() =>
+      loadServerSecurityConfig({
+        NODE_ENV: 'production',
+        ...w3dsEnv,
+        W3DS_PLATFORM_EVAULT_ENABLED: 'true',
+      }),
+    ).toThrow(/W3DS_PROVISIONER_BASE_URL/);
+  });
+
   it('does not treat NEXT_PUBLIC_AUTH_PROVIDER as an explicit production provider', () => {
     expect(() =>
       loadServerSecurityConfig({
