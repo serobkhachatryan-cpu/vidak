@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { W3dsOntologyAdapterConfig } from './server-config';
+import { DOCUMENTED_W3DS_ONTOLOGY_BASE_URL, type W3dsOntologyAdapterConfig } from './server-config';
 import {
   InMemoryW3dsAdapterMappingStore,
   W3DS_ADAPTER_ENTITY_TABLES,
@@ -8,8 +8,9 @@ import {
 } from './w3ds-adapter-mapping';
 
 const ontologyAdapter: W3dsOntologyAdapterConfig = {
-  ontologyBaseUrl: 'https://ontology.example.com/',
+  ontologyBaseUrl: `${DOCUMENTED_W3DS_ONTOLOGY_BASE_URL}/`,
   mappingVersion: 1,
+  // Test-only placeholders — not live Ontology schemaIds.
   schemaIds: {
     profile: 'schema-profile-configured',
     channel: 'schema-channel-configured',

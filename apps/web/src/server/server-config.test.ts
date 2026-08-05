@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
   loadServerSecurityConfig,
   normalizeOrigin,
   resolveCookieSecurityConfig,
@@ -182,7 +183,7 @@ describe('server security configuration', () => {
       NODE_ENV: 'production',
       ...w3dsEnv,
       W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
-      W3DS_ONTOLOGY_BASE_URL: 'https://ontology.example.com',
+      W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
       W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'schema-profile',
       W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL: 'schema-channel',
       W3DS_ONTOLOGY_SCHEMA_ID_VIDEO: 'schema-video',
@@ -192,7 +193,7 @@ describe('server security configuration', () => {
     });
 
     expect(config.w3ds?.ontologyAdapter).toEqual({
-      ontologyBaseUrl: 'https://ontology.example.com/',
+      ontologyBaseUrl: `${DOCUMENTED_W3DS_ONTOLOGY_BASE_URL}/`,
       mappingVersion: 2,
       schemaIds: {
         profile: 'schema-profile',
@@ -210,7 +211,7 @@ describe('server security configuration', () => {
         NODE_ENV: 'production',
         ...w3dsEnv,
         W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
-        W3DS_ONTOLOGY_BASE_URL: 'https://ontology.example.com',
+        W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
       }),
     ).toThrow(/W3DS_ONTOLOGY_SCHEMA_ID_PROFILE/);
 
@@ -219,7 +220,7 @@ describe('server security configuration', () => {
         NODE_ENV: 'production',
         ...w3dsEnv,
         W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
-        W3DS_ONTOLOGY_BASE_URL: 'https://ontology.example.com',
+        W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
         W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'TODO',
         W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL: 'schema-channel',
         W3DS_ONTOLOGY_SCHEMA_ID_VIDEO: 'schema-video',

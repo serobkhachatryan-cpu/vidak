@@ -56,7 +56,11 @@ The baseline already supplies:
   `(entity type, local id, global MetaEnvelope id, owner eName, schema id,
   mapping version)` rows with unique constraints. Mapping writes fail closed
   until `W3DS_ONTOLOGY_BASE_URL` and every entity schemaId are configured.
-  Schema IDs are never guessed from documentation examples.
+  Schema IDs are never guessed from documentation examples. The documented
+  Ontology base URL is `https://ontology.w3ds.metastate.foundation`
+  (`DOCUMENTED_W3DS_ONTOLOGY_BASE_URL`). A live `GET /schemas` catalog does
+  **not** currently include canonical Video, Channel, Playlist, or Comment
+  schemas, so the adapter stays disabled and schemaId env vars stay empty.
 
 The following Post-Platform requirements are not yet implemented:
 
@@ -117,7 +121,9 @@ The following Post-Platform requirements are not yet implemented:
 2. Persist `(entity type, local id, global MetaEnvelope id, owner eName,
    schema id)` mappings with unique constraints and idempotency keys.
    **Done (foundation):** durable `w3ds_adapter_mappings` + fail-closed
-   Ontology config. Mapping Rules JSON and remote sync remain pending.
+   Ontology config wired to the documented Ontology base URL. Mapping Rules
+   JSON, remote sync, and Video/Channel/Playlist/Comment schemaIds remain
+   pending until Ontology publishes those schemas.
 3. Sync local mutations through the adapter outbox; retries must not duplicate
    envelopes or overwrite remote ownership.
 
