@@ -12,10 +12,13 @@ import {
   resolveMediaUploadLimits,
 } from './media-limits';
 import { resolveLocalMediaStorageRoot } from './media-storage';
+import type { W3dsAdapterEntityType } from './w3ds-adapter-types';
 
 export const MIN_W3DS_JWT_SECRET_LENGTH = 32;
 
 export type ServerNodeEnv = 'development' | 'production' | 'test';
+
+export type { W3dsAdapterEntityType };
 
 export interface W3dsServerConfig {
   platformName: string;
@@ -28,6 +31,20 @@ export interface W3dsServerConfig {
    * (and its signing keys) is never reused as the platform eVault.
    */
   platformEVault: W3dsPlatformEVaultConfig | null;
+  /**
+   * Ontology + Web3 Adapter mapping foundation. Opt-in and fail-closed until
+   * the Ontology base URL and every entity schemaId are supplied explicitly.
+   * Schema IDs are never guessed from documentation examples.
+   */
+  ontologyAdapter: W3dsOntologyAdapterConfig | null;
+}
+
+/** Server-only Ontology endpoint + configured schemaIds for adapter mappings. */
+export interface W3dsOntologyAdapterConfig {
+  ontologyBaseUrl: string;
+  /** Mapping config version stamped onto durable ID map rows. */
+  mappingVersion: number;
+  schemaIds: Record<W3dsAdapterEntityType, string>;
 }
 
 /** Server-only configuration for the documented platform eVault bootstrap. */
@@ -217,6 +234,7 @@ export function readRequiredW3dsServerConfig(
   }
 
   const platformEVault = readPlatformEVaultConfig(env, platformName);
+  const ontologyAdapter = readOntologyAdapterConfig(env);
 
   return {
     platformName,
@@ -224,6 +242,7 @@ export function readRequiredW3dsServerConfig(
     jwtSecret,
     databaseUrl,
     platformEVault,
+    ontologyAdapter,
     ...(env.W3DS_AUTH_MIN_WALLET_VERSION?.trim()
       ? { minimumWalletVersion: env.W3DS_AUTH_MIN_WALLET_VERSION.trim() }
       : {}),
@@ -283,6 +302,75 @@ function readPlatformEVaultConfig(
       ),
     },
   };
+}
+
+/**
+ * Reads Ontology + adapter schema configuration.
+ * Remains off until explicitly enabled so authentication and platform eVault
+ * bootstrap can deploy independently of Video/Channel ontology contracts.
+ */
+function readOntologyAdapterConfig(
+  env: Record<string, string | undefined>,
+): W3dsOntologyAdapterConfig | null {
+  const enabledValue = env.W3DS_ONTOLOGY_ADAPTER_ENABLED?.trim();
+  if (!enabledValue || enabledValue === 'false') return null;
+  if (enabledValue !== 'true') {
+    throw new ServerConfigError('W3DS_ONTOLOGY_ADAPTER_ENABLED must be "true" or "false".');
+  }
+
+  const ontologyBaseUrl = requireHttpUrl(
+    env.W3DS_ONTOLOGY_BASE_URL,
+    'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_BASE_URL (Ontology GET /schemas).',
+  );
+
+  const mappingVersionRaw = env.W3DS_ADAPTER_MAPPING_VERSION?.trim() || '1';
+  const mappingVersion = Number.parseInt(mappingVersionRaw, 10);
+  if (!Number.isInteger(mappingVersion) || mappingVersion < 1) {
+    throw new ServerConfigError(
+      'W3DS_ADAPTER_MAPPING_VERSION must be a positive integer when set.',
+    );
+  }
+
+  return {
+    ontologyBaseUrl,
+    mappingVersion,
+    schemaIds: {
+      profile: requireSchemaId(
+        env.W3DS_ONTOLOGY_SCHEMA_ID_PROFILE,
+        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PROFILE.',
+      ),
+      channel: requireSchemaId(
+        env.W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL,
+        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL.',
+      ),
+      video: requireSchemaId(
+        env.W3DS_ONTOLOGY_SCHEMA_ID_VIDEO,
+        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_VIDEO.',
+      ),
+      playlist: requireSchemaId(
+        env.W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST,
+        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST.',
+      ),
+      comment: requireSchemaId(
+        env.W3DS_ONTOLOGY_SCHEMA_ID_COMMENT,
+        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_COMMENT.',
+      ),
+    },
+  };
+}
+
+function requireSchemaId(value: string | undefined, message: string): string {
+  const normalized = requireValue(value, message);
+  // Ontology documents schemaId as a W3ID; reject empty/placeholder guesses.
+  if (
+    normalized === 'TODO' ||
+    normalized === 'changeme' ||
+    normalized.toLowerCase() === 'undefined' ||
+    normalized.toLowerCase() === 'null'
+  ) {
+    throw new ServerConfigError(`${message} Do not use placeholder schema IDs.`);
+  }
+  return normalized;
 }
 
 function requireValue(value: string | undefined, message: string): string {

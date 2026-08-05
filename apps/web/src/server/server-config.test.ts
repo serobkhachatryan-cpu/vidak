@@ -169,6 +169,66 @@ describe('server security configuration', () => {
     ).toThrow(/W3DS_PROVISIONER_BASE_URL/);
   });
 
+  it('keeps Ontology adapter mappings disabled until schema IDs are supplied', () => {
+    const config = loadServerSecurityConfig({
+      NODE_ENV: 'production',
+      ...w3dsEnv,
+    });
+    expect(config.w3ds?.ontologyAdapter).toBeNull();
+  });
+
+  it('validates Ontology base URL and every entity schemaId when enabled', () => {
+    const config = loadServerSecurityConfig({
+      NODE_ENV: 'production',
+      ...w3dsEnv,
+      W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
+      W3DS_ONTOLOGY_BASE_URL: 'https://ontology.example.com',
+      W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'schema-profile',
+      W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL: 'schema-channel',
+      W3DS_ONTOLOGY_SCHEMA_ID_VIDEO: 'schema-video',
+      W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST: 'schema-playlist',
+      W3DS_ONTOLOGY_SCHEMA_ID_COMMENT: 'schema-comment',
+      W3DS_ADAPTER_MAPPING_VERSION: '2',
+    });
+
+    expect(config.w3ds?.ontologyAdapter).toEqual({
+      ontologyBaseUrl: 'https://ontology.example.com/',
+      mappingVersion: 2,
+      schemaIds: {
+        profile: 'schema-profile',
+        channel: 'schema-channel',
+        video: 'schema-video',
+        playlist: 'schema-playlist',
+        comment: 'schema-comment',
+      },
+    });
+  });
+
+  it('rejects incomplete Ontology adapter configuration instead of guessing schema IDs', () => {
+    expect(() =>
+      loadServerSecurityConfig({
+        NODE_ENV: 'production',
+        ...w3dsEnv,
+        W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
+        W3DS_ONTOLOGY_BASE_URL: 'https://ontology.example.com',
+      }),
+    ).toThrow(/W3DS_ONTOLOGY_SCHEMA_ID_PROFILE/);
+
+    expect(() =>
+      loadServerSecurityConfig({
+        NODE_ENV: 'production',
+        ...w3dsEnv,
+        W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
+        W3DS_ONTOLOGY_BASE_URL: 'https://ontology.example.com',
+        W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'TODO',
+        W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL: 'schema-channel',
+        W3DS_ONTOLOGY_SCHEMA_ID_VIDEO: 'schema-video',
+        W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST: 'schema-playlist',
+        W3DS_ONTOLOGY_SCHEMA_ID_COMMENT: 'schema-comment',
+      }),
+    ).toThrow(/placeholder schema IDs/);
+  });
+
   it('does not treat NEXT_PUBLIC_AUTH_PROVIDER as an explicit production provider', () => {
     expect(() =>
       loadServerSecurityConfig({
