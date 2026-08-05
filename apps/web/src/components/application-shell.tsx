@@ -3,7 +3,14 @@
 import { platformName } from '@w3ds/config';
 import { AppShell, Button, Header, SearchInput, Sidebar } from '@w3ds/ui';
 import { usePathname, useRouter } from 'next/navigation';
-import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react';
+import {
+  type FormEvent,
+  type MouseEvent,
+  type ReactNode,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { useAuthentication, useCurrentUser } from '../features/auth/auth-provider';
 import { useAppearancePreference } from '../features/settings/appearance-preference';
 
@@ -70,6 +77,44 @@ export function ApplicationShell({
     if (!query) event.preventDefault();
   };
 
+  /**
+   * `Sidebar` is shared UI and deliberately renders ordinary anchors. In the
+   * app shell, preserve the mounted authentication provider for same-origin
+   * navigation instead of reloading the document (and re-checking a session)
+   * for every sidebar click.
+   */
+  const navigateInternally = (event: MouseEvent<HTMLElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return false;
+    }
+
+    const target = event.target;
+    if (!(target instanceof Element)) return false;
+    const link = target.closest<HTMLAnchorElement>('a[href]');
+    if (
+      !link ||
+      !event.currentTarget.contains(link) ||
+      link.target ||
+      link.hasAttribute('download')
+    ) {
+      return false;
+    }
+
+    const href = link.getAttribute('href');
+    if (!href?.startsWith('/') || href.startsWith('//')) return false;
+
+    event.preventDefault();
+    router.push(href);
+    return true;
+  };
+
   const cycleAppearance = () => {
     const order = ['light', 'dark', 'system'] as const;
     const index = order.indexOf(appearance);
@@ -83,6 +128,7 @@ export function ApplicationShell({
           brand={
             <a
               href="/"
+              onClick={navigateInternally}
               className="rounded font-sans text-lg font-bold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
               {platformName}
@@ -152,8 +198,15 @@ export function ApplicationShell({
           }
         />
       }
-      sidebar={<Sidebar items={navigationItems} />}
-      mobileNavigation={<Sidebar items={navigationItems} />}
+      sidebar={<Sidebar items={navigationItems} onClick={navigateInternally} />}
+      mobileNavigation={
+        <Sidebar
+          items={navigationItems}
+          onClick={(event) => {
+            if (navigateInternally(event)) setMobileNavigationOpen(false);
+          }}
+        />
+      }
       mobileNavigationOpen={mobileNavigationOpen}
       onMobileNavigationClose={() => setMobileNavigationOpen(false)}
       mobileNavigationTitle="Browse"
