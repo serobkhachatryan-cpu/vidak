@@ -9,6 +9,7 @@ const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../..
 
 const requiredTables = [
   'w3ds_platform_users',
+  'w3ds_platform_evault',
   'w3ds_login_offers',
   'w3ds_platform_sessions',
   'creator_channels',
@@ -82,7 +83,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(5);
+    expect(applied.rows).toHaveLength(6);
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -146,6 +147,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(5);
+    expect(Number(applied.rows[0]?.count)).toBe(6);
   });
 });

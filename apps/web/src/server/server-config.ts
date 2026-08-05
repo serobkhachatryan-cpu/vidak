@@ -23,6 +23,26 @@ export interface W3dsServerConfig {
   jwtSecret: string;
   databaseUrl: string;
   minimumWalletVersion?: string;
+  /**
+   * Platform-owned eVault bootstrap is intentionally opt-in. A user eVault
+   * (and its signing keys) is never reused as the platform eVault.
+   */
+  platformEVault: W3dsPlatformEVaultConfig | null;
+}
+
+/** Server-only configuration for the documented platform eVault bootstrap. */
+export interface W3dsPlatformEVaultConfig {
+  provisionerBaseUrl: string;
+  verificationId: string;
+  profile: {
+    platformName: string;
+    displayName: string;
+    description: string;
+    version: string;
+    url: string;
+    logoUrl: string;
+    category: string;
+  };
 }
 
 export interface CookieSecurityConfig {
@@ -196,15 +216,97 @@ export function readRequiredW3dsServerConfig(
     );
   }
 
+  const platformEVault = readPlatformEVaultConfig(env, platformName);
+
   return {
     platformName,
     registryBaseUrl,
     jwtSecret,
     databaseUrl,
+    platformEVault,
     ...(env.W3DS_AUTH_MIN_WALLET_VERSION?.trim()
       ? { minimumWalletVersion: env.W3DS_AUTH_MIN_WALLET_VERSION.trim() }
       : {}),
   };
+}
+
+/**
+ * Reads the documented Registry entropy → Provisioner → eVault profile flow.
+ * It remains off until explicitly enabled so existing W3DS authentication can
+ * be deployed independently of platform provisioning credentials.
+ */
+function readPlatformEVaultConfig(
+  env: Record<string, string | undefined>,
+  platformName: string,
+): W3dsPlatformEVaultConfig | null {
+  const enabledValue = env.W3DS_PLATFORM_EVAULT_ENABLED?.trim();
+  if (!enabledValue || enabledValue === 'false') return null;
+  if (enabledValue !== 'true') {
+    throw new ServerConfigError('W3DS_PLATFORM_EVAULT_ENABLED must be "true" or "false".');
+  }
+
+  const provisionerBaseUrl = requireHttpUrl(
+    env.W3DS_PROVISIONER_BASE_URL,
+    'W3DS_PLATFORM_EVAULT_ENABLED requires W3DS_PROVISIONER_BASE_URL.',
+  );
+  const verificationId = requireValue(
+    env.W3DS_PLATFORM_EVAULT_VERIFICATION_ID,
+    'W3DS_PLATFORM_EVAULT_ENABLED requires W3DS_PLATFORM_EVAULT_VERIFICATION_ID.',
+  );
+  const url = requireHttpUrl(
+    env.W3DS_PLATFORM_EVAULT_URL ?? env.APP_ORIGIN,
+    'W3DS_PLATFORM_EVAULT_ENABLED requires W3DS_PLATFORM_EVAULT_URL or APP_ORIGIN.',
+  );
+
+  return {
+    provisionerBaseUrl,
+    verificationId,
+    profile: {
+      platformName,
+      displayName: requireValue(
+        env.W3DS_PLATFORM_EVAULT_DISPLAY_NAME,
+        'W3DS_PLATFORM_EVAULT_ENABLED requires W3DS_PLATFORM_EVAULT_DISPLAY_NAME.',
+      ),
+      description: requireValue(
+        env.W3DS_PLATFORM_EVAULT_DESCRIPTION,
+        'W3DS_PLATFORM_EVAULT_ENABLED requires W3DS_PLATFORM_EVAULT_DESCRIPTION.',
+      ),
+      version: env.W3DS_PLATFORM_EVAULT_VERSION?.trim() || '1.0.0',
+      url,
+      logoUrl: optionalHttpUrl(
+        env.W3DS_PLATFORM_EVAULT_LOGO_URL,
+        'W3DS_PLATFORM_EVAULT_LOGO_URL must be an HTTP(S) URL when set.',
+      ),
+      category: requireValue(
+        env.W3DS_PLATFORM_EVAULT_CATEGORY,
+        'W3DS_PLATFORM_EVAULT_ENABLED requires W3DS_PLATFORM_EVAULT_CATEGORY.',
+      ),
+    },
+  };
+}
+
+function requireValue(value: string | undefined, message: string): string {
+  const normalized = value?.trim();
+  if (!normalized) throw new ServerConfigError(message);
+  return normalized;
+}
+
+function requireHttpUrl(value: string | undefined, message: string): string {
+  const normalized = optionalHttpUrl(value, message);
+  if (!normalized) throw new ServerConfigError(message);
+  return normalized;
+}
+
+function optionalHttpUrl(value: string | undefined, message: string): string {
+  const normalized = value?.trim();
+  if (!normalized) return '';
+  try {
+    const url = new URL(normalized);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('protocol');
+    return url.toString();
+  } catch {
+    throw new ServerConfigError(message);
+  }
 }
 
 function tryReadW3dsServerConfig(env: Record<string, string | undefined>): W3dsServerConfig | null {

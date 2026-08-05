@@ -32,6 +32,26 @@ export const w3dsPlatformUsers = pgTable('w3ds_platform_users', {
 });
 
 /**
+ * The single eVault owned by Vidak itself, distinct from every user eVault.
+ * This is a server-only cache of the documented provisioning result and
+ * PlatformProfile discovery data; it contains no provisioning credential.
+ */
+export const w3dsPlatformEVault = pgTable('w3ds_platform_evault', {
+  id: text('id').primaryKey(),
+  eName: text('e_name').notNull().unique(),
+  eVaultUri: text('e_vault_uri').notNull(),
+  platformName: text('platform_name').notNull(),
+  displayName: text('display_name').notNull(),
+  description: text('description').notNull(),
+  profileVersion: text('profile_version').notNull(),
+  publicUrl: text('public_url').notNull(),
+  logoUrl: text('logo_url').notNull(),
+  category: text('category').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
+
+/**
  * Local creator channel owned by a platform user.
  * One channel per owner for this milestone; product `Channel` projection.
  */
@@ -243,6 +263,7 @@ export const w3dsAuthorizationSync = pgTable(
 );
 
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
+export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
 export type W3dsPlatformSessionRow = typeof w3dsPlatformSessions.$inferSelect;
 export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
