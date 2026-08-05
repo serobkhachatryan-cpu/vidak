@@ -30,7 +30,9 @@ function loginRedirect(
   const url = new URL('/login', resolveContinuePublicOrigin(request));
   url.searchParams.set('returnTo', returnTo);
   if (offerId) url.searchParams.set('offer', offerId);
-  return NextResponse.redirect(url);
+  const response = NextResponse.redirect(url);
+  response.headers.set('Cache-Control', 'no-store');
+  return response;
 }
 
 /**
@@ -51,6 +53,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ offe
 
     const session = await service.getOfferSessionForCookie(offerId);
     const response = NextResponse.redirect(new URL(returnTo, resolveContinuePublicOrigin(request)));
+    response.headers.set('Cache-Control', 'no-store');
     applyW3dsSessionCookies(response.cookies, session);
     return response;
   } catch (error) {
