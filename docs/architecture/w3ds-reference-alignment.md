@@ -61,6 +61,11 @@ The baseline already supplies:
   (`DOCUMENTED_W3DS_ONTOLOGY_BASE_URL`). A live `GET /schemas` catalog does
   **not** currently include canonical Video, Channel, Playlist, or Comment
   schemas, so the adapter stays disabled and schemaId env vars stay empty.
+- A submission-ready Vidak ontology schema package at
+  `docs/proposals/w3ds-ontology-vidak-v1/` (draft-07 Video, Channel, Playlist,
+  Comment proposals, examples, and future `localToUniversalMap` contract).
+  **Ready for MetaState maintainer submission.** It does **not** invent
+  `schemaId` values and does **not** enable `W3DS_ONTOLOGY_ADAPTER_ENABLED`.
 
 The following Post-Platform requirements are not yet implemented:
 
@@ -70,6 +75,16 @@ The following Post-Platform requirements are not yet implemented:
 - `w3ds://file` references for interoperable media;
 - Awareness webhook ingress and idempotent processing;
 - a platform `w3ds://sign` request/verification surface.
+
+### MetaState inputs still required (Phase B gate)
+
+Before Vidak may enable the Ontology adapter, MetaState must provide:
+
+1. **Assigned stable schema IDs (W3IDs)** for Video, Channel, Playlist, and
+   Comment (plus any Profile ID still required by adapter config).
+2. **Deployed catalogue availability** of those schemas on the configured
+   Ontology base URL (`GET /schemas` listing and `GET /schemas/:id` full
+   draft-07 documents including the assigned `schemaId`).
 
 ## Reference traceability
 
@@ -116,8 +131,17 @@ The following Post-Platform requirements are not yet implemented:
 
 ### Phase B — ontology and adapter
 
+**Phase B remains disabled** pending MetaState-assigned schema IDs and deployed
+catalogue availability. The Vidak schema proposal package is ready for
+maintainer submission (`docs/proposals/w3ds-ontology-vidak-v1/`); do not enable
+`W3DS_ONTOLOGY_ADAPTER_ENABLED` until the inputs listed under “MetaState inputs
+still required” are in place.
+
 1. Define versioned mappings for profile, channel, video, playlist, and
    comment entities only after their ontology schema IDs are configured.
+   **Done (proposal only):** draft-07 schemas + mapping-contract placeholders
+   without invented IDs. Runtime Mapping Rules JSON still waits on published
+   `schemaId`s.
 2. Persist `(entity type, local id, global MetaEnvelope id, owner eName,
    schema id)` mappings with unique constraints and idempotency keys.
    **Done (foundation):** durable `w3ds_adapter_mappings` + fail-closed

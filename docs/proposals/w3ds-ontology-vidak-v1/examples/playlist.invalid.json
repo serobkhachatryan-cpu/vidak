@@ -1,0 +1,16 @@
+{
+  "id": "c8d9e0f1-2345-4678-9abc-def012345678",
+  "ownerEName": "@e4d909c2-5d2f-4a7d-9473-b34b6c0f1a5a",
+  "channelId": "b7e1c2d3-4a5f-6789-b012-3456789abc01",
+  "title": "Broken playlist",
+  "visibility": "friends",
+  "items": [
+    {
+      "videoId": "f2a6743e-8d5b-43bc-a9f0-1c7a3b9e90d7",
+      "position": -1,
+      "addedAt": "not-a-date"
+    }
+  ],
+  "createdAt": "2026-08-05T12:30:00.000Z",
+  "updatedAt": "2026-08-05T13:00:00.000Z"
+}

@@ -1,0 +1,13 @@
+{
+  "id": "b7e1c2d3-4a5f-6789-b012-3456789abc01",
+  "ownerEName": "@e4d909c2-5d2f-4a7d-9473-b34b6c0f1a5a",
+  "handle": "vidak-studio",
+  "name": "Vidak Studio",
+  "description": "Creator channel for reference alignment demos.",
+  "avatarFileUri": "w3ds://file?id=@e4d909c2-5d2f-4a7d-9473-b34b6c0f1a5a/envelope-avatar-001",
+  "visibility": "public",
+  "subscriberCount": 12,
+  "videoCount": 4,
+  "createdAt": "2026-07-01T00:00:00.000Z",
+  "updatedAt": "2026-08-05T00:00:00.000Z"
+}

@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vidak.local/proposals/w3ds-ontology-vidak-v1/Channel.schema.json",
+  "$comment": "Vidak ontology proposal v1 (Channel). schemaId is intentionally omitted — MetaState must assign a stable W3ID and publish this schema before W3DS_ONTOLOGY_ADAPTER_ENABLED may be turned on. Do not invent schema IDs.",
+  "title": "Channel",
+  "description": "Creator channel / publisher identity for Vidak. Owned by the creator eName (creator eVault), not a separate Group eVault, unless MetaState later standardizes otherwise.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "ownerEName", "handle", "name", "createdAt", "updatedAt"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MetaEnvelope object id within the owner eVault (local W3ID / UUID). Distinct from Vidak's product-local channel id."
+    },
+    "ownerEName": {
+      "type": "string",
+      "pattern": "^@[^\\s@]+$",
+      "description": "Creator eName. Mapping Rules ownerEnamePath resolves ownership to this eVault."
+    },
+    "handle": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,62}$",
+      "description": "Public handle unique within the platform projection; interoperable as a string field."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 5000
+    },
+    "avatarFileUri": {
+      "type": "string",
+      "pattern": "^w3ds://file\\?id=@[^/\\s]+/[^\\s]+$",
+      "description": "Optional avatar as a w3ds://file URI."
+    },
+    "bannerFileUri": {
+      "type": "string",
+      "pattern": "^w3ds://file\\?id=@[^/\\s]+/[^\\s]+$",
+      "description": "Optional banner as a w3ds://file URI."
+    },
+    "visibility": {
+      "type": "string",
+      "enum": ["public", "unlisted", "private"],
+      "description": "Optional channel discovery intent when synchronized."
+    },
+    "subscriberCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "videoCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "id": "f2a6743e-8d5b-43bc-a9f0-1c7a3b9e90d7",
+  "ownerEName": "@e4d909c2-5d2f-4a7d-9473-b34b6c0f1a5a",
+  "channelId": "a1c2e3f4-5b6d-4789-a012-3456789abcde",
+  "title": "Reference alignment walkthrough",
+  "description": "How Vidak models Video metadata for Ontology submission.",
+  "status": "published",
+  "visibility": "public",
+  "durationSeconds": 312,
+  "mediaFileUri": "w3ds://file?id=@e4d909c2-5d2f-4a7d-9473-b34b6c0f1a5a/envelope-media-001",
+  "thumbnailFileUri": "w3ds://file?id=@e4d909c2-5d2f-4a7d-9473-b34b6c0f1a5a/envelope-thumb-001",
+  "category": "education",
+  "language": "en",
+  "tags": ["w3ds", "ontology"],
+  "publicVideoId": "pub_video_01",
+  "publishedAt": "2026-08-05T12:00:00.000Z",
+  "createdAt": "2026-08-01T09:00:00.000Z",
+  "updatedAt": "2026-08-05T12:00:00.000Z",
+  "viewCount": 42,
+  "likeCount": 7,
+  "commentCount": 3
+}
