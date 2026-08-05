@@ -10,6 +10,9 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import type { W3dsAdapterEntityType } from '../w3ds-adapter-types';
+
+export type { W3dsAdapterEntityType };
 
 /**
  * Durable W3DS platform identity. One row per global eName.
@@ -262,6 +265,42 @@ export const w3dsAuthorizationSync = pgTable(
   ],
 );
 
+/**
+ * Durable Web3 Adapter ID map: local product entity ↔ global MetaEnvelope id.
+ * Server-only — never serialize rows or schemaIds to browsers.
+ *
+ * Unique on (entity_type, local_id) and on global_id so outbound sync and
+ * inbound Awareness projections stay idempotent (Web3 Adapter MappingDatabase).
+ */
+export const w3dsAdapterMappings = pgTable(
+  'w3ds_adapter_mappings',
+  {
+    id: text('id').primaryKey(),
+    entityType: text('entity_type').$type<W3dsAdapterEntityType>().notNull(),
+    /** Local Postgres table / entity collection name (e.g. videos). */
+    entityTable: text('entity_table').notNull(),
+    localId: text('local_id').notNull(),
+    /** Global MetaEnvelope id returned by eVault store/update. */
+    globalId: text('global_id').notNull(),
+    ownerEName: text('owner_e_name').notNull(),
+    /** Ontology schemaId (W3ID) that typed the MetaEnvelope. */
+    schemaId: text('schema_id').notNull(),
+    mappingVersion: integer('mapping_version').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('w3ds_adapter_mappings_entity_type_local_id_uidx').on(
+      table.entityType,
+      table.localId,
+    ),
+    uniqueIndex('w3ds_adapter_mappings_global_id_uidx').on(table.globalId),
+    index('w3ds_adapter_mappings_owner_e_name_idx').on(table.ownerEName),
+    index('w3ds_adapter_mappings_schema_id_idx').on(table.schemaId),
+    index('w3ds_adapter_mappings_entity_table_local_id_idx').on(table.entityTable, table.localId),
+  ],
+);
+
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
 export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
@@ -270,3 +309,4 @@ export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
 export type VideoRow = typeof videos.$inferSelect;
 export type MediaAssetRow = typeof mediaAssets.$inferSelect;
 export type W3dsAuthorizationSyncRow = typeof w3dsAuthorizationSync.$inferSelect;
+export type W3dsAdapterMappingRow = typeof w3dsAdapterMappings.$inferSelect;

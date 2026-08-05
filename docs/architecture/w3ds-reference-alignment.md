@@ -52,14 +52,17 @@ The baseline already supplies:
   Provisioner registration, public PlatformProfile creation, and a durable
   local mapping. It is disabled until the operator supplies the documented
   Provisioner verification credentials and discovery profile.
+- An opt-in Ontology + Web3 Adapter mapping foundation: durable PostgreSQL
+  `(entity type, local id, global MetaEnvelope id, owner eName, schema id,
+  mapping version)` rows with unique constraints. Mapping writes fail closed
+  until `W3DS_ONTOLOGY_BASE_URL` and every entity schemaId are configured.
+  Schema IDs are never guessed from documentation examples.
 
 The following Post-Platform requirements are not yet implemented:
 
 - a documented eVault client for MetaEnvelope and file operations;
-- ontology schema discovery and explicit Video/Channel/Playlist/Comment
-  schema ownership;
-- Web3 Adapter mappings, durable local/global ID maps, outbound sync, and
-  inbound projections;
+- versioned Mapping Rules JSON (`ownerEnamePath`, field transforms) and
+  outbound `handleChange` / inbound `fromGlobal` sync once schemaIds exist;
 - `w3ds://file` references for interoperable media;
 - Awareness webhook ingress and idempotent processing;
 - a platform `w3ds://sign` request/verification surface.
@@ -113,6 +116,8 @@ The following Post-Platform requirements are not yet implemented:
    comment entities only after their ontology schema IDs are configured.
 2. Persist `(entity type, local id, global MetaEnvelope id, owner eName,
    schema id)` mappings with unique constraints and idempotency keys.
+   **Done (foundation):** durable `w3ds_adapter_mappings` + fail-closed
+   Ontology config. Mapping Rules JSON and remote sync remain pending.
 3. Sync local mutations through the adapter outbox; retries must not duplicate
    envelopes or overwrite remote ownership.
 
