@@ -16,6 +16,13 @@ import type { W3dsAdapterEntityType } from './w3ds-adapter-types';
 
 export const MIN_W3DS_JWT_SECRET_LENGTH = 32;
 
+/**
+ * Documented Ontology production base URL (Ontology HTML / Links).
+ * Operators may set W3DS_ONTOLOGY_BASE_URL to this value; schemaIds must still
+ * come from GET /schemas and must not be guessed.
+ */
+export const DOCUMENTED_W3DS_ONTOLOGY_BASE_URL = 'https://ontology.w3ds.metastate.foundation';
+
 export type ServerNodeEnv = 'development' | 'production' | 'test';
 
 export type { W3dsAdapterEntityType };
