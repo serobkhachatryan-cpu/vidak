@@ -1,0 +1,129 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vidak.local/proposals/w3ds-ontology-vidak-v1/Video.schema.json",
+  "$comment": "Vidak ontology proposal v1 (Video). schemaId is intentionally omitted — MetaState must assign a stable W3ID and publish this schema before W3DS_ONTOLOGY_ADAPTER_ENABLED may be turned on. Do not invent schema IDs.",
+  "title": "Video",
+  "description": "Interoperable video metadata for Vidak as a W3DS Post-Platform. Media bytes are addressed by an optional w3ds://file URI (not a local storage key or unsigned HTTP URL).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "ownerEName",
+    "channelId",
+    "title",
+    "status",
+    "visibility",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MetaEnvelope object id within the owner eVault (local W3ID / UUID). Distinct from Vidak's product-local video id."
+    },
+    "ownerEName": {
+      "type": "string",
+      "pattern": "^@[^\\s@]+$",
+      "description": "Owner eName of the eVault that stores this MetaEnvelope. Mapping Rules ownerEnamePath resolves to this identity."
+    },
+    "channelId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Reference to the Channel MetaEnvelope object id (global layer), not a product-local channel primary key."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 10000
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "processing", "published", "archived"],
+      "description": "Publish lifecycle independent of visibility."
+    },
+    "visibility": {
+      "type": "string",
+      "enum": ["public", "unlisted", "private"],
+      "description": "Discovery/access intent. Future ACL mapping: public→[\"*\"], private→owner eName, unlisted→deliberate ACL."
+    },
+    "durationSeconds": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "mediaFileUri": {
+      "type": "string",
+      "pattern": "^w3ds://file\\?id=@[^/\\s]+/[^\\s]+$",
+      "description": "Interoperable media reference. Future adapter mapping uses __file(...) → w3ds://file?id=@<ename>/<meta-envelope-id>. Never a filesystem path or bare storage key."
+    },
+    "thumbnailFileUri": {
+      "type": "string",
+      "pattern": "^w3ds://file\\?id=@[^/\\s]+/[^\\s]+$",
+      "description": "Optional thumbnail as a w3ds://file URI (same contract as mediaFileUri)."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "entertainment",
+        "education",
+        "gaming",
+        "music",
+        "science_technology",
+        "howto",
+        "sports",
+        "news",
+        "travel",
+        "people_blogs",
+        "comedy",
+        "film_animation"
+      ]
+    },
+    "language": {
+      "type": "string",
+      "enum": ["en", "es", "fr", "de", "pt", "ja", "ko", "zh", "ar", "hi"]
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 64
+      },
+      "maxItems": 50,
+      "uniqueItems": true
+    },
+    "publicVideoId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Stable public discovery key assigned on first publish; may persist across unpublish."
+    },
+    "publishedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "viewCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "likeCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "commentCount": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

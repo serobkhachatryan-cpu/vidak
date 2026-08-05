@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vidak.local/proposals/w3ds-ontology-vidak-v1/Playlist.schema.json",
+  "$comment": "Vidak ontology proposal v1 (Playlist). schemaId is intentionally omitted — MetaState must assign a stable W3ID and publish this schema before W3DS_ONTOLOGY_ADAPTER_ENABLED may be turned on. Do not invent schema IDs.",
+  "title": "Playlist",
+  "description": "Ordered collection of Video MetaEnvelope references owned by a creator eName.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "ownerEName",
+    "channelId",
+    "title",
+    "visibility",
+    "items",
+    "createdAt",
+    "updatedAt"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MetaEnvelope object id within the owner eVault (local W3ID / UUID)."
+    },
+    "ownerEName": {
+      "type": "string",
+      "pattern": "^@[^\\s@]+$",
+      "description": "Owner eName. Mapping Rules ownerEnamePath resolves to this identity."
+    },
+    "channelId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Reference to the Channel MetaEnvelope object id."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 5000
+    },
+    "visibility": {
+      "type": "string",
+      "enum": ["public", "unlisted", "private"],
+      "description": "Playlist discovery/access intent."
+    },
+    "thumbnailFileUri": {
+      "type": "string",
+      "pattern": "^w3ds://file\\?id=@[^/\\s]+/[^\\s]+$",
+      "description": "Optional playlist thumbnail as a w3ds://file URI."
+    },
+    "items": {
+      "type": "array",
+      "description": "Ordered playlist membership. videoId values are Video MetaEnvelope object ids.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["videoId", "position", "addedAt"],
+        "properties": {
+          "videoId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "position": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "addedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
