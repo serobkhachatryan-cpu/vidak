@@ -88,7 +88,7 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
         if (next.kind === 'completed' && !completedRef.current) {
           completedRef.current = true;
           clearPoll();
-          acceptSessionRef.current(next.session);
+          await acceptSessionRef.current(next.session);
           router.replace(returnTo);
           return;
         }
@@ -124,8 +124,8 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
           device.
         </Text>
         <Text size="sm" tone="muted">
-          Local development: open the W3DS Dev Sandbox, use the sign-in link below, and approve the
-          request. This page finishes automatically when approval completes.
+          Approve the request in your eID wallet. This page finishes automatically when approval
+          completes.
         </Text>
       </div>
 

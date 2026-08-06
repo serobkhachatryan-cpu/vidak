@@ -116,7 +116,7 @@ describe('W3dsAuthClient', () => {
     expect(session.tokens.refreshToken).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/auth/session',
-      expect.objectContaining({ credentials: 'include' }),
+      expect.objectContaining({ cache: 'no-store', credentials: 'include' }),
     );
     expect(fetchMock).not.toHaveBeenCalledWith(
       expect.stringContaining('/api/auth/refresh'),
