@@ -2,8 +2,8 @@ import { authProviderEnvVars, defaultAuthProvider } from '@w3ds/config';
 import type { NextConfig } from 'next';
 
 const authProvider =
-  process.env[authProviderEnvVars.public] ??
-  process.env[authProviderEnvVars.shared] ??
+  process.env[authProviderEnvVars.public]?.trim() ||
+  process.env[authProviderEnvVars.shared]?.trim() ||
   defaultAuthProvider;
 
 const nextConfig: NextConfig = {
@@ -15,8 +15,8 @@ const nextConfig: NextConfig = {
     // Expose only the provider id to the client bundle — never secrets or origins.
     [authProviderEnvVars.public]: authProvider,
   },
-  // No Access-Control-Allow-* headers: same-origin cookie clients only.
-  // Credentialed cross-origin browser access is intentionally unsupported.
+  // Cookie-authenticated APIs remain same-origin only. The W3DS eID gateway
+  // at /api/auth handles its own narrow, credential-free CORS response.
   async headers() {
     return [
       {

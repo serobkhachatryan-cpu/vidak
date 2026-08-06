@@ -171,6 +171,9 @@ export class W3dsAuthClient implements AuthClient {
     const allowRefresh = options.allowRefresh ?? true;
     const response = await this.fetchImpl(this.url(path), {
       ...init,
+      // Authentication state can change between navigations when an eID offer
+      // completes. Never reuse a cached anonymous session response.
+      cache: 'no-store',
       credentials: 'include',
       headers: {
         Accept: 'application/json',

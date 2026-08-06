@@ -578,8 +578,10 @@ Do not point integration tests at production databases or shared developer media
 
 1. Provision a shared PostgreSQL database reachable by every W3DS app instance.
 2. Set `AUTH_PROVIDER` explicitly (`w3ds` for production W3DS auth, or `dev` only
-   when intentionally running the development provider). Silent omission is
-   rejected at Node server startup.
+   when intentionally running the development provider). The web build exposes
+   that provider id to the browser as `NEXT_PUBLIC_AUTH_PROVIDER`; set the latter
+   explicitly too when the build system does not inherit `AUTH_PROVIDER`.
+   Silent omission is rejected at Node server startup.
 3. For `AUTH_PROVIDER=w3ds`, set `DATABASE_URL`, `W3DS_REGISTRY_BASE_URL`,
    `W3DS_AUTH_JWT_SECRET` (≥ 32 characters), and `APP_ORIGIN` in the **server**
    environment only — never `NEXT_PUBLIC_*` for secrets, database URLs, registry

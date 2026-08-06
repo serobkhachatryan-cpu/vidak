@@ -5,6 +5,7 @@ import { GET as listPublicVideos } from '../app/api/videos/public/route';
 import * as creatorVideo from './creator-video';
 import {
   assertTrustedMutationOrigin,
+  assertTrustedSessionRefreshOrigin,
   isTrustedMutationOrigin,
   readRequestOriginCandidate,
   responseAllowsCredentialedCors,
@@ -115,6 +116,40 @@ describe('request security boundaries', () => {
     expect(
       readRequestOriginCandidate(new Headers({ Referer: 'https://vidak.example/settings' })),
     ).toBe('https://vidak.example');
+  });
+
+  it('allows only same-origin browser metadata when a session refresh lacks Origin/Referer', () => {
+    const config = loadServerSecurityConfig({
+      NODE_ENV: 'development',
+      AUTH_PROVIDER: 'dev',
+      APP_ORIGIN: 'https://vidak.example',
+    });
+
+    expect(() =>
+      assertTrustedSessionRefreshOrigin(
+        {
+          headers: new Headers({
+            'Sec-Fetch-Site': 'same-origin',
+            'Sec-Fetch-Mode': 'cors',
+          }),
+          url: 'https://vidak.example/api/auth/refresh',
+        },
+        config,
+      ),
+    ).not.toThrow();
+
+    expect(() =>
+      assertTrustedSessionRefreshOrigin(
+        {
+          headers: new Headers({
+            'Sec-Fetch-Site': 'cross-site',
+            'Sec-Fetch-Mode': 'cors',
+          }),
+          url: 'https://vidak.example/api/auth/refresh',
+        },
+        config,
+      ),
+    ).toThrow(/Trusted request origin is required/);
   });
 
   it('rejects untrusted cookie profile mutations and allows trusted cookie + bearer', async () => {

@@ -48,6 +48,35 @@ export function assertTrustedMutationOrigin(
   }
 }
 
+/**
+ * Validates the cookie-backed session rotation endpoint.
+ *
+ * Browser `fetch` normally includes `Origin` for this POST, but some embedded
+ * webviews omit both Origin and Referer for a same-origin credential refresh.
+ * Accept that narrow browser-only case when Fetch Metadata confirms it is a
+ * same-origin CORS fetch. Cross-site requests retain the regular fail-closed
+ * Origin/Referer requirement.
+ */
+export function assertTrustedSessionRefreshOrigin(
+  request: MutationRequestLike,
+  config: ServerSecurityConfig = loadServerSecurityConfig(),
+): void {
+  try {
+    assertTrustedMutationOrigin(request, config);
+  } catch (error) {
+    if (
+      error instanceof W3dsAuthError &&
+      error.code === 'untrusted_origin' &&
+      !readRequestOriginCandidate(request.headers) &&
+      request.headers.get('sec-fetch-site') === 'same-origin' &&
+      request.headers.get('sec-fetch-mode') === 'cors'
+    ) {
+      return;
+    }
+    throw error;
+  }
+}
+
 export function isTrustedMutationOrigin(
   candidateOrigin: string,
   requestOrigin: string | undefined,

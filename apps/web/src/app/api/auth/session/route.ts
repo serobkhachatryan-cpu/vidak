@@ -9,14 +9,19 @@ import {
 
 export const runtime = 'nodejs';
 
+function noStore(response: NextResponse): NextResponse {
+  response.headers.set('Cache-Control', 'private, no-store, max-age=0');
+  return response;
+}
+
 export async function GET(request: NextRequest) {
   try {
     const accessToken =
       getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
     if (!accessToken)
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
-    return NextResponse.json(await getW3dsAuthService().getSession(accessToken));
+    return noStore(NextResponse.json(await getW3dsAuthService().getSession(accessToken)));
   } catch (error) {
-    return authenticationErrorResponse(error, request.headers);
+    return noStore(authenticationErrorResponse(error, request.headers));
   }
 }
