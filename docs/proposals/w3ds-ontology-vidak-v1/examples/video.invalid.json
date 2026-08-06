@@ -1,0 +1,12 @@
+{
+  "id": "f2a6743e-8d5b-43bc-a9f0-1c7a3b9e90d7",
+  "ownerEName": "not-an-ename",
+  "channelId": "a1c2e3f4-5b6d-4789-a012-3456789abcde",
+  "title": "Broken media contract",
+  "status": "published",
+  "visibility": "public",
+  "mediaFileUri": "https://cdn.example.com/video.mp4",
+  "createdAt": "2026-08-01T09:00:00.000Z",
+  "updatedAt": "2026-08-05T12:00:00.000Z",
+  "storageKey": "uploads/local/key"
+}

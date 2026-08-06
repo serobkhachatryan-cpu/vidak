@@ -9,12 +9,14 @@ const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../..
 
 const requiredTables = [
   'w3ds_platform_users',
+  'w3ds_platform_evault',
   'w3ds_login_offers',
   'w3ds_platform_sessions',
   'creator_channels',
   'videos',
   'media_assets',
   'w3ds_authorization_sync',
+  'w3ds_adapter_mappings',
 ] as const;
 
 const requiredIndexes = [
@@ -41,6 +43,12 @@ const requiredIndexes = [
   'w3ds_authorization_sync_status_idx',
   'w3ds_authorization_sync_resource_id_idx',
   'w3ds_authorization_sync_owner_platform_user_id_idx',
+  // Web3 Adapter ID map
+  'w3ds_adapter_mappings_entity_type_local_id_uidx',
+  'w3ds_adapter_mappings_global_id_uidx',
+  'w3ds_adapter_mappings_owner_e_name_idx',
+  'w3ds_adapter_mappings_schema_id_idx',
+  'w3ds_adapter_mappings_entity_table_local_id_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -82,7 +90,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(5);
+    expect(applied.rows).toHaveLength(7);
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -135,6 +143,25 @@ describe('database migrations (empty database → current set)', () => {
         'failure_reason',
       ]),
     );
+
+    const adapterColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'w3ds_adapter_mappings'
+       order by 1`,
+    );
+    expect(adapterColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'entity_type',
+        'entity_table',
+        'local_id',
+        'global_id',
+        'owner_e_name',
+        'schema_id',
+        'mapping_version',
+        'created_at',
+        'updated_at',
+      ]),
+    );
   });
 
   it('is idempotent when migrate is invoked twice on the same empty-started database', async () => {
@@ -146,6 +173,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(5);
+    expect(Number(applied.rows[0]?.count)).toBe(7);
   });
 });

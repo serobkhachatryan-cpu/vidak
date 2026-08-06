@@ -1,0 +1,58 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vidak.local/proposals/w3ds-ontology-vidak-v1/Comment.schema.json",
+  "$comment": "Vidak ontology proposal v1 (Comment). schemaId is intentionally omitted — MetaState must assign a stable W3ID and publish this schema before W3DS_ONTOLOGY_ADAPTER_ENABLED may be turned on. Do not invent schema IDs.",
+  "title": "Comment",
+  "description": "User comment on a Video. Owned by the comment author's eName. Threading uses optional parentId references to other Comment MetaEnvelopes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "ownerEName", "videoId", "body", "createdAt"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MetaEnvelope object id within the owner eVault (local W3ID / UUID)."
+    },
+    "ownerEName": {
+      "type": "string",
+      "pattern": "^@[^\\s@]+$",
+      "description": "Author eName (comment owner). Mapping Rules ownerEnamePath resolves to this identity."
+    },
+    "videoId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Reference to the Video MetaEnvelope object id being commented on."
+    },
+    "parentId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional parent Comment MetaEnvelope object id for replies."
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000
+    },
+    "visibility": {
+      "type": "string",
+      "enum": ["public", "unlisted", "private"],
+      "description": "Optional comment visibility when synchronized; defaults to public in product UX."
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "likeCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "replyCount": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

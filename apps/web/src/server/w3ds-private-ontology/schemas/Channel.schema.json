@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vidak.local/private-ontology/v1/Channel.schema.json",
+  "$comment": "PRIVATE Vidak-owned ontology schema (Channel). schemaId is a stable Vidak catalogue identifier — not a MetaState-issued W3ID and not a canonical public W3DS schema.",
+  "schemaId": "vidak:private:ontology:v1:channel",
+  "title": "Channel",
+  "description": "PRIVATE Vidak-owned draft-07 Channel schema for platform-local W3DS-compatible use. Owned by the creator eName (creator eVault).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "ownerEName", "handle", "name", "createdAt", "updatedAt"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MetaEnvelope object id within the owner eVault (local W3ID / UUID). Distinct from Vidak's product-local channel id."
+    },
+    "ownerEName": {
+      "type": "string",
+      "pattern": "^@[^\\s@]+$",
+      "description": "Creator eName. Mapping Rules ownerEnamePath resolves ownership to this eVault."
+    },
+    "handle": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{1,62}$",
+      "description": "Public handle unique within the platform projection; interoperable as a string field."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 5000
+    },
+    "avatarFileUri": {
+      "type": "string",
+      "pattern": "^w3ds://file\\?id=@[^/\\s]+/[^\\s]+$",
+      "description": "Optional avatar as a w3ds://file URI."
+    },
+    "bannerFileUri": {
+      "type": "string",
+      "pattern": "^w3ds://file\\?id=@[^/\\s]+/[^\\s]+$",
+      "description": "Optional banner as a w3ds://file URI."
+    },
+    "visibility": {
+      "type": "string",
+      "enum": ["public", "unlisted", "private"],
+      "description": "Optional channel discovery intent when synchronized."
+    },
+    "subscriberCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "videoCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}
