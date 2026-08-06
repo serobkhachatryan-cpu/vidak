@@ -149,6 +149,12 @@ importers:
       '@w3ds/watch-page':
         specifier: workspace:*
         version: link:../../packages/watch-page
+      ajv:
+        specifier: ^8.20.0
+        version: 8.20.0
+      ajv-formats:
+        specifier: ^3.0.1
+        version: 3.0.1(ajv@8.20.0)
       drizzle-orm:
         specifier: ^0.45.2
         version: 0.45.2(@electric-sql/pglite@0.5.4)(@types/pg@8.20.3)(pg@8.22.0)

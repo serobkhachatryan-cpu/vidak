@@ -16,6 +16,8 @@ import { CreatorVideoError } from './creator-video-errors';
 import { type CreatorVideoStore, PostgresCreatorVideoStore } from './creator-video-store';
 import { getW3dsDatabase } from './db/client';
 import { getW3dsAuthService, W3dsAuthError } from './w3ds-auth';
+import type { W3dsPrivateAdapterSyncService } from './w3ds-private-adapter-sync';
+import { getVidakPrivateAdapterSyncService } from './w3ds-private-adapter-sync';
 
 export { CreatorVideoError } from './creator-video-errors';
 export type { CreatorVideoStore } from './creator-video-store';
@@ -35,6 +37,12 @@ export interface CreatorVideoServiceOptions {
    */
   resolveUser?: (accessToken: string) => Promise<AuthUser>;
   createId?: () => string;
+  /**
+   * Optional Vidak-private adapter sync. Defaults to null (no sync).
+   * Production wiring via getCreatorVideoService() injects the shared service.
+   * Pass `null` explicitly in tests that must not touch sync.
+   */
+  privateAdapterSync?: W3dsPrivateAdapterSyncService | null;
 }
 
 /**
@@ -45,6 +53,7 @@ export class CreatorVideoService {
   private readonly store: CreatorVideoStore;
   private readonly resolveUser: (accessToken: string) => Promise<AuthUser>;
   private readonly createId: () => string;
+  private readonly privateAdapterSync: W3dsPrivateAdapterSyncService | null;
 
   constructor(options: CreatorVideoServiceOptions) {
     this.store = options.store;
@@ -55,6 +64,9 @@ export class CreatorVideoService {
         return session.user;
       });
     this.createId = options.createId ?? (() => randomUUID());
+    // Default null keeps unit tests isolated. Production wiring uses
+    // getCreatorVideoService() which injects getVidakPrivateAdapterSyncService().
+    this.privateAdapterSync = options.privateAdapterSync ?? null;
   }
 
   /** Idempotently provisions the caller's local creator channel. */
@@ -67,12 +79,14 @@ export class CreatorVideoService {
     const user = await this.requireUser(accessToken);
     const channel = await this.provisionChannel(user);
     const normalized = normalizeCreateDraftInput(input);
-    return this.store.createDraft({
+    const draft = await this.store.createDraft({
       id: this.createId(),
       channelId: channel.id,
       ownerId: user.id,
       ...normalized,
     });
+    await this.schedulePrivateVideoSync(draft, user.eName);
+    return draft;
   }
 
   async listDrafts(accessToken: string): Promise<Video[]> {
@@ -98,6 +112,7 @@ export class CreatorVideoService {
     if (!updated) {
       throw new CreatorVideoError('Video draft was not found.', 'not_found', 404);
     }
+    await this.schedulePrivateVideoSync(updated, user.eName);
     return updated;
   }
 
@@ -122,7 +137,13 @@ export class CreatorVideoService {
     if (!normalizedId) {
       throw new CreatorVideoError('Video was not found.', 'not_found', 404);
     }
-    return this.store.publishOwnedVideo(normalizedId, user.id, `pub_${this.createId()}`);
+    const published = await this.store.publishOwnedVideo(
+      normalizedId,
+      user.id,
+      `pub_${this.createId()}`,
+    );
+    await this.schedulePrivateVideoSync(published, user.eName);
+    return published;
   }
 
   /**
@@ -135,7 +156,9 @@ export class CreatorVideoService {
     if (!normalizedId) {
       throw new CreatorVideoError('Video was not found.', 'not_found', 404);
     }
-    return this.store.unpublishOwnedVideo(normalizedId, user.id);
+    const unpublished = await this.store.unpublishOwnedVideo(normalizedId, user.id);
+    await this.schedulePrivateVideoSync(unpublished, user.eName);
+    return unpublished;
   }
 
   /**
@@ -182,7 +205,7 @@ export class CreatorVideoService {
 
   private async provisionChannel(user: AuthUser): Promise<Channel> {
     const handle = channelHandleForUser(user);
-    return this.store.findOrCreateChannel({
+    const channel = await this.store.findOrCreateChannel({
       id: this.createId(),
       ownerId: user.id,
       handle,
@@ -191,6 +214,19 @@ export class CreatorVideoService {
         ? { avatarUrl: user.profile.avatarUrl ?? user.avatarUrl }
         : {}),
     });
+    await this.schedulePrivateChannelSync(channel, user.eName);
+    return channel;
+  }
+
+  /** Fail-soft private projection sync — never blocks product mutations. */
+  private async schedulePrivateChannelSync(channel: Channel, ownerEName: string): Promise<void> {
+    if (!this.privateAdapterSync) return;
+    await this.privateAdapterSync.syncChannelSafe({ channel, ownerEName });
+  }
+
+  private async schedulePrivateVideoSync(video: Video, ownerEName: string): Promise<void> {
+    if (!this.privateAdapterSync) return;
+    await this.privateAdapterSync.syncVideoSafe({ video, ownerEName });
   }
 
   private async requireOwnedDraft(videoId: string, ownerId: string): Promise<Video> {
@@ -211,6 +247,7 @@ export function getCreatorVideoService(): CreatorVideoService {
   if (!sharedService) {
     sharedService = new CreatorVideoService({
       store: new PostgresCreatorVideoStore(getW3dsDatabase()),
+      privateAdapterSync: getVidakPrivateAdapterSyncService(),
     });
   }
   return sharedService;

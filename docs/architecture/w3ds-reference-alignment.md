@@ -150,6 +150,12 @@ still required” are in place.
    pending until Ontology publishes those schemas.
 3. Sync local mutations through the adapter outbox; retries must not duplicate
    envelopes or overwrite remote ownership.
+   **Partial (Vidak-private only):** durable `w3ds_private_adapter_outbox` +
+   `w3ds_private_adapter_projections` sync Channel/Video against the private
+   catalogue when `W3DS_ONTOLOGY_MODE=vidak_private` and
+   `W3DS_ONTOLOGY_ADAPTER_ENABLED=true`. This path does **not** call MetaState
+   Ontology/eVault/Awareness and must not be treated as interoperable public
+   W3DS sync. MetaState remote outbox remains future work.
 
 ### Phase C — interoperable media
 
