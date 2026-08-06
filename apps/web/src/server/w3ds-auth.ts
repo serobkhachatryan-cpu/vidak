@@ -13,6 +13,10 @@ import {
   resolveCookieSecurityConfig,
   resolveServerNodeEnv,
 } from './server-config';
+import {
+  FilePersistedE2eW3dsAuthStore,
+  resetFilePersistedE2eW3dsAuthStoreForTests,
+} from './w3ds-auth-e2e-store';
 import { W3dsAuthError } from './w3ds-auth-errors';
 import {
   PostgresW3dsAuthStore,
@@ -972,7 +976,59 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 let service: W3dsAuthService | undefined;
 
+/**
+ * Non-production e2e stub: in-memory offers/sessions + identity verifier that
+ * never calls Registry/eVault. Hard-disabled when NODE_ENV=production.
+ */
+export function isW3dsAuthE2eStubEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.NODE_ENV !== 'production' && env.W3DS_AUTH_E2E_STUB === '1';
+}
+
+function createE2eStubAuthService(
+  env: Record<string, string | undefined> = process.env,
+): W3dsAuthService {
+  const jwtSecret = env.W3DS_AUTH_JWT_SECRET;
+  if (!jwtSecret || jwtSecret.length < 32) {
+    throw new W3dsAuthError(
+      'W3DS_AUTH_E2E_STUB requires W3DS_AUTH_JWT_SECRET with at least 32 characters.',
+      'configuration_error',
+      503,
+    );
+  }
+  return new W3dsAuthService({
+    config: {
+      platformName: env.W3DS_AUTH_PLATFORM_NAME?.trim() || 'vidak',
+      registryBaseUrl: env.W3DS_REGISTRY_BASE_URL?.trim() || 'http://127.0.0.1:9',
+      jwtSecret,
+    },
+    store: new FilePersistedE2eW3dsAuthStore(),
+    identityVerifier: {
+      async verify({ eName }) {
+        if (!eName.startsWith('@') || !eName.includes('.')) {
+          throw new W3dsAuthError('Identity verification failed.', 'invalid_signature', 401);
+        }
+        return {
+          eName,
+          eVaultId: 'e2e-evault',
+          eVaultUri: 'http://127.0.0.1:9/evault',
+        };
+      },
+    },
+  });
+}
+
 export function getW3dsAuthService(): W3dsAuthService {
+  if (isW3dsAuthE2eStubEnabled()) {
+    const globalState = globalThis as typeof globalThis & {
+      __vidakW3dsE2eAuthService?: W3dsAuthService;
+    };
+    // Survive Next.js module re-evaluation so offer + continue share one store.
+    globalState.__vidakW3dsE2eAuthService ??= createE2eStubAuthService();
+    return globalState.__vidakW3dsE2eAuthService;
+  }
+
   service ??= new W3dsAuthService({
     config: readW3dsAuthConfig(),
     store: new PostgresW3dsAuthStore(getW3dsDatabase()),
@@ -983,6 +1039,11 @@ export function getW3dsAuthService(): W3dsAuthService {
 /** Test helper to clear the process singleton between cases. */
 export function resetW3dsAuthServiceForTests(): void {
   service = undefined;
+  const globalState = globalThis as typeof globalThis & {
+    __vidakW3dsE2eAuthService?: W3dsAuthService;
+  };
+  delete globalState.__vidakW3dsE2eAuthService;
+  resetFilePersistedE2eW3dsAuthStoreForTests();
 }
 
 export function readW3dsAuthConfig(

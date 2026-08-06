@@ -246,6 +246,7 @@ export function readRequiredW3dsServerConfig(
   const registryBaseUrl = env.W3DS_REGISTRY_BASE_URL?.trim();
   const jwtSecret = env.W3DS_AUTH_JWT_SECRET;
   const databaseUrl = env.DATABASE_URL?.trim();
+  const e2eStub = resolveServerNodeEnv(env) !== 'production' && env.W3DS_AUTH_E2E_STUB === '1';
 
   if (!registryBaseUrl) {
     throw new ServerConfigError(
@@ -257,7 +258,7 @@ export function readRequiredW3dsServerConfig(
       `W3DS authentication requires W3DS_AUTH_JWT_SECRET with at least ${MIN_W3DS_JWT_SECRET_LENGTH} characters. Never expose this secret via NEXT_PUBLIC_*.`,
     );
   }
-  if (!databaseUrl) {
+  if (!databaseUrl && !e2eStub) {
     throw new ServerConfigError(
       'W3DS authentication requires DATABASE_URL for durable session persistence. Incomplete W3DS configuration cannot fall back to development authentication.',
     );
@@ -271,7 +272,8 @@ export function readRequiredW3dsServerConfig(
     platformName,
     registryBaseUrl,
     jwtSecret,
-    databaseUrl,
+    // E2E stub never opens this URL; auth uses an in-memory store instead.
+    databaseUrl: databaseUrl ?? 'postgresql://127.0.0.1/vidak-e2e-stub-unused',
     platformEVault,
     ontologyMode,
     ontologyAdapter,

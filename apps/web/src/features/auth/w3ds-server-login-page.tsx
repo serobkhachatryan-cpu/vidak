@@ -1,22 +1,12 @@
 import QRCode from 'qrcode';
 import { getW3dsAuthService, type LoginOffer } from '../../server/w3ds-auth';
+import { buildLoginPath, buildOfferContinuePath } from './auth-session-handoff';
 
 export interface W3dsServerLoginPageProps {
   publicOrigin: string;
   returnTo: string;
   errorMessage?: string;
   offerId?: string;
-}
-
-function loginHref(returnTo: string, offerId?: string): string {
-  const search = new URLSearchParams({ returnTo });
-  if (offerId) search.set('offer', offerId);
-  return `/login?${search.toString()}`;
-}
-
-function continueHref(offerId: string, returnTo: string): string {
-  const search = new URLSearchParams({ returnTo });
-  return `/api/auth/offer/${encodeURIComponent(offerId)}/continue?${search.toString()}`;
 }
 
 async function resolveOffer(publicOrigin: string, offerId?: string): Promise<LoginOffer> {
@@ -31,7 +21,8 @@ async function resolveOffer(publicOrigin: string, offerId?: string): Promise<Log
 /**
  * eID login that works even when the browser cannot use fetch or JavaScript.
  * A regular redirect polls the same server-side offer until the wallet callback
- * creates cookies and sends the user to their destination.
+ * completes; `/continue` sets cookies and `/auth/handoff` verifies them with an
+ * HTTP redirect to the destination.
  */
 export async function W3dsServerLoginPage({
   publicOrigin,
@@ -45,7 +36,7 @@ export async function W3dsServerLoginPage({
     margin: 1,
     width: 256,
   });
-  const pollUrl = continueHref(offer.offerId, returnTo);
+  const pollUrl = buildOfferContinuePath(offer.offerId, returnTo);
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-lg items-center px-6 py-12">
@@ -90,7 +81,7 @@ export async function W3dsServerLoginPage({
         </div>
 
         <a
-          href={loginHref(returnTo)}
+          href={buildLoginPath(returnTo)}
           className="block w-full rounded-md bg-primary px-4 py-2 text-center font-sans text-sm font-semibold text-primary-foreground hover:opacity-90"
         >
           Create a new eID request

@@ -168,6 +168,16 @@ describe('W3dsAuthClient', () => {
     await expect(client.restoreSession()).resolves.toBeNull();
   });
 
+  it('rethrows AbortError from cookie restore so React Query can cancel cleanly', async () => {
+    const fetchMock = vi.fn(async () => {
+      const error = new Error('aborted');
+      error.name = 'AbortError';
+      throw error;
+    });
+    const client = new W3dsAuthClient({ fetch: fetchMock as typeof fetch });
+    await expect(client.restoreSession()).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
   it('shares one refresh across concurrent 401s (single-flight)', async () => {
     let refreshCalls = 0;
     let meCalls = 0;

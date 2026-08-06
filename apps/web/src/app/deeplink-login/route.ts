@@ -1,4 +1,8 @@
 import { type NextRequest, NextResponse } from 'next/server';
+import {
+  buildAuthHandoffPath,
+  buildCookieHandoffHtml,
+} from '../../features/auth/auth-session-handoff';
 import { normalizeEidAuthPayload } from '../../server/eid-auth-transport';
 import { loadServerSecurityConfig, type ServerSecurityConfig } from '../../server/server-config';
 import { applyW3dsSessionCookies, getW3dsAuthService } from '../../server/w3ds-auth';
@@ -32,8 +36,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       normalizeEidAuthPayload(Object.fromEntries(request.nextUrl.searchParams)),
     );
     const session = await service.getOfferSessionForCookie(offerId);
-    const response = NextResponse.redirect(new URL('/', resolveDeeplinkPublicOrigin(request)));
-    response.headers.set('Cache-Control', 'no-store');
+    const handoffPath = buildAuthHandoffPath('/');
+    const response = new NextResponse(buildCookieHandoffHtml(handoffPath), {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
     applyW3dsSessionCookies(response.cookies, session);
     return response;
   } catch {

@@ -333,6 +333,45 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
       session.updatedAt = Date.now();
     }
   }
+
+  /** Test/e2e helper: export durable snapshot for cross-process stub stores. */
+  exportSnapshot(): {
+    offers: StoredOffer[];
+    users: AuthUser[];
+    sessions: StoredPlatformSession[];
+  } {
+    return {
+      offers: [...this.offersById.values()].map((offer) => ({ ...offer })),
+      users: [...this.usersById.values()].map(cloneUser),
+      sessions: [...this.sessionsById.values()].map(cloneSession),
+    };
+  }
+
+  /** Test/e2e helper: replace in-memory state from a durable snapshot. */
+  importSnapshot(snapshot: {
+    offers: StoredOffer[];
+    users: AuthUser[];
+    sessions: StoredPlatformSession[];
+  }): void {
+    this.offersById.clear();
+    this.offersBySessionId.clear();
+    this.usersByEName.clear();
+    this.usersById.clear();
+    this.sessionsById.clear();
+    for (const offer of snapshot.offers) {
+      const copy = { ...offer };
+      this.offersById.set(copy.id, copy);
+      this.offersBySessionId.set(copy.sessionId, copy);
+    }
+    for (const user of snapshot.users) {
+      const copy = cloneUser(user);
+      this.usersById.set(copy.id, copy);
+      this.usersByEName.set(copy.eName, copy);
+    }
+    for (const session of snapshot.sessions) {
+      this.sessionsById.set(session.id, cloneSession(session));
+    }
+  }
 }
 
 /** PostgreSQL-backed store shared across application instances. */

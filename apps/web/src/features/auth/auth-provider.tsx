@@ -20,13 +20,12 @@ import { Skeleton } from '@w3ds/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { createContext, type ReactNode, useContext, useEffect, useMemo } from 'react';
 import { authApiClient } from '../../lib/auth-api-client';
+import { getSafeReturnTo } from './auth-session-handoff';
 
-const authSessionQueryKey = ['auth', 'session'] as const;
+export const authSessionQueryKey = ['auth', 'session'] as const;
 const tokenStorage = createBrowserTokenStorage();
 
-export function getSafeReturnTo(returnTo: string | null): string {
-  return returnTo?.startsWith('/') && !returnTo.startsWith('//') ? returnTo : '/';
-}
+export { getSafeReturnTo };
 
 interface AuthenticationContextValue {
   user: AuthUser | undefined;
@@ -41,13 +40,12 @@ interface AuthenticationContextValue {
   updateSessionUser(user: AuthUser): void;
   createLoginChallenge(): Promise<LoginChallenge>;
   getLoginChallengeStatus(offerId: string): Promise<LoginChallengeStatus>;
-  acceptSession(session: AuthSession, remember?: boolean): Promise<AuthSession>;
 }
 
 const AuthenticationContext = createContext<AuthenticationContextValue | undefined>(undefined);
 
 async function restoreAuthSession(): Promise<AuthSession | null> {
-  if (authApiClient.capabilities.w3dsAuthChallenge) {
+  if (authApiClient.provider === 'w3ds') {
     return authApiClient.restoreSession();
   }
   return restoreStoredSession(authApiClient, tokenStorage);
@@ -58,8 +56,11 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
   const sessionQuery = useQuery({
     queryKey: authSessionQueryKey,
     queryFn: restoreAuthSession,
+    // Server layout seeds a verified cookie session into the query cache before
+    // paint. Keep that result until logout / explicit restore.
     staleTime: Number.POSITIVE_INFINITY,
     retry: false,
+    refetchOnWindowFocus: false,
   });
 
   const persist = (session: AuthSession, remember: boolean) => {
@@ -113,19 +114,6 @@ export function AuthenticationProvider({ children }: { children: ReactNode }) {
       },
       createLoginChallenge: () => authApiClient.createLoginChallenge(),
       getLoginChallengeStatus: (offerId) => authApiClient.getLoginChallengeStatus(offerId),
-      acceptSession: async (session, remember = true) => {
-        // Completing an eID offer sets HttpOnly cookies on the status response.
-        // Cancel a potentially in-flight anonymous restore before writing the
-        // completed session, then revalidate from those cookies. Otherwise a
-        // late `null` restore can overwrite the signed-in UI state.
-        if (session.provider === 'w3ds') {
-          await queryClient.cancelQueries({ queryKey: authSessionQueryKey });
-          const next = persist(session, remember);
-          await queryClient.invalidateQueries({ queryKey: authSessionQueryKey });
-          return queryClient.getQueryData<AuthSession | null>(authSessionQueryKey) ?? next;
-        }
-        return persist(session, remember);
-      },
     }),
     [
       loginMutation,
