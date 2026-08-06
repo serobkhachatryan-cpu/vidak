@@ -3,10 +3,12 @@ import {
   DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
   loadServerSecurityConfig,
   normalizeOrigin,
+  readW3dsOntologyMode,
   resolveCookieSecurityConfig,
   ServerConfigError,
   validateServerConfigAtStartup,
 } from './server-config';
+import { VIDAK_PRIVATE_SCHEMA_IDS } from './w3ds-private-ontology';
 
 const w3dsEnv = {
   AUTH_PROVIDER: 'w3ds',
@@ -27,6 +29,7 @@ describe('server security configuration', () => {
     });
     expect(config.authProvider).toBe('dev');
     expect(config.authProviderExplicit).toBe(false);
+    expect(config.ontologyMode).toBe('vidak_private');
     expect(config.w3ds).toBeNull();
     expect(config.cookies).toEqual({
       httpOnly: true,
@@ -35,6 +38,17 @@ describe('server security configuration', () => {
       path: '/',
     });
     expect(config.trustedOrigins).toEqual([]);
+  });
+
+  it('defaults Ontology mode to vidak_private and keeps metastate_official opt-in', () => {
+    expect(readW3dsOntologyMode({})).toBe('vidak_private');
+    expect(readW3dsOntologyMode({ W3DS_ONTOLOGY_MODE: 'vidak_private' })).toBe('vidak_private');
+    expect(readW3dsOntologyMode({ W3DS_ONTOLOGY_MODE: 'metastate_official' })).toBe(
+      'metastate_official',
+    );
+    expect(() => readW3dsOntologyMode({ W3DS_ONTOLOGY_MODE: 'other' })).toThrow(
+      /W3DS_ONTOLOGY_MODE must be/,
+    );
   });
 
   it('rejects missing AUTH_PROVIDER in production', () => {
@@ -175,13 +189,41 @@ describe('server security configuration', () => {
       NODE_ENV: 'production',
       ...w3dsEnv,
     });
+    expect(config.ontologyMode).toBe('vidak_private');
+    expect(config.w3ds?.ontologyMode).toBe('vidak_private');
     expect(config.w3ds?.ontologyAdapter).toBeNull();
   });
 
-  it('validates Ontology base URL and every entity schemaId when enabled', () => {
+  it('fills Vidak private Video domain schema IDs when ontology mode is vidak_private', () => {
     const config = loadServerSecurityConfig({
       NODE_ENV: 'production',
       ...w3dsEnv,
+      W3DS_ONTOLOGY_MODE: 'vidak_private',
+      W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
+      W3DS_ONTOLOGY_BASE_URL: 'https://vidak.example/api/w3ds/ontology',
+      W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'schema-profile-local',
+      W3DS_ADAPTER_MAPPING_VERSION: '2',
+    });
+
+    expect(config.ontologyMode).toBe('vidak_private');
+    expect(config.w3ds?.ontologyAdapter).toEqual({
+      ontologyBaseUrl: 'https://vidak.example/api/w3ds/ontology',
+      mappingVersion: 2,
+      schemaIds: {
+        profile: 'schema-profile-local',
+        channel: VIDAK_PRIVATE_SCHEMA_IDS.Channel,
+        video: VIDAK_PRIVATE_SCHEMA_IDS.Video,
+        playlist: VIDAK_PRIVATE_SCHEMA_IDS.Playlist,
+        comment: VIDAK_PRIVATE_SCHEMA_IDS.Comment,
+      },
+    });
+  });
+
+  it('validates Ontology base URL and every entity schemaId in metastate_official mode', () => {
+    const config = loadServerSecurityConfig({
+      NODE_ENV: 'production',
+      ...w3dsEnv,
+      W3DS_ONTOLOGY_MODE: 'metastate_official',
       W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
       W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
       W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'schema-profile',
@@ -192,6 +234,7 @@ describe('server security configuration', () => {
       W3DS_ADAPTER_MAPPING_VERSION: '2',
     });
 
+    expect(config.ontologyMode).toBe('metastate_official');
     expect(config.w3ds?.ontologyAdapter).toEqual({
       ontologyBaseUrl: `${DOCUMENTED_W3DS_ONTOLOGY_BASE_URL}/`,
       mappingVersion: 2,
@@ -210,6 +253,7 @@ describe('server security configuration', () => {
       loadServerSecurityConfig({
         NODE_ENV: 'production',
         ...w3dsEnv,
+        W3DS_ONTOLOGY_MODE: 'metastate_official',
         W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
         W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
       }),
@@ -219,6 +263,7 @@ describe('server security configuration', () => {
       loadServerSecurityConfig({
         NODE_ENV: 'production',
         ...w3dsEnv,
+        W3DS_ONTOLOGY_MODE: 'metastate_official',
         W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
         W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
         W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'TODO',
@@ -228,6 +273,21 @@ describe('server security configuration', () => {
         W3DS_ONTOLOGY_SCHEMA_ID_COMMENT: 'schema-comment',
       }),
     ).toThrow(/placeholder schema IDs/);
+
+    expect(() =>
+      loadServerSecurityConfig({
+        NODE_ENV: 'production',
+        ...w3dsEnv,
+        W3DS_ONTOLOGY_MODE: 'metastate_official',
+        W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
+        W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
+        W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'schema-profile',
+        W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL: VIDAK_PRIVATE_SCHEMA_IDS.Channel,
+        W3DS_ONTOLOGY_SCHEMA_ID_VIDEO: VIDAK_PRIVATE_SCHEMA_IDS.Video,
+        W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST: VIDAK_PRIVATE_SCHEMA_IDS.Playlist,
+        W3DS_ONTOLOGY_SCHEMA_ID_COMMENT: VIDAK_PRIVATE_SCHEMA_IDS.Comment,
+      }),
+    ).toThrow(/rejects Vidak private schema IDs/);
   });
 
   it('does not treat NEXT_PUBLIC_AUTH_PROVIDER as an explicit production provider', () => {

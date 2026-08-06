@@ -1,0 +1,59 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vidak.local/private-ontology/v1/Comment.schema.json",
+  "$comment": "PRIVATE Vidak-owned ontology schema (Comment). schemaId is a stable Vidak catalogue identifier — not a MetaState-issued W3ID and not a canonical public W3DS schema.",
+  "schemaId": "vidak:private:ontology:v1:comment",
+  "title": "Comment",
+  "description": "PRIVATE Vidak-owned draft-07 Comment schema for platform-local W3DS-compatible use. Owned by the comment author's eName. Threading uses optional parentId references to other Comment MetaEnvelopes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "ownerEName", "videoId", "body", "createdAt"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "description": "MetaEnvelope object id within the owner eVault (local W3ID / UUID)."
+    },
+    "ownerEName": {
+      "type": "string",
+      "pattern": "^@[^\\s@]+$",
+      "description": "Author eName (comment owner). Mapping Rules ownerEnamePath resolves to this identity."
+    },
+    "videoId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Reference to the Video MetaEnvelope object id being commented on."
+    },
+    "parentId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional parent Comment MetaEnvelope object id for replies."
+    },
+    "body": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 10000
+    },
+    "visibility": {
+      "type": "string",
+      "enum": ["public", "unlisted", "private"],
+      "description": "Optional comment visibility when synchronized; defaults to public in product UX."
+    },
+    "createdAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "likeCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "replyCount": {
+      "type": "integer",
+      "minimum": 0
+    }
+  }
+}

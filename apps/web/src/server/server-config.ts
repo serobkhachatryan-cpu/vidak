@@ -13,6 +13,7 @@ import {
 } from './media-limits';
 import { resolveLocalMediaStorageRoot } from './media-storage';
 import type { W3dsAdapterEntityType } from './w3ds-adapter-types';
+import { VIDAK_PRIVATE_SCHEMA_IDS } from './w3ds-private-ontology';
 
 export const MIN_W3DS_JWT_SECRET_LENGTH = 32;
 
@@ -20,8 +21,17 @@ export const MIN_W3DS_JWT_SECRET_LENGTH = 32;
  * Documented Ontology production base URL (Ontology HTML / Links).
  * Operators may set W3DS_ONTOLOGY_BASE_URL to this value; schemaIds must still
  * come from GET /schemas and must not be guessed.
+ * `metastate_official` mode stays disabled unless W3DS_ONTOLOGY_MODE is set
+ * explicitly — default platform catalogue mode is `vidak_private`.
  */
 export const DOCUMENTED_W3DS_ONTOLOGY_BASE_URL = 'https://ontology.w3ds.metastate.foundation';
+
+/**
+ * Which Ontology catalogue the platform is configured to consume.
+ * - `vidak_private` (default): Vidak-owned private catalogue at /api/w3ds/ontology
+ * - `metastate_official`: MetaState production Ontology (explicit opt-in only)
+ */
+export type W3dsOntologyMode = 'vidak_private' | 'metastate_official';
 
 export type ServerNodeEnv = 'development' | 'production' | 'test';
 
@@ -38,6 +48,11 @@ export interface W3dsServerConfig {
    * (and its signing keys) is never reused as the platform eVault.
    */
   platformEVault: W3dsPlatformEVaultConfig | null;
+  /**
+   * Ontology catalogue selection. Defaults to Vidak private; MetaState official
+   * requires an explicit W3DS_ONTOLOGY_MODE=metastate_official.
+   */
+  ontologyMode: W3dsOntologyMode;
   /**
    * Ontology + Web3 Adapter mapping foundation. Opt-in and fail-closed until
    * the Ontology base URL and every entity schemaId are supplied explicitly.
@@ -81,6 +96,11 @@ export interface ServerSecurityConfig {
   authProvider: AuthProviderId;
   /** Explicit server AUTH_PROVIDER was set (not inferred from defaults). */
   authProviderExplicit: boolean;
+  /**
+   * Ontology catalogue mode for platform consumption.
+   * Defaults to `vidak_private`. `metastate_official` is disabled unless set.
+   */
+  ontologyMode: W3dsOntologyMode;
   w3ds: W3dsServerConfig | null;
   cookies: CookieSecurityConfig;
   /** Canonical app origin and any additional trusted browser origins. */
@@ -135,6 +155,7 @@ export function loadServerSecurityConfig(
   const processEnv = env as NodeJS.ProcessEnv;
   const mediaUploadLimits = resolveMediaUploadLimits(processEnv);
   const mediaStorageRoot = resolveLocalMediaStorageRoot(processEnv);
+  const ontologyMode = readW3dsOntologyMode(env);
 
   if (authProvider === 'w3ds') {
     const w3ds = readRequiredW3dsServerConfig(env);
@@ -142,6 +163,7 @@ export function loadServerSecurityConfig(
       nodeEnv,
       authProvider,
       authProviderExplicit,
+      ontologyMode,
       w3ds,
       cookies,
       trustedOrigins,
@@ -155,6 +177,7 @@ export function loadServerSecurityConfig(
     nodeEnv,
     authProvider,
     authProviderExplicit,
+    ontologyMode,
     w3ds: tryReadW3dsServerConfig(env),
     cookies,
     trustedOrigins,
@@ -241,7 +264,8 @@ export function readRequiredW3dsServerConfig(
   }
 
   const platformEVault = readPlatformEVaultConfig(env, platformName);
-  const ontologyAdapter = readOntologyAdapterConfig(env);
+  const ontologyMode = readW3dsOntologyMode(env);
+  const ontologyAdapter = readOntologyAdapterConfig(env, ontologyMode);
 
   return {
     platformName,
@@ -249,11 +273,28 @@ export function readRequiredW3dsServerConfig(
     jwtSecret,
     databaseUrl,
     platformEVault,
+    ontologyMode,
     ontologyAdapter,
     ...(env.W3DS_AUTH_MIN_WALLET_VERSION?.trim()
       ? { minimumWalletVersion: env.W3DS_AUTH_MIN_WALLET_VERSION.trim() }
       : {}),
   };
+}
+
+/**
+ * Reads Ontology catalogue mode.
+ * Default is `vidak_private` (Vidak-owned private catalogue).
+ * `metastate_official` remains disabled unless operators set it explicitly.
+ */
+export function readW3dsOntologyMode(
+  env: Record<string, string | undefined> = process.env,
+): W3dsOntologyMode {
+  const raw = env.W3DS_ONTOLOGY_MODE?.trim();
+  if (!raw || raw === 'vidak_private') return 'vidak_private';
+  if (raw === 'metastate_official') return 'metastate_official';
+  throw new ServerConfigError(
+    'W3DS_ONTOLOGY_MODE must be "vidak_private" or "metastate_official".',
+  );
 }
 
 /**
@@ -315,9 +356,15 @@ function readPlatformEVaultConfig(
  * Reads Ontology + adapter schema configuration.
  * Remains off until explicitly enabled so authentication and platform eVault
  * bootstrap can deploy independently of Video/Channel ontology contracts.
+ *
+ * In `vidak_private` mode, Video/Channel/Playlist/Comment schema IDs default to
+ * the immutable Vidak private catalogue IDs (not MetaState W3IDs).
+ * In `metastate_official` mode, every schema ID must be supplied explicitly and
+ * must not use Vidak private IDs.
  */
 function readOntologyAdapterConfig(
   env: Record<string, string | undefined>,
+  ontologyMode: W3dsOntologyMode,
 ): W3dsOntologyAdapterConfig | null {
   const enabledValue = env.W3DS_ONTOLOGY_ADAPTER_ENABLED?.trim();
   if (!enabledValue || enabledValue === 'false') return null;
@@ -338,32 +385,91 @@ function readOntologyAdapterConfig(
     );
   }
 
+  const profile = requireSchemaId(
+    env.W3DS_ONTOLOGY_SCHEMA_ID_PROFILE,
+    'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PROFILE.',
+  );
+
+  if (ontologyMode === 'vidak_private') {
+    return {
+      ontologyBaseUrl,
+      mappingVersion,
+      schemaIds: {
+        profile,
+        channel: resolvePrivateOrConfiguredSchemaId(
+          env.W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL,
+          VIDAK_PRIVATE_SCHEMA_IDS.Channel,
+          'CHANNEL',
+        ),
+        video: resolvePrivateOrConfiguredSchemaId(
+          env.W3DS_ONTOLOGY_SCHEMA_ID_VIDEO,
+          VIDAK_PRIVATE_SCHEMA_IDS.Video,
+          'VIDEO',
+        ),
+        playlist: resolvePrivateOrConfiguredSchemaId(
+          env.W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST,
+          VIDAK_PRIVATE_SCHEMA_IDS.Playlist,
+          'PLAYLIST',
+        ),
+        comment: resolvePrivateOrConfiguredSchemaId(
+          env.W3DS_ONTOLOGY_SCHEMA_ID_COMMENT,
+          VIDAK_PRIVATE_SCHEMA_IDS.Comment,
+          'COMMENT',
+        ),
+      },
+    };
+  }
+
+  // metastate_official — explicit MetaState catalogue only.
+  const schemaIds = {
+    profile,
+    channel: requireSchemaId(
+      env.W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL,
+      'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL.',
+    ),
+    video: requireSchemaId(
+      env.W3DS_ONTOLOGY_SCHEMA_ID_VIDEO,
+      'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_VIDEO.',
+    ),
+    playlist: requireSchemaId(
+      env.W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST,
+      'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST.',
+    ),
+    comment: requireSchemaId(
+      env.W3DS_ONTOLOGY_SCHEMA_ID_COMMENT,
+      'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_COMMENT.',
+    ),
+  };
+
+  for (const [entity, schemaId] of Object.entries(schemaIds)) {
+    if (schemaId.startsWith('vidak:private:')) {
+      throw new ServerConfigError(
+        `W3DS_ONTOLOGY_MODE=metastate_official rejects Vidak private schema IDs for ${entity} ("${schemaId}").`,
+      );
+    }
+  }
+
   return {
     ontologyBaseUrl,
     mappingVersion,
-    schemaIds: {
-      profile: requireSchemaId(
-        env.W3DS_ONTOLOGY_SCHEMA_ID_PROFILE,
-        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PROFILE.',
-      ),
-      channel: requireSchemaId(
-        env.W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL,
-        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL.',
-      ),
-      video: requireSchemaId(
-        env.W3DS_ONTOLOGY_SCHEMA_ID_VIDEO,
-        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_VIDEO.',
-      ),
-      playlist: requireSchemaId(
-        env.W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST,
-        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST.',
-      ),
-      comment: requireSchemaId(
-        env.W3DS_ONTOLOGY_SCHEMA_ID_COMMENT,
-        'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_COMMENT.',
-      ),
-    },
+    schemaIds,
   };
+}
+
+function resolvePrivateOrConfiguredSchemaId(
+  configured: string | undefined,
+  privateId: string,
+  envSuffix: string,
+): string {
+  const trimmed = configured?.trim();
+  if (!trimmed) return privateId;
+  const normalized = requireSchemaId(trimmed, `W3DS_ONTOLOGY_SCHEMA_ID_${envSuffix} is invalid.`);
+  if (normalized !== privateId) {
+    throw new ServerConfigError(
+      `W3DS_ONTOLOGY_MODE=vidak_private requires W3DS_ONTOLOGY_SCHEMA_ID_${envSuffix} to be "${privateId}" (Vidak-owned private ID) or omitted.`,
+    );
+  }
+  return normalized;
 }
 
 function requireSchemaId(value: string | undefined, message: string): string {
