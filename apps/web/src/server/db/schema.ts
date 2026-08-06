@@ -280,10 +280,14 @@ export const w3dsAdapterMappings = pgTable(
     /** Local Postgres table / entity collection name (e.g. videos). */
     entityTable: text('entity_table').notNull(),
     localId: text('local_id').notNull(),
-    /** Global MetaEnvelope id returned by eVault store/update. */
+    /**
+     * Stable private projection / envelope id (Vidak-private sync) or remote
+     * MetaEnvelope id (future MetaState path). Never treat private IDs as
+     * MetaState-issued.
+     */
     globalId: text('global_id').notNull(),
     ownerEName: text('owner_e_name').notNull(),
-    /** Ontology schemaId (W3ID) that typed the MetaEnvelope. */
+    /** Ontology schemaId that typed the projection / envelope. */
     schemaId: text('schema_id').notNull(),
     mappingVersion: integer('mapping_version').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
@@ -301,6 +305,82 @@ export const w3dsAdapterMappings = pgTable(
   ],
 );
 
+/**
+ * Durable Vidak-private ontology projections.
+ * Server-only — not MetaState MetaEnvelopes and not interoperable public W3DS data.
+ */
+export type W3dsPrivateAdapterEntityType = 'channel' | 'video' | 'playlist' | 'comment';
+export type W3dsPrivateAdapterSyncStatus = 'pending' | 'synced' | 'failed';
+export type W3dsPrivateAdapterSyncOperation = 'upsert';
+
+export const w3dsPrivateAdapterProjections = pgTable(
+  'w3ds_private_adapter_projections',
+  {
+    id: text('id').primaryKey(),
+    entityType: text('entity_type').$type<W3dsPrivateAdapterEntityType>().notNull(),
+    localId: text('local_id').notNull(),
+    globalId: text('global_id').notNull(),
+    schemaId: text('schema_id').notNull(),
+    ownerEName: text('owner_e_name').notNull(),
+    /** Always vidak_private — never MetaState / public W3DS ownership. */
+    ownership: text('ownership').notNull().default('vidak_private'),
+    /** Catalogue visibility label (private); distinct from entity visibility. */
+    catalogueVisibility: text('catalogue_visibility').notNull().default('private'),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    payloadHash: text('payload_hash').notNull(),
+    mappingVersion: integer('mapping_version').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('w3ds_private_adapter_projections_entity_type_local_id_uidx').on(
+      table.entityType,
+      table.localId,
+    ),
+    uniqueIndex('w3ds_private_adapter_projections_global_id_uidx').on(table.globalId),
+    index('w3ds_private_adapter_projections_schema_id_idx').on(table.schemaId),
+    index('w3ds_private_adapter_projections_owner_e_name_idx').on(table.ownerEName),
+    index('w3ds_private_adapter_projections_sync_lookup_idx').on(
+      table.entityType,
+      table.payloadHash,
+    ),
+  ],
+);
+
+/**
+ * Retry-safe outbox for Vidak-private adapter sync.
+ * No remote W3DS calls — processes durable local projections only.
+ */
+export const w3dsPrivateAdapterOutbox = pgTable(
+  'w3ds_private_adapter_outbox',
+  {
+    id: text('id').primaryKey(),
+    entityType: text('entity_type').$type<W3dsPrivateAdapterEntityType>().notNull(),
+    localId: text('local_id').notNull(),
+    operation: text('operation').$type<W3dsPrivateAdapterSyncOperation>().notNull(),
+    syncStatus: text('sync_status').$type<W3dsPrivateAdapterSyncStatus>().notNull(),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastAttemptedAt: timestamp('last_attempted_at', { withTimezone: true, mode: 'date' }),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true, mode: 'date' }),
+    /** Safe, non-secret failure summary only. */
+    failureReason: text('failure_reason'),
+    correlationId: text('correlation_id'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('w3ds_private_adapter_outbox_entity_type_local_id_uidx').on(
+      table.entityType,
+      table.localId,
+    ),
+    index('w3ds_private_adapter_outbox_status_idx').on(table.syncStatus),
+    index('w3ds_private_adapter_outbox_entity_type_status_idx').on(
+      table.entityType,
+      table.syncStatus,
+    ),
+  ],
+);
+
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
 export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
@@ -310,3 +390,5 @@ export type VideoRow = typeof videos.$inferSelect;
 export type MediaAssetRow = typeof mediaAssets.$inferSelect;
 export type W3dsAuthorizationSyncRow = typeof w3dsAuthorizationSync.$inferSelect;
 export type W3dsAdapterMappingRow = typeof w3dsAdapterMappings.$inferSelect;
+export type W3dsPrivateAdapterProjectionRow = typeof w3dsPrivateAdapterProjections.$inferSelect;
+export type W3dsPrivateAdapterOutboxRow = typeof w3dsPrivateAdapterOutbox.$inferSelect;

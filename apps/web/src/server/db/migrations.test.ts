@@ -17,6 +17,8 @@ const requiredTables = [
   'media_assets',
   'w3ds_authorization_sync',
   'w3ds_adapter_mappings',
+  'w3ds_private_adapter_projections',
+  'w3ds_private_adapter_outbox',
 ] as const;
 
 const requiredIndexes = [
@@ -49,6 +51,15 @@ const requiredIndexes = [
   'w3ds_adapter_mappings_owner_e_name_idx',
   'w3ds_adapter_mappings_schema_id_idx',
   'w3ds_adapter_mappings_entity_table_local_id_idx',
+  // Vidak-private adapter sync
+  'w3ds_private_adapter_projections_entity_type_local_id_uidx',
+  'w3ds_private_adapter_projections_global_id_uidx',
+  'w3ds_private_adapter_projections_schema_id_idx',
+  'w3ds_private_adapter_projections_owner_e_name_idx',
+  'w3ds_private_adapter_projections_sync_lookup_idx',
+  'w3ds_private_adapter_outbox_entity_type_local_id_uidx',
+  'w3ds_private_adapter_outbox_status_idx',
+  'w3ds_private_adapter_outbox_entity_type_status_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -90,7 +101,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(7);
+    expect(applied.rows).toHaveLength(8);
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -162,6 +173,42 @@ describe('database migrations (empty database → current set)', () => {
         'updated_at',
       ]),
     );
+
+    const privateProjectionColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'w3ds_private_adapter_projections'
+       order by 1`,
+    );
+    expect(privateProjectionColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'entity_type',
+        'local_id',
+        'global_id',
+        'schema_id',
+        'owner_e_name',
+        'ownership',
+        'catalogue_visibility',
+        'payload',
+        'payload_hash',
+        'mapping_version',
+      ]),
+    );
+
+    const privateOutboxColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'w3ds_private_adapter_outbox'
+       order by 1`,
+    );
+    expect(privateOutboxColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'entity_type',
+        'local_id',
+        'operation',
+        'sync_status',
+        'attempt_count',
+        'failure_reason',
+      ]),
+    );
   });
 
   it('is idempotent when migrate is invoked twice on the same empty-started database', async () => {
@@ -173,6 +220,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(7);
+    expect(Number(applied.rows[0]?.count)).toBe(8);
   });
 });

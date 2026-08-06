@@ -86,6 +86,33 @@ W3DS_ONTOLOGY_MODE=vidak_private
 
 (or omit `W3DS_ONTOLOGY_MODE` — default is `vidak_private`).
 
+## Vidak-private adapter sync (platform-local only)
+
+**Status:** implemented for currently persisted Video + Channel entities  
+**Scope:** Vidak-private sync only — not MetaState Ontology, not MetaState eVault
+writes, not Awareness/ACL/webhooks, and not remote `w3ds://file` generation.
+
+When **both** are configured:
+
+1. `W3DS_ONTOLOGY_MODE=vidak_private` (default), and
+2. `W3DS_ONTOLOGY_ADAPTER_ENABLED=true` with `W3DS_ONTOLOGY_BASE_URL` pointing at
+   this private catalogue (plus a Profile schema ID),
+
+the server writes durable private projections + adapter mappings for Channel and
+Video create/update/publish/unpublish lifecycle events. Sync is:
+
+- server-side only (no new public mutation endpoints for sync);
+- idempotent and retry-safe via `w3ds_private_adapter_outbox`;
+- fail-soft on product mutations (errors are redacted into ops logs / outbox);
+- labelled `ownership: vidak_private` — never represented as MetaState-issued or
+  interoperable public W3DS data.
+
+Playlist and Comment private schemas are catalogue-ready and unit-tested, but
+product tables are not persisted yet, so there are no lifecycle hooks for them.
+
+`metastate_official` remains unchanged and does **not** activate this private
+sync path.
+
 ## Interoperability limitations (explicit)
 
 1. **Not canonical W3DS Ontology.** Other W3DS platforms and MetaState services
@@ -101,6 +128,9 @@ W3DS_ONTOLOGY_MODE=vidak_private
    catalogue is the Vidak-owned runtime source of truth for platform-local use.
 6. **`metastate_official` is opt-in** and rejects Vidak private IDs so the two
    modes cannot be silently mixed.
+7. **Private adapter sync is not public W3DS federation.** Durable projections
+   stay on the Vidak platform; they do not call MetaState Ontology/eVault or
+   publish Awareness packets.
 
 ## Source layout
 
@@ -109,4 +139,6 @@ W3DS_ONTOLOGY_MODE=vidak_private
 | `apps/web/src/server/w3ds-private-ontology/schemas/*.schema.json` | Versioned draft-07 documents with Vidak `schemaId` |
 | `apps/web/src/server/w3ds-private-ontology/` | Catalogue service + immutable ID constants |
 | `apps/web/src/app/api/w3ds/ontology/schemas/` | Next.js route handlers |
+| `apps/web/src/server/w3ds-private-adapter-sync.ts` | Durable private projection + outbox sync |
+| `apps/web/drizzle/0007_private_adapter_sync.sql` | Projections + outbox tables |
 | `docs/architecture/w3ds-private-ontology.md` | This boundary document |

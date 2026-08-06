@@ -26,6 +26,8 @@
     "@w3ds/upload-page": "workspace:*",
     "@w3ds/user-profile-page": "workspace:*",
     "@w3ds/watch-page": "workspace:*",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "drizzle-orm": "^0.45.2",
     "next": "latest",
     "pg": "^8.22.0",
