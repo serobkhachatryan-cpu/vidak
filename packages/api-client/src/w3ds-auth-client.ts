@@ -51,12 +51,17 @@ export class W3dsAuthClient implements AuthClient {
   readonly capabilities: AuthProviderCapabilities = getAuthProviderCapabilities('w3ds');
 
   private readonly baseUrl: string;
-  private readonly fetchImpl: typeof fetch;
+  private readonly configuredFetch: typeof fetch | undefined;
   private refreshInFlight: Promise<AuthSession> | undefined;
 
   constructor(options: W3dsAuthClientOptions = {}) {
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? '');
-    this.fetchImpl = options.fetch ?? fetch;
+    this.configuredFetch = options.fetch;
+  }
+
+  private fetchImpl(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    const fetchFn = this.configuredFetch ?? globalThis.fetch.bind(globalThis);
+    return fetchFn(input, init);
   }
 
   async createLoginChallenge(): Promise<LoginChallenge> {
@@ -76,7 +81,9 @@ export class W3dsAuthClient implements AuthClient {
   async restoreSession(): Promise<AuthSession | null> {
     try {
       return await this.requestJson<AuthSession>('/api/auth/session');
-    } catch {
+    } catch (error) {
+      // Let React Query treat cancellations as cancellations — not anonymous.
+      if (error instanceof Error && error.name === 'AbortError') throw error;
       return null;
     }
   }

@@ -8,6 +8,7 @@
       "!**/dist",
       "!**/storybook-static",
       "!**/node_modules",
+      "!**/.data",
       "!**/next-env.d.ts",
       "!test-results",
       "!packages/design-tokens/src/styles.css",

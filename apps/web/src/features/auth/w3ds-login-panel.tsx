@@ -2,9 +2,9 @@
 
 import { AuthenticationError } from '@w3ds/auth';
 import { Button, Text } from '@w3ds/ui';
-import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthentication } from './auth-provider';
+import { buildOfferContinuePath } from './auth-session-handoff';
 import { SignInQr } from './sign-in-qr';
 import {
   initialW3dsLoginState,
@@ -26,18 +26,15 @@ function errorMessage(error: unknown) {
 }
 
 export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
-  const { createLoginChallenge, getLoginChallengeStatus, acceptSession } = useAuthentication();
-  const router = useRouter();
+  const { createLoginChallenge, getLoginChallengeStatus } = useAuthentication();
   const [state, setState] = useState<W3dsLoginUiState>(initialW3dsLoginState);
   const pollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const completedRef = useRef(false);
   const createLoginChallengeRef = useRef(createLoginChallenge);
   const getLoginChallengeStatusRef = useRef(getLoginChallengeStatus);
-  const acceptSessionRef = useRef(acceptSession);
 
   createLoginChallengeRef.current = createLoginChallenge;
   getLoginChallengeStatusRef.current = getLoginChallengeStatus;
-  acceptSessionRef.current = acceptSession;
 
   const clearPoll = useCallback(() => {
     if (pollTimer.current !== undefined) {
@@ -88,8 +85,9 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
         if (next.kind === 'completed' && !completedRef.current) {
           completedRef.current = true;
           clearPoll();
-          await acceptSessionRef.current(next.session);
-          router.replace(returnTo);
+          // Always finish through the cookie-producing continuation, then the
+          // handoff page verifies GET /api/auth/session before returnTo.
+          window.location.assign(buildOfferContinuePath(challenge.offerId, returnTo));
           return;
         }
 
@@ -106,7 +104,7 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
     }, w3dsLoginPollIntervalMs);
 
     return clearPoll;
-  }, [clearPoll, pendingExpiresAt, pendingOfferId, pendingSignInUri, returnTo, router]);
+  }, [clearPoll, pendingExpiresAt, pendingOfferId, pendingSignInUri, returnTo]);
 
   const statusMessage = w3dsLoginStatusMessage(state);
   const challenge =

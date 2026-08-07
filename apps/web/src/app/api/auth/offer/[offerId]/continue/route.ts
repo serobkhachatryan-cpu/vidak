@@ -1,5 +1,10 @@
 import { NextResponse } from 'next/server';
 import {
+  buildAuthHandoffPath,
+  buildCookieHandoffHtml,
+  getSafeReturnTo,
+} from '../../../../../../features/auth/auth-session-handoff';
+import {
   loadServerSecurityConfig,
   type ServerSecurityConfig,
 } from '../../../../../../server/server-config';
@@ -10,10 +15,6 @@ import {
 } from '../../../../../../server/w3ds-auth';
 
 export const runtime = 'nodejs';
-
-function safeReturnTo(value: string | null): string {
-  return value?.startsWith('/') && !value.startsWith('//') ? value : '/';
-}
 
 export function resolveContinuePublicOrigin(
   request: Request,
@@ -41,7 +42,7 @@ function loginRedirect(
  */
 export async function GET(request: Request, { params }: { params: Promise<{ offerId: string }> }) {
   const { offerId } = await params;
-  const returnTo = safeReturnTo(new URL(request.url).searchParams.get('returnTo'));
+  const returnTo = getSafeReturnTo(new URL(request.url).searchParams.get('returnTo'));
 
   try {
     const service = getW3dsAuthService();
@@ -51,9 +52,17 @@ export async function GET(request: Request, { params }: { params: Promise<{ offe
       return loginRedirect(request, undefined, returnTo);
     }
 
+    // Set cookies on a 200 HTML response, then meta-refresh to handoff. Cookies
+    // set on a 3xx are not always sent on the immediate next hop.
     const session = await service.getOfferSessionForCookie(offerId);
-    const response = NextResponse.redirect(new URL(returnTo, resolveContinuePublicOrigin(request)));
-    response.headers.set('Cache-Control', 'no-store');
+    const handoffPath = buildAuthHandoffPath(returnTo);
+    const response = new NextResponse(buildCookieHandoffHtml(handoffPath), {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-store',
+      },
+    });
     applyW3dsSessionCookies(response.cookies, session);
     return response;
   } catch (error) {
