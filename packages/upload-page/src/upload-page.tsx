@@ -7,13 +7,14 @@ import type {
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
-import { AppShell, type AppShellProps, Button, Heading, Page } from '@w3ds/ui';
+import { AppShell, type AppShellProps, Button, Heading, Page, Text } from '@w3ds/ui';
 import { type ReactNode, useId, useState } from 'react';
 import { AttachedMediaAsset } from './steps/attached-media-asset';
 import { PublishConfirmationStep } from './steps/publish-confirmation-step';
 import { SelectVideoStep } from './steps/select-video-step';
 import { ThumbnailStep } from './steps/thumbnail-step';
 import {
+  type UploadProgressErrorKind,
   type UploadProgressStatus,
   UploadProgressStep,
   type UploadProgressView,
@@ -21,7 +22,12 @@ import {
 import { VideoDetailsStep, type VideoDetailsValue } from './steps/video-details-step';
 import { VisibilityStep } from './steps/visibility-step';
 import { cx } from './styles';
-import { canNavigateToUploadStep, type UploadStepId, uploadStepLabels } from './upload-constants';
+import {
+  canNavigateToUploadStep,
+  formatBytes,
+  type UploadStepId,
+  uploadStepLabels,
+} from './upload-constants';
 import { UploadStepper } from './upload-stepper';
 import type { UploadDetailsErrors } from './upload-validation';
 
@@ -57,8 +63,10 @@ export interface UploadPageProps {
   uploadStatus?: UploadProgressStatus;
   progress?: UploadProgressView;
   uploadError?: string;
+  uploadErrorKind?: UploadProgressErrorKind;
   onCancelUpload?: () => void;
   onRetryUpload?: () => void;
+  onEditDraftFromUpload?: () => void;
   mediaAsset?: DraftMediaAsset;
   mediaPreviewSrc?: string;
   isRemovingMedia?: boolean;
@@ -118,8 +126,10 @@ export function UploadPage({
   uploadStatus,
   progress,
   uploadError,
+  uploadErrorKind,
   onCancelUpload,
   onRetryUpload,
+  onEditDraftFromUpload,
   mediaAsset,
   mediaPreviewSrc,
   isRemovingMedia,
@@ -191,8 +201,10 @@ export function UploadPage({
           {...(uploadStatus !== undefined ? { status: uploadStatus } : {})}
           {...(progress !== undefined ? { progress } : {})}
           {...(uploadError !== undefined ? { error: uploadError } : {})}
+          {...(uploadErrorKind !== undefined ? { errorKind: uploadErrorKind } : {})}
           {...(onCancelUpload ? { onCancel: onCancelUpload } : {})}
           {...(onRetryUpload ? { onRetry: onRetryUpload } : {})}
+          {...(onEditDraftFromUpload ? { onEditDraft: onEditDraftFromUpload } : {})}
           {...(mediaAsset !== undefined ? { mediaAsset } : {})}
           {...(mediaPreviewSrc !== undefined ? { mediaPreviewSrc } : {})}
           {...(isRemovingMedia !== undefined ? { isRemovingMedia } : {})}
@@ -204,6 +216,22 @@ export function UploadPage({
     case 'details':
       body = (
         <div className="space-y-5">
+          {fileName && !mediaAsset && (
+            <div className="space-y-1" role="status">
+              <Text size="sm">
+                Selected: {fileName}
+                {fileSize !== undefined ? ` (${formatBytes(fileSize)})` : ''}
+              </Text>
+              <Text
+                size="sm"
+                tone={fileError ? 'danger' : 'muted'}
+                {...(fileError ? { role: 'alert' } : {})}
+              >
+                {fileError ??
+                  'Save your draft before uploading. Complete the required details, then save to start the upload.'}
+              </Text>
+            </div>
+          )}
           {mediaAsset && (
             <AttachedMediaAsset
               asset={mediaAsset}

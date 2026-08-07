@@ -131,6 +131,42 @@ describe('W3dsVideoApiClient', () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it('binds globalThis.fetch so unbound window.fetch does not block draft create', async () => {
+    const draft = {
+      id: 'draft-bound',
+      channelId: 'channel-1',
+      title: 'Bound fetch',
+      description: '',
+      thumbnailUrl: '',
+      durationSeconds: 0,
+      status: 'draft' as const,
+      visibility: 'private' as const,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      viewCount: 0,
+      likeCount: 0,
+      commentCount: 0,
+      tags: [] as string[],
+    };
+    const fetchMock = vi.fn(async () => jsonResponse(draft, 201));
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock as typeof fetch;
+    try {
+      // Production path: no injected fetch. Must not capture an unbound `fetch` reference.
+      const client = new W3dsVideoApiClient();
+      await expect(client.createDraft({ title: 'Bound fetch' })).resolves.toMatchObject({
+        id: 'draft-bound',
+        title: 'Bound fetch',
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringMatching(/\/api\/videos\/drafts$/),
+        expect.objectContaining({ method: 'POST', credentials: 'include' }),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it('does not accept browser-readable tokens in the constructor or requests', async () => {
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       jsonResponse({ items: [] }),

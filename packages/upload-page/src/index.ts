@@ -1,7 +1,20 @@
-export { DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE } from './draft-before-upload';
+export type { DraftCreateGateResult, DraftUploadFailureKind } from './draft-before-upload';
+export {
+  buildCreateDraftInput,
+  DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE,
+  DRAFT_SAVE_FAILED_MESSAGE,
+  DraftUploadError,
+  gateDraftCreateForUpload,
+  isDraftUploadError,
+  resolveDraftCreateTitle,
+} from './draft-before-upload';
 export { resolveVideoContentType } from './resolve-video-content-type';
 export { AttachedMediaAsset } from './steps/attached-media-asset';
-export type { UploadProgressStatus, UploadProgressView } from './steps/upload-progress-step';
+export type {
+  UploadProgressErrorKind,
+  UploadProgressStatus,
+  UploadProgressView,
+} from './steps/upload-progress-step';
 export type { UploadStepId } from './upload-constants';
 export {
   canNavigateToUploadStep,
