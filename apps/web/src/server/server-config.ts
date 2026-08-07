@@ -203,6 +203,24 @@ export function resolveCookieSecurityConfig(nodeEnv: ServerNodeEnv): CookieSecur
 }
 
 /**
+ * Whether Set-Cookie should include `Secure` for this response.
+ *
+ * Browsers silently drop `Secure` cookies on plain HTTP. Production NODE_ENV
+ * behind a local reverse proxy (e.g. http://127.0.0.1:3910) must not force
+ * Secure unless the client connection is actually HTTPS (URL or
+ * X-Forwarded-Proto).
+ */
+export function resolveRequestCookieSecure(request: Request): boolean {
+  try {
+    if (new URL(request.url).protocol === 'https:') return true;
+  } catch {
+    // Malformed request URL — fall through to forwarded proto.
+  }
+  const forwarded = request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim().toLowerCase();
+  return forwarded === 'https';
+}
+
+/**
  * Trusted browser origins for cookie-authenticated mutations.
  * Production W3DS requires APP_ORIGIN (and optional TRUSTED_ORIGINS).
  */

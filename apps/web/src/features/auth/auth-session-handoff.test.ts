@@ -30,8 +30,9 @@ describe('auth session handoff helpers', () => {
     expect(buildAuthHandoffPath('/upload')).toBe('/auth/handoff?returnTo=%2Fupload');
     expect(buildAuthHandoffPath('/login')).toBe('/auth/handoff?returnTo=%2F');
     expect(buildLoginPath('/settings')).toBe('/login?returnTo=%2Fsettings');
-    expect(buildCookieHandoffHtml('/auth/handoff?returnTo=%2Fsettings')).toContain(
-      'url=/auth/handoff?returnTo=%2Fsettings',
-    );
+    const html = buildCookieHandoffHtml('/auth/handoff?returnTo=%2Fsettings');
+    expect(html).toContain('url=/auth/handoff?returnTo=%2Fsettings');
+    expect(html).toContain('location.replace("/auth/handoff?returnTo=%2Fsettings")');
+    expect(html).toMatch(/content="1;url=/);
   });
 });

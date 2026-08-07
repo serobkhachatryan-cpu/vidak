@@ -6,6 +6,7 @@ import {
 } from '../../../../../../features/auth/auth-session-handoff';
 import {
   loadServerSecurityConfig,
+  resolveRequestCookieSecure,
   type ServerSecurityConfig,
 } from '../../../../../../server/server-config';
 import {
@@ -52,8 +53,8 @@ export async function GET(request: Request, { params }: { params: Promise<{ offe
       return loginRedirect(request, undefined, returnTo);
     }
 
-    // Set cookies on a 200 HTML response, then meta-refresh to handoff. Cookies
-    // set on a 3xx are not always sent on the immediate next hop.
+    // Set cookies on a 200 HTML response, then advance to handoff after the
+    // cookie jar settles. Cookies set on a 3xx are not always sent next.
     const session = await service.getOfferSessionForCookie(offerId);
     const handoffPath = buildAuthHandoffPath(returnTo);
     const response = new NextResponse(buildCookieHandoffHtml(handoffPath), {
@@ -63,7 +64,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ offe
         'Cache-Control': 'no-store',
       },
     });
-    applyW3dsSessionCookies(response.cookies, session);
+    applyW3dsSessionCookies(response.cookies, session, resolveRequestCookieSecure(request));
     return response;
   } catch (error) {
     if (error instanceof W3dsAuthError) return loginRedirect(request, undefined, returnTo);

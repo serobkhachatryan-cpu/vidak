@@ -5,6 +5,7 @@ import {
   normalizeOrigin,
   readW3dsOntologyMode,
   resolveCookieSecurityConfig,
+  resolveRequestCookieSecure,
   ServerConfigError,
   validateServerConfigAtStartup,
 } from './server-config';
@@ -307,5 +308,23 @@ describe('server security configuration', () => {
     expect(normalizeOrigin('ftp://vidak.example')).toBeUndefined();
     expect(resolveCookieSecurityConfig('development').secure).toBe(false);
     expect(resolveCookieSecurityConfig('production').secure).toBe(true);
+  });
+
+  it('marks Secure cookies from the client connection, not NODE_ENV alone', () => {
+    expect(
+      resolveRequestCookieSecure(new Request('http://127.0.0.1:3910/api/auth/offer/x/continue')),
+    ).toBe(false);
+    expect(
+      resolveRequestCookieSecure(
+        new Request('https://vidak.postplatforms.com/api/auth/offer/x/continue'),
+      ),
+    ).toBe(true);
+    expect(
+      resolveRequestCookieSecure(
+        new Request('http://127.0.0.1:3910/api/auth/offer/x/continue', {
+          headers: { 'x-forwarded-proto': 'https' },
+        }),
+      ),
+    ).toBe(true);
   });
 });

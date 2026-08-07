@@ -1,5 +1,6 @@
 import { toBrowserAuthSession } from '@w3ds/auth';
 import { NextResponse } from 'next/server';
+import { resolveRequestCookieSecure } from '../../../../../../server/server-config';
 import {
   applyW3dsSessionCookies,
   getW3dsAuthService,
@@ -8,7 +9,7 @@ import {
 
 export const runtime = 'nodejs';
 
-export async function GET(_request: Request, { params }: { params: Promise<{ offerId: string }> }) {
+export async function GET(request: Request, { params }: { params: Promise<{ offerId: string }> }) {
   try {
     const { offerId } = await params;
     const result = await getW3dsAuthService().getOfferStatus(offerId);
@@ -21,7 +22,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ off
       status: 'completed' as const,
       session: toBrowserAuthSession(cookieSession),
     });
-    applyW3dsSessionCookies(response.cookies, cookieSession);
+    applyW3dsSessionCookies(response.cookies, cookieSession, resolveRequestCookieSecure(request));
     return response;
   } catch (error) {
     if (error instanceof W3dsAuthError) {
