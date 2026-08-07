@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { assertTrustedMutationOrigin } from '../../../../server/request-security';
+import { resolveRequestCookieSecure } from '../../../../server/server-config';
 import {
   clearW3dsSessionCookies,
   getBearerToken,
@@ -33,6 +34,6 @@ export async function POST(request: NextRequest) {
     // Logout remains idempotent; all browser credentials are cleared below.
   }
   const response = new NextResponse(null, { status: 204 });
-  clearW3dsSessionCookies(response.cookies);
+  clearW3dsSessionCookies(response.cookies, resolveRequestCookieSecure(request));
   return response;
 }

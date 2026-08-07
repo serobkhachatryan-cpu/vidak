@@ -1099,6 +1099,10 @@ export function w3dsCookieOptions(
 /**
  * Applies HttpOnly session cookies from a credential-bearing AuthSession.
  * Callers must not put `session.tokens` into the JSON body.
+ *
+ * `secure` must reflect the browser connection (see
+ * `resolveRequestCookieSecure`). Max-Age must stay > 0 for a live session —
+ * Max-Age=0 is a delete-cookie and drops the handoff before `/auth/handoff`.
  */
 export function applyW3dsSessionCookies(
   cookies: {
@@ -1111,10 +1115,13 @@ export function applyW3dsSessionCookies(
   if (!accessToken) {
     throw new W3dsAuthError('Authentication session is unavailable.', 'invalid_session', 401);
   }
-  const accessMaxAge = Math.max(
-    0,
-    Math.floor((new Date(session.tokens.expiresAt).getTime() - Date.now()) / 1000),
+  const remainingSeconds = Math.floor(
+    (new Date(session.tokens.expiresAt).getTime() - Date.now()) / 1000,
   );
+  // Wall-clock skew (or a frozen test clock) can make remainingSeconds <= 0
+  // even though the JWT is still valid under the auth service clock. Never
+  // mint Max-Age=0 here — that deletes w3ds_access before handoff.
+  const accessMaxAge = remainingSeconds > 0 ? remainingSeconds : accessTokenLifetimeSeconds;
   cookies.set(w3dsAccessCookieName, accessToken, w3dsCookieOptions(accessMaxAge, secure));
   if (session.tokens.refreshToken) {
     cookies.set(
@@ -1126,10 +1133,12 @@ export function applyW3dsSessionCookies(
 }
 
 /** Clears W3DS session cookies on logout. */
-export function clearW3dsSessionCookies(cookies: {
-  set(name: string, value: string, options: W3dsCookieOptions): void;
-}): void {
-  const secure = resolveCookieSecurityConfig(resolveServerNodeEnv()).secure;
+export function clearW3dsSessionCookies(
+  cookies: {
+    set(name: string, value: string, options: W3dsCookieOptions): void;
+  },
+  secure = resolveCookieSecurityConfig(resolveServerNodeEnv()).secure,
+): void {
   cookies.set(w3dsAccessCookieName, '', w3dsCookieOptions(0, secure));
   cookies.set(w3dsRefreshCookieName, '', w3dsCookieOptions(0, secure));
 }

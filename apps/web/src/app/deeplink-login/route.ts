@@ -4,7 +4,11 @@ import {
   buildCookieHandoffHtml,
 } from '../../features/auth/auth-session-handoff';
 import { normalizeEidAuthPayload } from '../../server/eid-auth-transport';
-import { loadServerSecurityConfig, type ServerSecurityConfig } from '../../server/server-config';
+import {
+  loadServerSecurityConfig,
+  resolveRequestCookieSecure,
+  type ServerSecurityConfig,
+} from '../../server/server-config';
 import { applyW3dsSessionCookies, getW3dsAuthService } from '../../server/w3ds-auth';
 
 export const runtime = 'nodejs';
@@ -44,7 +48,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         'Cache-Control': 'no-store',
       },
     });
-    applyW3dsSessionCookies(response.cookies, session);
+    applyW3dsSessionCookies(response.cookies, session, resolveRequestCookieSecure(request));
     return response;
   } catch {
     // A URL from a wallet contains authentication material; do not surface a

@@ -19,6 +19,11 @@ async function completeOfferAs(
     },
   });
   expect(completeResponse.ok()).toBeTruthy();
+  // Wallet POST must not establish the browser session cookie itself.
+  const setCookie = completeResponse
+    .headersArray()
+    .filter((header) => header.name.toLowerCase() === 'set-cookie');
+  expect(setCookie).toEqual([]);
   return { offerId: offer.offerId };
 }
 
@@ -64,6 +69,52 @@ test('completed offer cookies hand off to an authenticated session', async ({ pa
   await expect.poll(() => pathnameOf(page.url())).toBe('/settings');
   await expect.poll(() => pathnameOf(page.url())).not.toBe('/auth/handoff');
   await expect(page.getByRole('button', { name: 'ada' })).toBeVisible();
+});
+
+test('Return after mocked wallet approval lands authenticated on Settings then Upload', async ({
+  page,
+}) => {
+  // Original browser starts login (offer created by the server login page).
+  await page.goto('/login?returnTo=/settings');
+  await expect(page.getByRole('heading', { name: /sign in with eid/i })).toBeVisible();
+
+  const offerLink = page.locator('a[href^="w3ds://auth"]');
+  await expect(offerLink).toBeVisible();
+  const signInUri = await offerLink.getAttribute('href');
+  expect(signInUri).toMatch(/^w3ds:\/\/auth/);
+  if (!signInUri) throw new Error('Expected eID sign-in URI');
+  const offerUrl = new URL(signInUri);
+  const sessionId = offerUrl.searchParams.get('session');
+  expect(sessionId).toBeTruthy();
+  if (!sessionId) throw new Error('Expected offer session id');
+
+  // Wallet approves on a separate origin/context — no browser cookie.
+  const walletApproval = await page.request.post('/api/auth', {
+    data: {
+      ename: '@return.w3id',
+      session: sessionId,
+      signature: 'e2e-stub-signature',
+    },
+  });
+  expect(walletApproval.ok()).toBeTruthy();
+  expect(
+    walletApproval.headersArray().filter((header) => header.name.toLowerCase() === 'set-cookie'),
+  ).toEqual([]);
+
+  // User clicks Return: original browser finishes via continue → cookie → handoff.
+  await expect.poll(() => pathnameOf(page.url()), { timeout: 20_000 }).toBe('/settings');
+  await expectAuthenticatedCookieSession(page);
+  await expect(page.getByRole('button', { name: 'return' })).toBeVisible();
+  await expect.poll(() => pathnameOf(page.url())).not.toBe('/auth/handoff');
+  await expect.poll(() => pathnameOf(page.url())).not.toBe('/login');
+
+  await page.getByRole('button', { name: 'Upload', exact: true }).click();
+  await expect.poll(() => pathnameOf(page.url())).toBe('/upload');
+  await expect(page.getByRole('button', { name: 'return' })).toBeVisible();
+
+  await page.getByRole('link', { name: 'Settings', exact: true }).click();
+  await expect.poll(() => pathnameOf(page.url())).toBe('/settings');
+  await expect(page.getByRole('button', { name: 'return' })).toBeVisible();
 });
 
 test('handoff never soft-loops on login or handoff returnTo', async ({ page }) => {

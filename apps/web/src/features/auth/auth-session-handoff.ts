@@ -41,10 +41,18 @@ export function buildLoginPath(returnTo: string, offerId?: string): string {
 
 /**
  * HTML body that advances to handoff after Set-Cookie on a 200 response.
- * Browsers often omit cookies set on a 3xx from the immediate next hop.
+ * Browsers often omit cookies set on a 3xx from the immediate next hop, and
+ * an immediate meta-refresh (content=0) can race the cookie jar. Script
+ * navigation runs after the document (and Set-Cookie) are processed; a
+ * delayed meta-refresh covers no-JS clients.
  */
 export function buildCookieHandoffHtml(handoffPath: string): string {
   const target = handoffPath.startsWith('/') && !handoffPath.startsWith('//') ? handoffPath : '/';
-  const safeTarget = target.replace(/"/g, '');
-  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta http-equiv="refresh" content="0;url=${safeTarget}"/><title>Signing in</title></head><body><p>Signing you in…</p><p><a href="${safeTarget}">Continue</a></p></body></html>`;
+  const safeTarget = escapeHtmlAttr(target);
+  const scriptTarget = JSON.stringify(target);
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/><meta http-equiv="refresh" content="1;url=${safeTarget}"/><title>Signing in</title><script>location.replace(${scriptTarget});</script></head><body><p>Signing you in…</p><p><a href="${safeTarget}">Continue</a></p></body></html>`;
+}
+
+function escapeHtmlAttr(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 }
