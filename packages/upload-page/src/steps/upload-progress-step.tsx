@@ -21,13 +21,18 @@ export interface UploadProgressView {
   remainingSeconds: number;
 }
 
+export type UploadProgressErrorKind = 'draft' | 'media';
+
 export interface UploadProgressStepProps {
   fileName?: string;
   status?: UploadProgressStatus;
   progress?: UploadProgressView;
   error?: string;
+  /** Distinguishes draft-save failures from media-transfer failures. */
+  errorKind?: UploadProgressErrorKind;
   onCancel?: () => void;
   onRetry?: () => void;
+  onEditDraft?: () => void;
   mediaAsset?: DraftMediaAsset;
   mediaPreviewSrc?: string;
   isRemovingMedia?: boolean;
@@ -40,8 +45,10 @@ export function UploadProgressStep({
   status = 'uploading',
   progress,
   error,
+  errorKind = 'media',
   onCancel,
   onRetry,
+  onEditDraft,
   mediaAsset,
   mediaPreviewSrc,
   isRemovingMedia,
@@ -71,18 +78,38 @@ export function UploadProgressStep({
   }
 
   if (status === 'error' || status === 'cancelled') {
+    const isDraftError = status === 'error' && errorKind === 'draft';
     return (
-      <ErrorState
-        title={status === 'cancelled' ? 'Upload cancelled' : 'Upload failed'}
-        description={
-          error ??
-          (status === 'cancelled'
-            ? 'You can retry when you are ready to continue.'
-            : 'Something went wrong while uploading your video.')
-        }
-        retry={onRetry}
-        retryLabel="Retry upload"
-      />
+      <div className="space-y-4">
+        <ErrorState
+          title={
+            status === 'cancelled'
+              ? 'Upload cancelled'
+              : isDraftError
+                ? 'Could not save draft'
+                : 'Upload failed'
+          }
+          description={
+            error ??
+            (status === 'cancelled'
+              ? 'You can retry when you are ready to continue.'
+              : isDraftError
+                ? 'Save your draft before uploading a video.'
+                : 'Something went wrong while uploading your video.')
+          }
+          {...(onRetry
+            ? {
+                retry: onRetry,
+                retryLabel: isDraftError ? 'Retry saving draft' : 'Retry upload',
+              }
+            : {})}
+        />
+        {isDraftError && onEditDraft && (
+          <Button type="button" variant="secondary" onClick={onEditDraft}>
+            Complete draft details
+          </Button>
+        )}
+      </div>
     );
   }
 

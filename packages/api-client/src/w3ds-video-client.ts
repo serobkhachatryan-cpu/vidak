@@ -75,7 +75,7 @@ interface ApiErrorBody {
  */
 export class W3dsVideoApiClient implements VideoApiClient {
   private readonly baseUrl: string;
-  private readonly fetchImpl: typeof fetch;
+  private readonly configuredFetch: typeof fetch | undefined;
   private readonly createXHR: () => XMLHttpRequest;
   private readonly mock: MockVideoApiClient;
   /** Upload-session cache: internal video id → latest ready asset id. */
@@ -83,9 +83,16 @@ export class W3dsVideoApiClient implements VideoApiClient {
 
   constructor(options: W3dsVideoApiClientOptions = {}) {
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? '');
-    this.fetchImpl = options.fetch ?? fetch;
+    this.configuredFetch = options.fetch;
     this.createXHR = options.createXHR ?? (() => new XMLHttpRequest());
     this.mock = new MockVideoApiClient(options.mock);
+  }
+
+  private fetchImpl(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+    // Window.fetch must keep its global receiver; an unbound `fetch` reference throws
+    // "Illegal invocation" in browsers and blocks draft persistence before media upload.
+    const fetchFn = this.configuredFetch ?? globalThis.fetch.bind(globalThis);
+    return fetchFn(input, init);
   }
 
   getVideo(id: VideoId): Promise<Video | undefined> {

@@ -1,7 +1,10 @@
 import type { DraftMediaAsset, Video } from '@w3ds/types';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE } from './draft-before-upload';
+import {
+  DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE,
+  DRAFT_SAVE_FAILED_MESSAGE,
+} from './draft-before-upload';
 import { resolveVideoContentType } from './resolve-video-content-type';
 import { emptyUploadDraft, UploadPage } from './upload-page';
 
@@ -331,6 +334,42 @@ describe('UploadPage', () => {
     expect(DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE).toMatch(/save your draft before uploading/i);
     expect(resolveVideoContentType({ name: 'clip.mov', type: '' })).toBe('video/quicktime');
     expect(resolveVideoContentType({ name: 'clip.mp4', type: 'video/mp4' })).toBe('video/mp4');
+  });
+
+  it('renders distinct draft-save failure recovery on the upload step', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="progress"
+        fileName="demo.mp4"
+        uploadStatus="error"
+        uploadError={DRAFT_SAVE_FAILED_MESSAGE}
+        uploadErrorKind="draft"
+        onRetryUpload={() => undefined}
+        onEditDraftFromUpload={() => undefined}
+      />,
+    );
+    expect(markup).toContain('Could not save draft');
+    expect(markup).toContain('Retry saving draft');
+    expect(markup).toContain('Complete draft details');
+    expect(markup).toContain(DRAFT_SAVE_FAILED_MESSAGE);
+  });
+
+  it('preserves a selected file on details when draft is required before upload', () => {
+    const markup = renderToStaticMarkup(
+      <UploadPage
+        step="details"
+        fileName="pending-clip.mp4"
+        fileSize={2048}
+        fileError={DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE}
+        draft={{
+          ...emptyUploadDraft(),
+          title: 'Pending Clip',
+        }}
+      />,
+    );
+    expect(markup).toContain('Selected: pending-clip.mp4');
+    expect(markup).toContain(DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE);
+    expect(markup).not.toContain('Attached media');
   });
 
   it('scopes the step heading id per page instance', () => {
