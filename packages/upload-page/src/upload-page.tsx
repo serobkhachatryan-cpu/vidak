@@ -256,7 +256,15 @@ export function UploadPage({
           selectedUrl={draft.thumbnailUrl}
           {...(customThumbnailUrl !== undefined ? { customPreviewUrl: customThumbnailUrl } : {})}
           {...(thumbnailError !== undefined ? { error: thumbnailError } : {})}
-          onSelectAuto={(url) => patchDraft({ thumbnailUrl: url })}
+          onSelectAuto={(url) => {
+            if (
+              url.trim().toLowerCase().startsWith('blob:') ||
+              url.trim().toLowerCase().startsWith('data:')
+            ) {
+              return;
+            }
+            patchDraft({ thumbnailUrl: url });
+          }}
           {...(onCustomThumbnailSelect ? { onCustomFileSelect: onCustomThumbnailSelect } : {})}
         />
       );

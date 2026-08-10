@@ -36,9 +36,10 @@ import type {
 import {
   defaultUserPreferences,
   maxAvatarFileSizeBytes,
+  normalizePersistedThumbnailUrl,
   supportedAvatarMimeTypes,
 } from '@w3ds/types';
-import { draftMediaContentPath } from './draft-media-path';
+import { draftMediaContentPath, draftThumbnailPath } from './draft-media-path';
 import {
   mockChannels,
   mockComments,
@@ -47,8 +48,15 @@ import {
   mockVideos,
 } from './mock-data';
 import { createCursorPage } from './pagination';
-import { publicMediaContentPath, publicPrimaryMediaPath } from './public-media-path';
+import {
+  publicMediaContentPath,
+  publicPrimaryMediaPath,
+  publicThumbnailPath,
+} from './public-media-path';
 import type { VideoApiClient } from './video-client';
+
+const mockThumbnailMimeTypes = ['image/jpeg', 'image/png', 'image/webp'] as const;
+const maxMockThumbnailBytes = 5 * 1024 * 1024;
 
 /** Placeholder thumbs for the development mock upload UX only (not from the media API). */
 export const mockUploadAutoThumbnails = [
@@ -476,7 +484,10 @@ export class MockVideoApiClient implements VideoApiClient {
     const video = this.videos.find((item) => item.id === id);
     if (!video) throw new Error(`Video ${id} was not found`);
     const hasReadyMedia = [...this.draftMediaById.values()].some(
-      (asset) => asset.videoId === id && asset.uploadState === 'ready',
+      (asset) =>
+        asset.videoId === id &&
+        asset.uploadState === 'ready' &&
+        asset.contentType.startsWith('video/'),
     );
     if (!hasReadyMedia && video.status !== 'published') {
       throw new Error('Publish requires at least one ready media asset.');
@@ -522,7 +533,7 @@ export class MockVideoApiClient implements VideoApiClient {
       channelId,
       title: input.title.trim(),
       description: (input.description ?? '').trim(),
-      thumbnailUrl: input.thumbnailUrl?.trim() ?? '',
+      thumbnailUrl: normalizePersistedThumbnailUrl(input.thumbnailUrl ?? ''),
       durationSeconds: 0,
       status: 'draft',
       visibility: input.visibility ?? 'private',
@@ -571,7 +582,9 @@ export class MockVideoApiClient implements VideoApiClient {
       ...(input.category !== undefined ? { category: input.category } : {}),
       ...(input.language !== undefined ? { language: input.language } : {}),
       ...(input.visibility !== undefined ? { visibility: input.visibility } : {}),
-      ...(input.thumbnailUrl !== undefined ? { thumbnailUrl: input.thumbnailUrl } : {}),
+      ...(input.thumbnailUrl !== undefined
+        ? { thumbnailUrl: normalizePersistedThumbnailUrl(input.thumbnailUrl) }
+        : {}),
       status: 'draft',
       updatedAt: new Date().toISOString(),
     };
@@ -649,6 +662,65 @@ export class MockVideoApiClient implements VideoApiClient {
     return { ...asset };
   }
 
+  async uploadDraftThumbnail(
+    videoId: VideoId,
+    file: UploadDraftMediaFile,
+    options: UploadDraftMediaOptions = {},
+  ): Promise<Video> {
+    const draft = this.videos.find((item) => item.id === videoId && item.status === 'draft');
+    if (!draft) throw new Error(`Draft ${videoId} was not found`);
+    if (!(mockThumbnailMimeTypes as readonly string[]).includes(file.type)) {
+      throw new Error('Unsupported thumbnail format. Use JPG, PNG, or WebP.');
+    }
+    if (file.size <= 0) throw new Error('The selected thumbnail is empty.');
+    if (file.size > maxMockThumbnailBytes) {
+      throw new Error('Thumbnail is too large. Maximum size is 5 MB.');
+    }
+
+    if (options.signal?.aborted) {
+      throw new DOMException('Upload cancelled', 'AbortError');
+    }
+    options.onProgress?.({
+      bytesUploaded: file.size,
+      bytesTotal: file.size,
+      percent: 100,
+      bytesPerSecond: file.size,
+      remainingSeconds: 0,
+    });
+
+    for (const [assetId, asset] of this.draftMediaById) {
+      if (
+        asset.videoId === videoId &&
+        (mockThumbnailMimeTypes as readonly string[]).includes(asset.contentType)
+      ) {
+        this.draftMediaById.delete(assetId);
+      }
+    }
+
+    this.mediaSequence += 1;
+    const now = new Date().toISOString();
+    const asset: DraftMediaAsset = {
+      id: `asset-${this.mediaSequence}`,
+      ownerId: this.currentUserId,
+      videoId,
+      originalFilename: file.name,
+      contentType: file.type || 'image/jpeg',
+      byteSize: file.size,
+      uploadState: 'ready',
+      createdAt: now,
+      updatedAt: now,
+    };
+    this.draftMediaById.set(asset.id, asset);
+
+    const next: Video = {
+      ...draft,
+      thumbnailUrl: draftThumbnailPath(videoId),
+      updatedAt: now,
+    };
+    this.videos = this.videos.map((item) => (item.id === videoId ? next : item));
+    return next;
+  }
+
   async getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset> {
     await this.wait();
     const asset = this.draftMediaById.get(assetId);
@@ -669,6 +741,10 @@ export class MockVideoApiClient implements VideoApiClient {
 
   draftMediaContentPath(videoId: VideoId, assetId: string): string {
     return draftMediaContentPath(videoId, assetId);
+  }
+
+  draftThumbnailPath(videoId: VideoId): string {
+    return draftThumbnailPath(videoId);
   }
 
   async listPublicVideos(pagination: PaginationParams = {}): Promise<CursorPage<Video>> {
@@ -710,33 +786,55 @@ export class MockVideoApiClient implements VideoApiClient {
       return video.mediaContentUrl.trim();
     }
     const asset = [...this.draftMediaById.values()].find(
-      (item) => item.videoId === video.id && item.uploadState === 'ready',
+      (item) =>
+        item.videoId === video.id &&
+        item.uploadState === 'ready' &&
+        item.contentType.startsWith('video/'),
     );
     return asset ? publicPrimaryMediaPath(video.publicVideoId) : undefined;
   }
 
   private withMockMediaContentUrl(video: Video): Video {
-    if (!video.publicVideoId || video.status !== 'published') {
-      const { mediaContentUrl: _omit, ...rest } = video;
+    let next: Video = {
+      ...video,
+      thumbnailUrl: normalizePersistedThumbnailUrl(video.thumbnailUrl),
+    };
+
+    const publicVideoId = next.publicVideoId;
+    if (!publicVideoId || next.status !== 'published') {
+      const { mediaContentUrl: _omit, ...rest } = next;
       void _omit;
       return rest;
     }
-    if (video.visibility !== 'public' && video.visibility !== 'unlisted') {
-      const { mediaContentUrl: _omit, ...rest } = video;
+    if (next.visibility !== 'public' && next.visibility !== 'unlisted') {
+      const { mediaContentUrl: _omit, ...rest } = next;
       void _omit;
       return rest;
     }
-    const hasReady = [...this.draftMediaById.values()].some(
-      (asset) => asset.videoId === video.id && asset.uploadState === 'ready',
+
+    const readyAssets = [...this.draftMediaById.values()].filter(
+      (asset) => asset.videoId === next.id && asset.uploadState === 'ready',
     );
-    if (!hasReady) {
-      const { mediaContentUrl: _omit, ...rest } = video;
+    const hasReadyVideo = readyAssets.some((asset) => asset.contentType.startsWith('video/'));
+    const hasReadyThumbnail = readyAssets.some((asset) =>
+      (mockThumbnailMimeTypes as readonly string[]).includes(asset.contentType),
+    );
+
+    if (hasReadyThumbnail) {
+      next = {
+        ...next,
+        thumbnailUrl: publicThumbnailPath(publicVideoId),
+      };
+    }
+
+    if (!hasReadyVideo) {
+      const { mediaContentUrl: _omit, ...rest } = next;
       void _omit;
       return rest;
     }
     return {
-      ...video,
-      mediaContentUrl: publicPrimaryMediaPath(video.publicVideoId),
+      ...next,
+      mediaContentUrl: publicPrimaryMediaPath(publicVideoId),
     };
   }
 

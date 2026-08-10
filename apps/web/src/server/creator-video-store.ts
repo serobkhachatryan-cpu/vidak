@@ -6,7 +6,7 @@ import type {
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
-import { and, desc, eq, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, like, sql } from 'drizzle-orm';
 import { CreatorVideoError } from './creator-video-errors';
 import type { W3dsDatabase } from './db/client';
 import { creatorChannels, mediaAssets, videos } from './db/schema';
@@ -576,6 +576,7 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
             eq(mediaAssets.videoId, normalizedId),
             eq(mediaAssets.ownerId, ownerId),
             eq(mediaAssets.uploadState, 'ready'),
+            like(mediaAssets.contentType, 'video/%'),
           ),
         )
         .limit(1);

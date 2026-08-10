@@ -63,6 +63,19 @@ describe('draft-before-upload', () => {
     });
   });
 
+  it('omits ephemeral blob thumbnail URLs from create-draft payloads', () => {
+    const draft = {
+      ...emptyUploadDraft(),
+      title: 'IMG 1589',
+      thumbnailUrl: 'blob:https://vidak.example/abc',
+    };
+    expect(buildCreateDraftInput('IMG 1589', draft)).toEqual({
+      title: 'IMG 1589',
+      visibility: 'public',
+    });
+    expect(buildCreateDraftInput('IMG 1589', draft)).not.toHaveProperty('thumbnailUrl');
+  });
+
   it('keeps draft-required and draft-save failures distinct from media failures', () => {
     const required = new DraftUploadError('draft_required', DRAFT_REQUIRED_BEFORE_UPLOAD_MESSAGE);
     const saveFailed = new DraftUploadError('draft_save_failed', DRAFT_SAVE_FAILED_MESSAGE);

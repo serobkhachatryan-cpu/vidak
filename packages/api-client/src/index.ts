@@ -6,6 +6,7 @@ export {
   draftMediaAssetPath,
   draftMediaContentPath,
   draftMediaUploadPath,
+  draftThumbnailPath,
 } from './draft-media-path';
 export type { MockAuthApiClientOptions, MockAuthUser } from './mock-auth-client';
 export { DevAuthClient, MockAuthApiClient } from './mock-auth-client';
@@ -23,6 +24,7 @@ export {
   isPublicVideoId,
   publicMediaContentPath,
   publicPrimaryMediaPath,
+  publicThumbnailPath,
   publicVideoWatchPath,
 } from './public-media-path';
 export type { VideoApiClient } from './video-client';

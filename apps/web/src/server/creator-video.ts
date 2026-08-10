@@ -11,7 +11,7 @@ import type {
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
-import { videoCategories, videoLanguages } from '@w3ds/types';
+import { normalizePersistedThumbnailUrl, videoCategories, videoLanguages } from '@w3ds/types';
 import { CreatorVideoError } from './creator-video-errors';
 import { type CreatorVideoStore, PostgresCreatorVideoStore } from './creator-video-store';
 import { getW3dsDatabase } from './db/client';
@@ -312,7 +312,7 @@ function normalizeCreateDraftInput(input: CreateVideoDraftInput): {
   const visibility = normalizeVisibility(input.visibility);
   const thumbnailUrl =
     typeof input.thumbnailUrl === 'string'
-      ? input.thumbnailUrl.trim()
+      ? normalizePersistedThumbnailUrl(input.thumbnailUrl)
       : input.thumbnailUrl === undefined
         ? ''
         : (() => {
@@ -389,7 +389,7 @@ function normalizeUpdateDraftInput(input: UpdateVideoDraftInput): UpdateVideoDra
     if (typeof input.thumbnailUrl !== 'string') {
       throw new CreatorVideoError('Thumbnail URL must be a string.', 'validation_failed', 400);
     }
-    next.thumbnailUrl = input.thumbnailUrl.trim();
+    next.thumbnailUrl = normalizePersistedThumbnailUrl(input.thumbnailUrl);
   }
   if (Object.keys(next).length === 0) {
     throw new CreatorVideoError('No draft fields were provided.', 'validation_failed', 400);

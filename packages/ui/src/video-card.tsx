@@ -1,4 +1,8 @@
+'use client';
+
 import type { Channel, Video } from '@w3ds/types';
+import { isRenderableThumbnailUrl } from '@w3ds/types';
+import { useState } from 'react';
 import { Avatar, Badge, Skeleton } from './primitives';
 
 const cx = (...classes: Array<string | false | null | undefined>) =>
@@ -31,6 +35,31 @@ function formatPublishedAt(publishedAt?: string): string | undefined {
   return `${years} year${years === 1 ? '' : 's'} ago`;
 }
 
+function VideoThumbnail({ src, title }: { src: string; title: string }) {
+  const [failed, setFailed] = useState(false);
+  const safe = isRenderableThumbnailUrl(src);
+
+  if (!safe || failed) {
+    return (
+      <div
+        className="aspect-video w-full bg-muted"
+        role="img"
+        aria-label={`${title} thumbnail unavailable`}
+      />
+    );
+  }
+
+  return (
+    <img
+      src={src.trim()}
+      alt=""
+      loading="lazy"
+      className="aspect-video w-full object-cover transition-transform duration-normal group-hover:scale-[1.03]"
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export interface VideoCardProps {
   video: Video;
   channel?: Pick<Channel, 'name' | 'handle' | 'avatarUrl'>;
@@ -58,12 +87,7 @@ export function VideoCard({
         aria-label={`Watch ${video.title}`}
         className={cx('relative block overflow-hidden rounded-lg bg-muted', focusRing)}
       >
-        <img
-          src={video.thumbnailUrl}
-          alt=""
-          loading="lazy"
-          className="aspect-video w-full object-cover transition-transform duration-normal group-hover:scale-[1.03]"
-        />
+        <VideoThumbnail src={video.thumbnailUrl} title={video.title} />
         <Badge
           tone="muted"
           className="absolute bottom-2 right-2 bg-black/80 text-white"

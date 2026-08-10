@@ -41,6 +41,7 @@ describe('VideoCard', () => {
     expect(markup).toContain('12:22');
     expect(markup).toContain('W3DS Studio');
     expect(markup).toContain('98.3K views');
+    expect(markup).toContain('src="https://example.com/thumbnail.jpg"');
   });
 
   it('prefers the opaque public video id for watch links when present', () => {
@@ -56,5 +57,29 @@ describe('VideoCard', () => {
 
     expect(markup).toContain('aria-label="Loading video"');
     expect(markup).toContain('aspect-video');
+  });
+
+  it('renders a safe placeholder instead of a broken img for empty thumbnails', () => {
+    const markup = renderToStaticMarkup(
+      <VideoCard video={{ ...video, thumbnailUrl: '' }} channel={channel} />,
+    );
+    expect(markup).toContain('thumbnail unavailable');
+    expect(markup).not.toContain('<img');
+  });
+
+  it('renders a safe placeholder instead of a broken img for blob thumbnails', () => {
+    const markup = renderToStaticMarkup(
+      <VideoCard
+        video={{
+          ...video,
+          title: 'IMG 1589',
+          thumbnailUrl: 'blob:https://vidak.postplatforms.com/5a7f2e33-93c3-438d-9781-f897d3e1a58d',
+        }}
+        channel={channel}
+      />,
+    );
+    expect(markup).toContain('IMG 1589 thumbnail unavailable');
+    expect(markup).not.toContain('blob:');
+    expect(markup).not.toContain('<img');
   });
 });

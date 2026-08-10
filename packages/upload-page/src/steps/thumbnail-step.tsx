@@ -26,6 +26,10 @@ export function ThumbnailStep({
   const groupName = `${inputId}-thumbnail`;
   const errorId = `${inputId}-error`;
   const inputRef = useRef<HTMLInputElement>(null);
+  const isCustomSelected =
+    Boolean(customPreviewUrl) &&
+    (selectedUrl === customPreviewUrl ||
+      (Boolean(selectedUrl?.trim()) && !autoThumbnails.includes(selectedUrl ?? '')));
 
   const onChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -99,7 +103,7 @@ export function ThumbnailStep({
             className={cx(
               'block max-w-sm cursor-pointer overflow-hidden rounded-md border-2 border-border',
               focusWithinRing,
-              selectedUrl === customPreviewUrl && 'border-primary',
+              isCustomSelected && 'border-primary',
             )}
           >
             <input
@@ -107,7 +111,7 @@ export function ThumbnailStep({
               type="radio"
               name={groupName}
               value={customPreviewUrl}
-              checked={selectedUrl === customPreviewUrl}
+              checked={isCustomSelected}
               className="sr-only"
               onChange={() => onSelectAuto?.(customPreviewUrl)}
             />

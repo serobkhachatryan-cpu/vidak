@@ -3,6 +3,7 @@ import {
   isPublicVideoId,
   publicMediaContentPath,
   publicPrimaryMediaPath,
+  publicThumbnailPath,
   publicVideoWatchPath,
 } from './public-media-path';
 
@@ -12,6 +13,8 @@ describe('public media path helpers', () => {
     expect(publicVideoWatchPath('pub/a')).toBe('/watch/pub%2Fa');
     expect(publicPrimaryMediaPath('pub_abc')).toBe('/api/videos/public/pub_abc/media');
     expect(publicPrimaryMediaPath('pub/a')).toBe('/api/videos/public/pub%2Fa/media');
+    expect(publicThumbnailPath('pub_abc')).toBe('/api/videos/public/pub_abc/thumbnail');
+    expect(publicThumbnailPath('pub/a')).toBe('/api/videos/public/pub%2Fa/thumbnail');
     expect(publicMediaContentPath('pub_abc', 'asset-1')).toBe(
       '/api/videos/public/pub_abc/media/asset-1/content',
     );
@@ -20,6 +23,7 @@ describe('public media path helpers', () => {
     );
     expect(publicMediaContentPath('pub_abc', 'asset-1')).not.toMatch(/storageKey|drafts\//);
     expect(publicPrimaryMediaPath('pub_abc')).not.toMatch(/storageKey|asset-|drafts\//);
+    expect(publicThumbnailPath('pub_abc')).not.toMatch(/storageKey|asset-|drafts\//);
     expect(isPublicVideoId('pub_abc')).toBe(true);
     expect(isPublicVideoId('video-draft-1')).toBe(false);
   });

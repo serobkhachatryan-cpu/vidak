@@ -13,7 +13,22 @@ export const DEFAULT_ALLOWED_MEDIA_CONTENT_TYPES = [
   'video/quicktime',
 ] as const;
 
+/** Default maximum raw thumbnail upload body size (5 MiB). */
+export const DEFAULT_MAX_THUMBNAIL_UPLOAD_BYTES = 5 * 1024 * 1024;
+
+/** Allowlist for draft thumbnail image uploads (raw body Content-Type). */
+export const DEFAULT_ALLOWED_THUMBNAIL_CONTENT_TYPES = [
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+] as const;
+
 export interface MediaUploadLimits {
+  maxUploadBytes: number;
+  allowedContentTypes: readonly string[];
+}
+
+export interface ThumbnailUploadLimits {
   maxUploadBytes: number;
   allowedContentTypes: readonly string[];
 }
@@ -40,6 +55,24 @@ export function resolveMediaUploadLimits(env: NodeJS.ProcessEnv = process.env): 
     maxUploadBytes,
     allowedContentTypes,
   };
+}
+
+export function resolveThumbnailUploadLimits(): ThumbnailUploadLimits {
+  return {
+    maxUploadBytes: DEFAULT_MAX_THUMBNAIL_UPLOAD_BYTES,
+    allowedContentTypes: [...DEFAULT_ALLOWED_THUMBNAIL_CONTENT_TYPES],
+  };
+}
+
+/** True when the content type is a playable video media asset. */
+export function isVideoMediaContentType(contentType: string): boolean {
+  return contentType.trim().toLowerCase().startsWith('video/');
+}
+
+/** True when the content type is an allowed thumbnail image. */
+export function isThumbnailMediaContentType(contentType: string): boolean {
+  const normalized = contentType.trim().toLowerCase();
+  return (DEFAULT_ALLOWED_THUMBNAIL_CONTENT_TYPES as readonly string[]).includes(normalized);
 }
 
 /** Normalizes a Content-Type header to its MIME type (no parameters). */
