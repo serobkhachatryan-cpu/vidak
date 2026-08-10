@@ -29,10 +29,12 @@ import {
 import { POST as publishVideo } from './[videoId]/publish/route';
 import { POST as unpublishVideo } from './[videoId]/unpublish/route';
 import { POST as uploadMedia } from './drafts/[videoId]/media/route';
+import { POST as uploadThumbnail } from './drafts/[videoId]/thumbnail/route';
 import { POST as createDraft } from './drafts/route';
 import { GET as getPublicMediaContent } from './public/[publicVideoId]/media/[assetId]/content/route';
 import { GET as getPublicPrimaryMedia } from './public/[publicVideoId]/media/route';
 import { GET as getPublicVideo } from './public/[publicVideoId]/route';
+import { GET as getPublicThumbnail } from './public/[publicVideoId]/thumbnail/route';
 import { GET as listPublicVideos } from './public/route';
 
 let rootDir = '';
@@ -603,6 +605,78 @@ describe('video publishing and public discovery routes', () => {
     expect(emptyDetail.status).toBe(200);
     const emptyBody = (await emptyDetail.json()) as { mediaContentUrl?: string };
     expect(emptyBody.mediaContentUrl).toBeUndefined();
+  });
+
+  it('clears blob thumbnail URLs and returns durable public thumbnail URLs', async () => {
+    const ctx = await createPublishingContext({ withMedia: true });
+    const payload = new TextEncoder().encode('video-bytes');
+    const thumbBytes = new TextEncoder().encode('jpeg-thumb-bytes');
+
+    const draft = await createOwnedDraft(ctx, { title: 'IMG 1589', visibility: 'public' });
+    ctx.mediaStore.registerOwnedDraft(draft.id, ctx.ownerId);
+
+    const blobUpdate = await creatorVideo
+      .getCreatorVideoService()
+      .updateDraft(ctx.ownerToken, draft.id, {
+        thumbnailUrl: 'blob:https://vidak.postplatforms.com/5a7f2e33-93c3-438d-9781-f897d3e1a58d',
+      });
+    expect(blobUpdate.thumbnailUrl).toBe('');
+
+    await uploadReadyMedia(ctx, draft.id, payload);
+    ctx.videoStore.seedReadyMediaAsset(draft.id);
+
+    const thumbResponse = await uploadThumbnail(
+      new NextRequest(`https://vidak.example/api/videos/drafts/${draft.id}/thumbnail`, {
+        method: 'POST',
+        body: chunkedBody(thumbBytes, 8),
+        duplex: 'half',
+        headers: {
+          Authorization: `Bearer ${ctx.ownerToken}`,
+          'Content-Type': 'image/jpeg',
+          'Content-Length': String(thumbBytes.byteLength),
+          'X-Original-Filename': 'thumb.jpg',
+        },
+      }),
+      { params: Promise.resolve({ videoId: draft.id }) },
+    );
+    expect(thumbResponse.status).toBe(201);
+    const thumbVideo = (await thumbResponse.json()) as { thumbnailUrl: string };
+    expect(thumbVideo.thumbnailUrl).toBe(`/api/videos/drafts/${draft.id}/thumbnail`);
+
+    const published = await publishOwned(ctx, draft.id);
+    const detail = await getPublicVideo(
+      new NextRequest(`https://vidak.example/api/videos/public/${published.publicVideoId}`),
+      { params: Promise.resolve({ publicVideoId: published.publicVideoId }) },
+    );
+    expect(detail.status).toBe(200);
+    const detailBody = (await detail.json()) as {
+      title: string;
+      thumbnailUrl: string;
+      mediaContentUrl?: string;
+    };
+    expect(detailBody.title).toBe('IMG 1589');
+    expect(detailBody.thumbnailUrl).toBe(`/api/videos/public/${published.publicVideoId}/thumbnail`);
+    expect(detailBody.thumbnailUrl).not.toMatch(/^blob:|^data:/);
+    expect(detailBody.mediaContentUrl).toBe(`/api/videos/public/${published.publicVideoId}/media`);
+
+    const thumbStream = await getPublicThumbnail(
+      new NextRequest(
+        `https://vidak.example/api/videos/public/${published.publicVideoId}/thumbnail`,
+      ),
+      { params: Promise.resolve({ publicVideoId: published.publicVideoId }) },
+    );
+    expect(thumbStream.status).toBe(200);
+    expect(thumbStream.headers.get('Content-Type')).toBe('image/jpeg');
+    expect(Buffer.from(await thumbStream.arrayBuffer()).toString('utf8')).toBe('jpeg-thumb-bytes');
+
+    const discovery = await listPublicVideos(
+      new NextRequest('https://vidak.example/api/videos/public'),
+    );
+    const discoveryBody = (await discovery.json()) as {
+      items: Array<{ title: string; thumbnailUrl: string }>;
+    };
+    const listed = discoveryBody.items.find((item) => item.title === 'IMG 1589');
+    expect(listed?.thumbnailUrl).toBe(`/api/videos/public/${published.publicVideoId}/thumbnail`);
   });
 });
 

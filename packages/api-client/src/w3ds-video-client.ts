@@ -38,6 +38,7 @@ import {
   draftMediaAssetPath,
   draftMediaContentPath,
   draftMediaUploadPath,
+  draftThumbnailPath,
 } from './draft-media-path';
 import { MockVideoApiClient, type MockVideoApiClientOptions } from './mock-video-client';
 import { publicMediaContentPath, publicPrimaryMediaPath } from './public-media-path';
@@ -263,6 +264,20 @@ export class W3dsVideoApiClient implements VideoApiClient {
     return asset;
   }
 
+  async uploadDraftThumbnail(
+    videoId: VideoId,
+    file: UploadDraftMediaFile,
+    options: UploadDraftMediaOptions = {},
+  ): Promise<Video> {
+    return uploadDraftThumbnailWithXhr({
+      url: this.url(draftThumbnailPath(videoId)),
+      file,
+      signal: options.signal,
+      onProgress: options.onProgress,
+      createXHR: this.createXHR,
+    });
+  }
+
   async getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset> {
     const asset = await this.requestJson<DraftMediaAsset>(draftMediaAssetPath(videoId, assetId));
     if (asset.uploadState === 'ready') {
@@ -280,6 +295,10 @@ export class W3dsVideoApiClient implements VideoApiClient {
 
   draftMediaContentPath(videoId: VideoId, assetId: string): string {
     return draftMediaContentPath(videoId, assetId);
+  }
+
+  draftThumbnailPath(videoId: VideoId): string {
+    return draftThumbnailPath(videoId);
   }
 
   async listPublicVideos(pagination: PaginationParams = {}): Promise<CursorPage<Video>> {
@@ -456,6 +475,100 @@ function uploadDraftMediaWithXhr(options: {
       }
 
       const message = parseXhrErrorMessage(xhr) ?? `Media upload failed (${xhr.status})`;
+      settleReject(new Error(message));
+    };
+
+    xhr.send(file.body);
+  });
+}
+
+function uploadDraftThumbnailWithXhr(options: {
+  url: string;
+  file: UploadDraftMediaFile;
+  signal?: AbortSignal | undefined;
+  onProgress?: ((progress: VideoUploadProgress) => void) | undefined;
+  createXHR: () => XMLHttpRequest;
+}): Promise<Video> {
+  const { url, file, signal, onProgress, createXHR } = options;
+
+  if (signal?.aborted) {
+    return Promise.reject(new DOMException('Upload cancelled', 'AbortError'));
+  }
+
+  return new Promise<Video>((resolve, reject) => {
+    const xhr = createXHR();
+    const startedAt = Date.now();
+    let settled = false;
+
+    const settleReject = (reason: unknown) => {
+      if (settled) return;
+      settled = true;
+      reject(reason);
+    };
+
+    const settleResolve = (video: Video) => {
+      if (settled) return;
+      settled = true;
+      resolve(video);
+    };
+
+    const onAbort = () => {
+      xhr.abort();
+    };
+
+    signal?.addEventListener('abort', onAbort);
+
+    xhr.open('POST', url);
+    xhr.withCredentials = true;
+    xhr.responseType = 'text';
+    xhr.setRequestHeader('Accept', 'application/json');
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('X-Original-Filename', sanitizeOriginalFilename(file.name));
+
+    xhr.upload.onprogress = (event) => {
+      const bytesTotal = event.lengthComputable ? event.total : file.size;
+      const bytesUploaded = event.loaded;
+      const elapsedSeconds = Math.max((Date.now() - startedAt) / 1000, 0.001);
+      const bytesPerSecond = bytesUploaded / elapsedSeconds;
+      onProgress?.({
+        bytesUploaded,
+        bytesTotal,
+        percent: bytesTotal > 0 ? Math.min(100, Math.round((bytesUploaded / bytesTotal) * 100)) : 0,
+        bytesPerSecond,
+        remainingSeconds: (bytesTotal - bytesUploaded) / Math.max(bytesPerSecond, 1),
+      });
+    };
+
+    xhr.onerror = () => {
+      signal?.removeEventListener('abort', onAbort);
+      settleReject(new Error('Thumbnail upload failed due to a network error.'));
+    };
+
+    xhr.onabort = () => {
+      signal?.removeEventListener('abort', onAbort);
+      settleReject(new DOMException('Upload cancelled', 'AbortError'));
+    };
+
+    xhr.onload = () => {
+      signal?.removeEventListener('abort', onAbort);
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const video = JSON.parse(xhr.responseText) as Video;
+          if (!video || typeof video !== 'object' || typeof video.id !== 'string') {
+            throw new Error('Invalid thumbnail upload response.');
+          }
+          settleResolve(video);
+        } catch (reason) {
+          settleReject(
+            reason instanceof Error
+              ? reason
+              : new Error('Upload succeeded but the response was invalid.'),
+          );
+        }
+        return;
+      }
+
+      const message = parseXhrErrorMessage(xhr) ?? `Thumbnail upload failed (${xhr.status})`;
       settleReject(new Error(message));
     };
 

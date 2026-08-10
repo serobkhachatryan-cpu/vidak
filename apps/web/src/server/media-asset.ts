@@ -13,9 +13,12 @@ import {
   unsatisfiableContentRangeHeader,
 } from './media-byte-range';
 import {
+  isThumbnailMediaContentType,
   type MediaUploadLimits,
   normalizeContentType,
   resolveMediaUploadLimits,
+  resolveThumbnailUploadLimits,
+  type ThumbnailUploadLimits,
 } from './media-limits';
 import {
   LocalDiskMediaStorage,
@@ -31,8 +34,11 @@ export type { MediaAsset, MediaAssetStore } from './media-asset-store';
 export { InMemoryMediaAssetStore, PostgresMediaAssetStore } from './media-asset-store';
 export {
   DEFAULT_ALLOWED_MEDIA_CONTENT_TYPES,
+  DEFAULT_ALLOWED_THUMBNAIL_CONTENT_TYPES,
   DEFAULT_MAX_MEDIA_UPLOAD_BYTES,
+  DEFAULT_MAX_THUMBNAIL_UPLOAD_BYTES,
   resolveMediaUploadLimits,
+  resolveThumbnailUploadLimits,
 } from './media-limits';
 export type { MediaStorage } from './media-storage';
 export { LocalDiskMediaStorage, resolveLocalMediaStorageRoot } from './media-storage';
@@ -68,6 +74,7 @@ export interface MediaAssetServiceOptions {
   store: MediaAssetStore;
   storage: MediaStorage;
   limits?: MediaUploadLimits;
+  thumbnailLimits?: ThumbnailUploadLimits;
   /**
    * Resolves the authenticated platform user from an access token.
    * Defaults to the shared W3DS auth service.
@@ -84,6 +91,7 @@ export class MediaAssetService {
   private readonly store: MediaAssetStore;
   private readonly storage: MediaStorage;
   private readonly limits: MediaUploadLimits;
+  private readonly thumbnailLimits: ThumbnailUploadLimits;
   private readonly resolveUser: (accessToken: string) => Promise<AuthUser>;
   private readonly createId: () => string;
 
@@ -91,6 +99,7 @@ export class MediaAssetService {
     this.store = options.store;
     this.storage = options.storage;
     this.limits = options.limits ?? resolveMediaUploadLimits();
+    this.thumbnailLimits = options.thumbnailLimits ?? resolveThumbnailUploadLimits();
     this.resolveUser =
       options.resolveUser ??
       (async (accessToken) => {
@@ -237,6 +246,159 @@ export class MediaAssetService {
     }
   }
 
+  /**
+   * Streams an authenticated raw-body thumbnail image into an owned draft.
+   * Replaces any previous ready thumbnail image assets for the draft.
+   */
+  async uploadThumbnailToDraft(
+    accessToken: string,
+    videoId: string,
+    headers: MediaUploadHeaders,
+    body: ReadableStream<Uint8Array> | null,
+  ): Promise<PublicMediaAsset> {
+    const user = await this.requireUser(accessToken);
+    const draftId = videoId.trim();
+    if (!draftId) {
+      throw new MediaAssetError('Video draft was not found.', 'not_found', 404);
+    }
+
+    const contentType = normalizeContentType(headers.contentType);
+    if (!contentType) {
+      throw new MediaAssetError('Content-Type is required.', 'validation_failed', 400);
+    }
+    if (!this.thumbnailLimits.allowedContentTypes.includes(contentType)) {
+      throw new MediaAssetError(
+        'Content-Type is not allowed for thumbnail uploads.',
+        'unsupported_media_type',
+        415,
+      );
+    }
+
+    const declaredSize = parseContentLength(headers.contentLength);
+    if (declaredSize === undefined) {
+      throw new MediaAssetError(
+        'Content-Length is required and must be a non-negative integer.',
+        'validation_failed',
+        400,
+      );
+    }
+    if (declaredSize > this.thumbnailLimits.maxUploadBytes) {
+      throw new MediaAssetError(
+        `Upload exceeds the maximum size of ${this.thumbnailLimits.maxUploadBytes} bytes.`,
+        'payload_too_large',
+        413,
+      );
+    }
+
+    const originalFilename = normalizeOriginalFilename(headers.originalFilename);
+    if (!body) {
+      throw new MediaAssetError('Request body is required.', 'validation_failed', 400);
+    }
+
+    const previousThumbnails = (await this.store.listOwnedAssetsByVideoId(draftId, user.id)).filter(
+      (asset) => isThumbnailMediaContentType(asset.contentType),
+    );
+
+    const assetId = this.createId();
+    const storageKey = this.storage.createStorageKey();
+    let asset: MediaAsset | undefined;
+    const upload = await this.storage.openUpload();
+    let finalized = false;
+
+    try {
+      asset = await this.store.createAsset({
+        id: assetId,
+        ownerId: user.id,
+        videoId: draftId,
+        storageKey,
+        originalFilename,
+        contentType,
+        byteSize: declaredSize,
+        uploadState: 'uploading',
+      });
+
+      const reader = body.getReader();
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value || value.byteLength === 0) continue;
+          const nextSize = upload.bytesWritten + value.byteLength;
+          if (nextSize > this.thumbnailLimits.maxUploadBytes) {
+            throw new MediaAssetError(
+              `Upload exceeds the maximum size of ${this.thumbnailLimits.maxUploadBytes} bytes.`,
+              'payload_too_large',
+              413,
+            );
+          }
+          if (nextSize > declaredSize) {
+            throw new MediaAssetError(
+              'Upload body exceeds the declared Content-Length.',
+              'payload_too_large',
+              413,
+            );
+          }
+          await upload.write(value);
+        }
+      } finally {
+        reader.releaseLock();
+      }
+
+      if (upload.bytesWritten !== declaredSize) {
+        throw new MediaAssetError(
+          'Upload body size does not match Content-Length.',
+          'validation_failed',
+          400,
+        );
+      }
+
+      await upload.finalize(storageKey);
+      finalized = true;
+
+      const ready = await this.store.updateUploadState(asset.id, user.id, 'ready');
+      if (!ready) {
+        throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+      }
+
+      for (const previous of previousThumbnails) {
+        const deleted = await this.store.deleteOwnedAsset(previous.id, user.id);
+        if (deleted) {
+          try {
+            await this.storage.delete(deleted.storageKey);
+          } catch {
+            // Prefer orphaned private blobs over failing a successful thumbnail replace.
+          }
+        }
+      }
+
+      return toPublicMediaAsset(ready);
+    } catch (error) {
+      await this.cleanupFailedUpload({
+        upload: finalized ? undefined : upload,
+        storageKey,
+        assetId: asset?.id,
+        ownerId: user.id,
+      });
+      if (error instanceof MediaAssetError || error instanceof W3dsAuthError) {
+        throw error;
+      }
+      if (error instanceof MediaStorageError) {
+        reportOperationalFailure({
+          category: 'media_storage',
+          error,
+          code: error.code,
+        });
+        throw new MediaAssetError('Media storage is unavailable.', 'internal_error', 500);
+      }
+      reportOperationalFailure({
+        category: 'media_storage',
+        error,
+        code: 'internal_error',
+      });
+      throw error;
+    }
+  }
+
   async getOwnedAsset(
     accessToken: string,
     videoId: string,
@@ -309,6 +471,51 @@ export class MediaAssetService {
   async hasPrimaryReadyAsset(videoId: string): Promise<boolean> {
     const asset = await this.store.getPrimaryReadyAssetForVideo(videoId.trim());
     return Boolean(asset);
+  }
+
+  /** True when the video has a ready thumbnail image asset (no ownership check). */
+  async hasReadyThumbnailAsset(videoId: string): Promise<boolean> {
+    const asset = await this.store.getReadyThumbnailAssetForVideo(videoId.trim());
+    return Boolean(asset);
+  }
+
+  /**
+   * Authenticated stream for the newest ready thumbnail image on an owned draft.
+   */
+  async openOwnedThumbnailDownload(
+    accessToken: string,
+    videoId: string,
+  ): Promise<MediaAssetDownload> {
+    const user = await this.requireUser(accessToken);
+    const normalizedVideoId = videoId.trim();
+    if (!normalizedVideoId) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+    }
+    const owned = await this.store.listOwnedAssetsByVideoId(normalizedVideoId, user.id);
+    if (owned.length === 0) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+    }
+    const asset = await this.store.getReadyThumbnailAssetForVideo(normalizedVideoId);
+    if (!asset || asset.ownerId !== user.id) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+    }
+    return this.openReadyAssetStream(asset, { disposition: 'inline' });
+  }
+
+  /**
+   * Anonymous thumbnail stream for a published public/unlisted video.
+   * Callers must resolve visibility first.
+   */
+  async openPublishedThumbnailDownload(videoId: string): Promise<MediaAssetDownload> {
+    const normalizedVideoId = videoId.trim();
+    if (!normalizedVideoId) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+    }
+    const asset = await this.store.getReadyThumbnailAssetForVideo(normalizedVideoId);
+    if (!asset) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+    }
+    return this.openReadyAssetStream(asset, { disposition: 'inline' });
   }
 
   /**

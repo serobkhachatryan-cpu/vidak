@@ -11,6 +11,11 @@ export type {
 export type { CursorPage, PaginationParams } from './pagination';
 export type { Playlist, PlaylistId, PlaylistItem, PlaylistVisibility } from './playlist';
 export type { SearchFilters, SearchResultType, SearchSort } from './search';
+export {
+  isEphemeralThumbnailUrl,
+  isRenderableThumbnailUrl,
+  normalizePersistedThumbnailUrl,
+} from './thumbnail-url';
 export type { UserProfile, UserProfileId } from './user-profile';
 export type {
   AppearancePreference,

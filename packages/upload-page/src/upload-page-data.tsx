@@ -15,6 +15,7 @@ import type {
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
+import { normalizePersistedThumbnailUrl } from '@w3ds/types';
 import { useEffect, useRef, useState } from 'react';
 import {
   buildCreateDraftInput,
@@ -249,7 +250,7 @@ export function UploadPageData({
     category: draft.category as VideoCategory,
     language: draft.language as VideoLanguage,
     visibility: draft.visibility as VideoVisibility,
-    thumbnailUrl: draft.thumbnailUrl,
+    thumbnailUrl: normalizePersistedThumbnailUrl(draft.thumbnailUrl),
   });
 
   const persistDraftMetadata = async (): Promise<Video> => {
@@ -551,7 +552,7 @@ export function UploadPageData({
     }
   };
 
-  const onCustomThumbnailSelect = (image: File) => {
+  const onCustomThumbnailSelect = async (image: File) => {
     const error = validateThumbnailFile(image);
     setThumbnailError(error);
     if (error) return;
@@ -559,7 +560,28 @@ export function UploadPageData({
     const objectUrl = URL.createObjectURL(image);
     customObjectUrlRef.current = objectUrl;
     setCustomThumbnailUrl(objectUrl);
-    patchDraft({ thumbnailUrl: objectUrl });
+
+    const videoId = draftVideoIdRef.current;
+    if (!videoId) {
+      // Local preview only — never persist ephemeral blob:/data: URLs.
+      setThumbnailError('Save your draft before uploading a thumbnail.');
+      return;
+    }
+
+    setThumbnailError(undefined);
+    try {
+      const video = await client.uploadDraftThumbnail(videoId, {
+        name: image.name,
+        size: image.size,
+        type: image.type,
+        body: image,
+      });
+      patchDraft({ thumbnailUrl: video.thumbnailUrl });
+    } catch (reason) {
+      setThumbnailError(
+        reason instanceof Error ? reason.message : 'Could not upload the thumbnail.',
+      );
+    }
   };
 
   const validateCurrentStep = (): boolean => {

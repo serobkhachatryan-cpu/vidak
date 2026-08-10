@@ -93,6 +93,16 @@ export interface VideoApiClient {
     file: UploadDraftMediaFile,
     options?: UploadDraftMediaOptions,
   ): Promise<DraftMediaAsset>;
+  /**
+   * Stream-upload a thumbnail image into an owned saved draft.
+   * Returns the updated Video with a durable same-origin thumbnailUrl
+   * (never a blob:/data: URL).
+   */
+  uploadDraftThumbnail(
+    videoId: VideoId,
+    file: UploadDraftMediaFile,
+    options?: UploadDraftMediaOptions,
+  ): Promise<Video>;
   /** Read owned draft media metadata (no storage key / public URL). */
   getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset>;
   /** Delete an owned draft media asset through the protected delete route. */
@@ -102,6 +112,8 @@ export interface VideoApiClient {
    * Not a public media URL — requires the creator session cookie.
    */
   draftMediaContentPath(videoId: VideoId, assetId: string): string;
+  /** Same-origin authenticated path for a draft thumbnail image. */
+  draftThumbnailPath(videoId: VideoId): string;
   /**
    * Anonymous paginated discovery: only `published` + `public` videos.
    * Unlisted, private, and drafts are never included.

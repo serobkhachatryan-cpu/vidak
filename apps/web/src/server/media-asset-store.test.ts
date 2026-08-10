@@ -59,6 +59,39 @@ describe('InMemoryMediaAssetStore', () => {
     await expect(store.listOwnedAssetsByVideoId(videoId, ownerId)).resolves.toEqual([]);
   });
 
+  it('keeps thumbnail images out of the primary video playback asset', async () => {
+    const store = createStoreWithDraft();
+    const videoAsset = await store.createAsset({
+      id: 'asset-video',
+      ownerId,
+      videoId,
+      storageKey: 'media_11111111-1111-4111-8111-111111111111',
+      originalFilename: 'clip.mp4',
+      contentType: 'video/mp4',
+      byteSize: 1024,
+    });
+    const thumbAsset = await store.createAsset({
+      id: 'asset-thumb',
+      ownerId,
+      videoId,
+      storageKey: 'media_22222222-2222-4222-8222-222222222222',
+      originalFilename: 'thumb.jpg',
+      contentType: 'image/jpeg',
+      byteSize: 128,
+    });
+    await store.updateUploadState(videoAsset.id, ownerId, 'ready');
+    await store.updateUploadState(thumbAsset.id, ownerId, 'ready');
+
+    await expect(store.getPrimaryReadyAssetForVideo(videoId)).resolves.toMatchObject({
+      id: 'asset-video',
+      contentType: 'video/mp4',
+    });
+    await expect(store.getReadyThumbnailAssetForVideo(videoId)).resolves.toMatchObject({
+      id: 'asset-thumb',
+      contentType: 'image/jpeg',
+    });
+  });
+
   it('enforces draft ownership on create and hides cross-user access', async () => {
     const store = createStoreWithDraft();
 

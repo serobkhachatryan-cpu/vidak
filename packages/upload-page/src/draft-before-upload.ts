@@ -4,6 +4,7 @@ import type {
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
+import { normalizePersistedThumbnailUrl } from '@w3ds/types';
 import { titleFromFileName } from './upload-constants';
 import type { UploadDraft } from './upload-page';
 
@@ -71,6 +72,9 @@ export function buildCreateDraftInput(
     ...(draftSnapshot.visibility
       ? { visibility: draftSnapshot.visibility as VideoVisibility }
       : {}),
-    ...(draftSnapshot.thumbnailUrl ? { thumbnailUrl: draftSnapshot.thumbnailUrl } : {}),
+    ...(() => {
+      const thumbnailUrl = normalizePersistedThumbnailUrl(draftSnapshot.thumbnailUrl);
+      return thumbnailUrl ? { thumbnailUrl } : {};
+    })(),
   };
 }

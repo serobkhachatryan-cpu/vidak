@@ -1,7 +1,8 @@
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, desc, eq, like } from 'drizzle-orm';
 import type { W3dsDatabase } from './db/client';
 import { type MediaUploadState, mediaAssets, videos } from './db/schema';
 import { MediaAssetError } from './media-asset-errors';
+import { isThumbnailMediaContentType, isVideoMediaContentType } from './media-limits';
 import { assertSafeStorageKey } from './media-storage';
 
 export type { MediaUploadState } from './db/schema';
@@ -72,10 +73,16 @@ export interface MediaAssetStore {
    */
   getReadyAssetForVideo(videoId: string, assetId: string): Promise<MediaAsset | undefined>;
   /**
-   * Returns the oldest ready asset for `videoId` (stable primary playback source).
+   * Returns the oldest ready *video* asset for `videoId` (stable primary playback source).
+   * Image/thumbnail assets are excluded so they cannot become the playback source.
    * Callers must already have validated published public/unlisted visibility.
    */
   getPrimaryReadyAssetForVideo(videoId: string): Promise<MediaAsset | undefined>;
+  /**
+   * Returns the newest ready thumbnail image asset for `videoId`.
+   * Callers must already have validated ownership or published visibility.
+   */
+  getReadyThumbnailAssetForVideo(videoId: string): Promise<MediaAsset | undefined>;
 }
 
 function cloneAsset(asset: MediaAsset): MediaAsset {
@@ -269,10 +276,30 @@ export class InMemoryMediaAssetStore implements MediaAssetStore {
     const normalized = videoId.trim();
     if (!normalized) return undefined;
     const ready = [...this.assetsById.values()]
-      .filter((asset) => asset.videoId === normalized && asset.uploadState === 'ready')
+      .filter(
+        (asset) =>
+          asset.videoId === normalized &&
+          asset.uploadState === 'ready' &&
+          isVideoMediaContentType(asset.contentType),
+      )
       .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
     const primary = ready[0];
     return primary ? cloneAsset(primary) : undefined;
+  }
+
+  async getReadyThumbnailAssetForVideo(videoId: string): Promise<MediaAsset | undefined> {
+    const normalized = videoId.trim();
+    if (!normalized) return undefined;
+    const ready = [...this.assetsById.values()]
+      .filter(
+        (asset) =>
+          asset.videoId === normalized &&
+          asset.uploadState === 'ready' &&
+          isThumbnailMediaContentType(asset.contentType),
+      )
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    const thumbnail = ready[0];
+    return thumbnail ? cloneAsset(thumbnail) : undefined;
   }
 }
 
@@ -392,10 +419,34 @@ export class PostgresMediaAssetStore implements MediaAssetStore {
     const [row] = await this.db
       .select()
       .from(mediaAssets)
-      .where(and(eq(mediaAssets.videoId, normalized), eq(mediaAssets.uploadState, 'ready')))
+      .where(
+        and(
+          eq(mediaAssets.videoId, normalized),
+          eq(mediaAssets.uploadState, 'ready'),
+          like(mediaAssets.contentType, 'video/%'),
+        ),
+      )
       .orderBy(asc(mediaAssets.createdAt))
       .limit(1);
     return row ? toMediaAsset(row) : undefined;
+  }
+
+  async getReadyThumbnailAssetForVideo(videoId: string): Promise<MediaAsset | undefined> {
+    const normalized = videoId.trim();
+    if (!normalized) return undefined;
+    const [row] = await this.db
+      .select()
+      .from(mediaAssets)
+      .where(
+        and(
+          eq(mediaAssets.videoId, normalized),
+          eq(mediaAssets.uploadState, 'ready'),
+          like(mediaAssets.contentType, 'image/%'),
+        ),
+      )
+      .orderBy(desc(mediaAssets.createdAt))
+      .limit(1);
+    return row && isThumbnailMediaContentType(row.contentType) ? toMediaAsset(row) : undefined;
   }
 }
 

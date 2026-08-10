@@ -14,6 +14,14 @@ export function publicPrimaryMediaPath(publicVideoId: string): string {
   return `/api/videos/public/${encodeURIComponent(publicVideoId)}/media`;
 }
 
+/**
+ * Same-origin anonymous thumbnail image for a published public/unlisted video.
+ * Uses only the opaque `publicVideoId` — never storage keys, draft ids, or asset ids.
+ */
+export function publicThumbnailPath(publicVideoId: string): string {
+  return `/api/videos/public/${encodeURIComponent(publicVideoId)}/thumbnail`;
+}
+
 /** Browser watch path that uses only the opaque public video identifier. */
 export function publicVideoWatchPath(publicVideoId: string): string {
   return `/watch/${encodeURIComponent(publicVideoId)}`;

@@ -17,3 +17,8 @@ export function draftMediaAssetPath(videoId: VideoId, assetId: string): string {
 export function draftMediaUploadPath(videoId: VideoId): string {
   return `/api/videos/drafts/${encodeURIComponent(videoId)}/media`;
 }
+
+/** Same-origin path for uploading or reading a draft thumbnail image. */
+export function draftThumbnailPath(videoId: VideoId): string {
+  return `/api/videos/drafts/${encodeURIComponent(videoId)}/thumbnail`;
+}

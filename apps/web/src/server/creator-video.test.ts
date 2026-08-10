@@ -71,6 +71,7 @@ describe('CreatorVideoService', () => {
       visibility: 'unlisted',
       category: 'education',
       language: 'en',
+      thumbnailUrl: 'https://example.com/a.jpg',
     });
     expect(created.publishedAt).toBeUndefined();
 
@@ -96,6 +97,33 @@ describe('CreatorVideoService', () => {
       code: 'not_found',
       status: 404,
     });
+  });
+
+  it('never persists blob or data thumbnail URLs on draft create/update', async () => {
+    const service = new CreatorVideoService({
+      store: new InMemoryCreatorVideoStore(),
+      resolveUser: async () => owner,
+      createId: (() => {
+        let n = 0;
+        return () => `id-${++n}`;
+      })(),
+    });
+
+    const created = await service.createDraft('token', {
+      title: 'IMG 1589',
+      thumbnailUrl: 'blob:https://vidak.postplatforms.com/5a7f2e33-93c3-438d-9781-f897d3e1a58d',
+    });
+    expect(created.thumbnailUrl).toBe('');
+
+    const updated = await service.updateDraft('token', created.id, {
+      thumbnailUrl: 'data:image/png;base64,abc',
+    });
+    expect(updated.thumbnailUrl).toBe('');
+
+    const restored = await service.updateDraft('token', created.id, {
+      thumbnailUrl: `/api/videos/drafts/${created.id}/thumbnail`,
+    });
+    expect(restored.thumbnailUrl).toBe(`/api/videos/drafts/${created.id}/thumbnail`);
   });
 
   it('rejects anonymous callers with 401', async () => {
