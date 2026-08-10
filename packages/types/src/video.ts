@@ -42,6 +42,12 @@ export interface Video {
    * Preserved across unpublish/republish; omitted until the video has been published once.
    */
   publicVideoId?: string;
+  /**
+   * Same-origin anonymous playback path for the primary ready media asset.
+   * Present only on published `public` / `unlisted` videos that have ready media.
+   * Never a storage key, filesystem path, or signed CDN URL.
+   */
+  mediaContentUrl?: string;
   publishedAt?: string;
   createdAt: string;
   updatedAt: string;

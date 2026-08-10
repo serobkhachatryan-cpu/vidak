@@ -40,7 +40,7 @@ import {
   draftMediaUploadPath,
 } from './draft-media-path';
 import { MockVideoApiClient, type MockVideoApiClientOptions } from './mock-video-client';
-import { publicMediaContentPath } from './public-media-path';
+import { publicMediaContentPath, publicPrimaryMediaPath } from './public-media-path';
 import type { VideoApiClient } from './video-client';
 
 export interface W3dsVideoApiClientOptions {
@@ -315,8 +315,11 @@ export class W3dsVideoApiClient implements VideoApiClient {
   async resolvePublicMediaContentPath(publicVideoId: string): Promise<string | undefined> {
     const video = await this.getPublicVideo(publicVideoId);
     if (!video?.publicVideoId) return undefined;
+    if (video.mediaContentUrl?.trim()) {
+      return video.mediaContentUrl.trim();
+    }
     const assetId = this.readyAssetByVideoId.get(video.id);
-    return assetId ? publicMediaContentPath(video.publicVideoId, assetId) : undefined;
+    return assetId ? publicPrimaryMediaPath(video.publicVideoId) : undefined;
   }
 
   private async requestJson<T>(path: string, init?: RequestInit): Promise<T> {

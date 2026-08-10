@@ -208,9 +208,8 @@ describe('MockVideoApiClient', () => {
     const mediaPath = await publishClient.resolvePublicMediaContentPath(
       published.publicVideoId ?? '',
     );
-    expect(mediaPath).toMatch(
-      new RegExp(`^/api/videos/public/${published.publicVideoId}/media/.+/content$`),
-    );
+    expect(mediaPath).toBe(`/api/videos/public/${published.publicVideoId}/media`);
+    expect(publicVideo?.mediaContentUrl).toBe(mediaPath);
 
     const unpublished = await publishClient.unpublishVideo(draft.id);
     expect(unpublished.status).toBe('draft');

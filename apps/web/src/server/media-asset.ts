@@ -8,6 +8,11 @@ import {
   PostgresMediaAssetStore,
 } from './media-asset-store';
 import {
+  contentRangeHeader,
+  parseSingleByteRange,
+  unsatisfiableContentRangeHeader,
+} from './media-byte-range';
+import {
   type MediaUploadLimits,
   normalizeContentType,
   resolveMediaUploadLimits,
@@ -41,12 +46,15 @@ export type PublicMediaAsset = Omit<MediaAsset, 'storageKey'>;
 export interface MediaAssetDownload {
   asset: PublicMediaAsset;
   body: ReadableStream<Uint8Array>;
+  status: number;
   headers: {
     'Content-Type': string;
     'Content-Length': string;
     'Content-Disposition': string;
     'Cache-Control': string;
     'X-Content-Type-Options': string;
+    'Accept-Ranges'?: string;
+    'Content-Range'?: string;
   };
 }
 
@@ -249,7 +257,7 @@ export class MediaAssetService {
     if (asset.uploadState !== 'ready') {
       throw new MediaAssetError('Media asset is not ready for download.', 'not_found', 404);
     }
-    return this.openReadyAssetStream(asset);
+    return this.openReadyAssetStream(asset, { disposition: 'attachment' });
   }
 
   /**
@@ -267,7 +275,40 @@ export class MediaAssetService {
     if (!asset) {
       throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
     }
-    return this.openReadyAssetStream(asset);
+    return this.openReadyAssetStream(asset, { disposition: 'attachment' });
+  }
+
+  /**
+   * Anonymous primary ready-asset stream for a published public/unlisted video.
+   * Callers must resolve visibility first. Supports safe single byte ranges for
+   * HTML5 seeking. Never returns storage keys, paths, or asset ids in headers.
+   */
+  async openPrimaryPublishedDownload(
+    videoId: string,
+    options: { rangeHeader?: string | null } = {},
+  ): Promise<MediaAssetDownload> {
+    const normalizedVideoId = videoId.trim();
+    if (!normalizedVideoId) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+    }
+    const asset = await this.store.getPrimaryReadyAssetForVideo(normalizedVideoId);
+    if (!asset) {
+      throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
+    }
+    return this.openReadyAssetStream(asset, {
+      disposition: 'inline',
+      ...(options.rangeHeader !== undefined ? { rangeHeader: options.rangeHeader } : {}),
+      acceptRanges: true,
+    });
+  }
+
+  /**
+   * True when the video has at least one ready media asset (no ownership check).
+   * Used only after published public/unlisted visibility is confirmed.
+   */
+  async hasPrimaryReadyAsset(videoId: string): Promise<boolean> {
+    const asset = await this.store.getPrimaryReadyAssetForVideo(videoId.trim());
+    return Boolean(asset);
   }
 
   /**
@@ -317,10 +358,36 @@ export class MediaAssetService {
     return asset;
   }
 
-  private async openReadyAssetStream(asset: MediaAsset): Promise<MediaAssetDownload> {
+  private async openReadyAssetStream(
+    asset: MediaAsset,
+    options: {
+      disposition: 'attachment' | 'inline';
+      rangeHeader?: string | null;
+      acceptRanges?: boolean;
+    },
+  ): Promise<MediaAssetDownload> {
+    const parsed = parseSingleByteRange(options.rangeHeader, asset.byteSize);
+    if (parsed.kind === 'invalid') {
+      throw new MediaAssetError('Range request is invalid.', 'validation_failed', 400);
+    }
+    if (parsed.kind === 'unsatisfiable') {
+      throw new MediaAssetError(
+        'Requested range is not satisfiable.',
+        'range_not_satisfiable',
+        416,
+        {
+          headers: {
+            'Content-Range': unsatisfiableContentRangeHeader(asset.byteSize),
+            'Accept-Ranges': 'bytes',
+          },
+        },
+      );
+    }
+
+    const range = parsed.kind === 'range' ? { start: parsed.start, end: parsed.end } : undefined;
     let body: ReadableStream<Uint8Array>;
     try {
-      body = await this.storage.openReadStream(asset.storageKey);
+      body = await this.storage.openReadStream(asset.storageKey, range);
     } catch (error) {
       if (error instanceof MediaStorageError && error.code === 'not_found') {
         throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
@@ -328,16 +395,26 @@ export class MediaAssetService {
       throw error;
     }
 
+    const contentLength = range ? range.end - range.start + 1 : asset.byteSize;
+    const headers: MediaAssetDownload['headers'] = {
+      'Content-Type': asset.contentType,
+      'Content-Length': String(contentLength),
+      'Content-Disposition': contentDispositionHeader(asset.originalFilename, options.disposition),
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+    };
+    if (options.acceptRanges || range) {
+      headers['Accept-Ranges'] = 'bytes';
+    }
+    if (range) {
+      headers['Content-Range'] = contentRangeHeader(range.start, range.end, asset.byteSize);
+    }
+
     return {
       asset: toPublicMediaAsset(asset),
       body,
-      headers: {
-        'Content-Type': asset.contentType,
-        'Content-Length': String(asset.byteSize),
-        'Content-Disposition': contentDispositionHeader(asset.originalFilename),
-        'Cache-Control': 'private, no-store',
-        'X-Content-Type-Options': 'nosniff',
-      },
+      status: range ? 206 : 200,
+      headers,
     };
   }
 
@@ -401,7 +478,10 @@ function normalizeOriginalFilename(value: string | null): string {
 }
 
 /** RFC 5987-ish safe Content-Disposition using a sanitized filename. */
-export function contentDispositionHeader(originalFilename: string): string {
+export function contentDispositionHeader(
+  originalFilename: string,
+  disposition: 'attachment' | 'inline' = 'attachment',
+): string {
   const fallback = 'download';
   const ascii =
     originalFilename
@@ -409,7 +489,7 @@ export function contentDispositionHeader(originalFilename: string): string {
       .replace(/["\\]/g, '_')
       .trim() || fallback;
   const encoded = encodeURIComponent(originalFilename);
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
+  return `${disposition}; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 let sharedService: MediaAssetService | undefined;

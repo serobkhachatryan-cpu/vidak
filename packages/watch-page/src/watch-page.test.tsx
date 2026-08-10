@@ -92,12 +92,28 @@ describe('WatchPage', () => {
       <WatchPage
         video={{ ...video, publicVideoId: 'pub_design-system', visibility: 'public' }}
         channel={channel}
-        mediaSrc="/api/videos/public/pub_design-system/media/asset-1/content"
+        mediaSrc="/api/videos/public/pub_design-system/media"
       />,
     );
     expect(markup).toContain('data-testid="public-video-player"');
-    expect(markup).toContain('/api/videos/public/pub_design-system/media/asset-1/content');
+    expect(markup).toContain('/api/videos/public/pub_design-system/media');
+    expect(markup).toContain('<video');
+    expect(markup).toContain('controls');
+    expect(markup).not.toContain('This video has no playable media.');
     expect(markup).not.toMatch(/storageKey|drafts\//);
+  });
+
+  it('renders a non-playable fallback when no public media URL exists', () => {
+    const markup = renderToStaticMarkup(
+      <WatchPage
+        video={{ ...video, publicVideoId: 'pub_design-system', visibility: 'public' }}
+        channel={channel}
+      />,
+    );
+    expect(markup).toContain('data-testid="public-video-player-unavailable"');
+    expect(markup).toContain('This video has no playable media.');
+    expect(markup).not.toContain('data-testid="public-video-player"');
+    expect(markup).not.toContain('<video');
   });
 
   it('supports dark mode and subscribed actions', () => {

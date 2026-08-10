@@ -40,7 +40,7 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const { videoId, assetId } = await context.params;
     const download = await getMediaAssetService().openDownload(accessToken, videoId, assetId);
     return new NextResponse(download.body, {
-      status: 200,
+      status: download.status,
       headers: download.headers,
     });
   } catch (error) {

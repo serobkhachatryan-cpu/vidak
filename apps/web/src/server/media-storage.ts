@@ -26,6 +26,12 @@ export interface MediaUploadSession {
   abort(): Promise<void>;
 }
 
+/** Inclusive byte offsets for a partial object read (HTTP Range). */
+export interface MediaReadRange {
+  start: number;
+  end: number;
+}
+
 /**
  * Server-only blob storage adapter. Implementations map opaque storage keys
  * to durable bytes; keys must never be treated as user-supplied paths.
@@ -37,8 +43,11 @@ export interface MediaStorage {
   read(storageKey: string): Promise<Uint8Array>;
   /** Opens a private temporary upload that must be finalized or aborted. */
   openUpload(): Promise<MediaUploadSession>;
-  /** Streams object bytes without loading the whole object into memory. */
-  openReadStream(storageKey: string): Promise<ReadableStream<Uint8Array>>;
+  /**
+   * Streams object bytes without loading the whole object into memory.
+   * When `range` is set, only the inclusive `[start, end]` slice is streamed.
+   */
+  openReadStream(storageKey: string, range?: MediaReadRange): Promise<ReadableStream<Uint8Array>>;
   delete(storageKey: string): Promise<void>;
   exists(storageKey: string): Promise<boolean>;
 }
@@ -156,15 +165,32 @@ export class LocalDiskMediaStorage implements MediaStorage {
     };
   }
 
-  async openReadStream(storageKey: string): Promise<ReadableStream<Uint8Array>> {
+  async openReadStream(
+    storageKey: string,
+    range?: MediaReadRange,
+  ): Promise<ReadableStream<Uint8Array>> {
     const path = this.resolveObjectPath(storageKey);
+    let info: Awaited<ReturnType<typeof stat>>;
     try {
-      await stat(path);
+      info = await stat(path);
     } catch (error) {
       if (isNotFoundError(error)) {
         throw new MediaStorageError('Media object was not found.', 'not_found');
       }
       throw error;
+    }
+    if (range) {
+      if (
+        !Number.isInteger(range.start) ||
+        !Number.isInteger(range.end) ||
+        range.start < 0 ||
+        range.end < range.start ||
+        range.end >= info.size
+      ) {
+        throw new MediaStorageError('Media object was not found.', 'not_found');
+      }
+      const nodeStream = createReadStream(path, { start: range.start, end: range.end });
+      return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;
     }
     const nodeStream = createReadStream(path);
     return Readable.toWeb(nodeStream) as ReadableStream<Uint8Array>;

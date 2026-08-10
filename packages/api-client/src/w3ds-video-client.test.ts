@@ -373,7 +373,39 @@ describe('W3dsVideoApiClient', () => {
       body,
     });
     await expect(client.resolvePublicMediaContentPath('pub_live')).resolves.toBe(
-      '/api/videos/public/pub_live/media/asset-1/content',
+      '/api/videos/public/pub_live/media',
+    );
+  });
+
+  it('resolves public media paths from mediaContentUrl without an upload-session cache', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/videos/public/pub_cold')) {
+        return jsonResponse({
+          id: 'draft-cold',
+          channelId: 'channel-1',
+          title: 'Cold watch',
+          description: '',
+          thumbnailUrl: '',
+          durationSeconds: 0,
+          status: 'published',
+          visibility: 'public',
+          publicVideoId: 'pub_cold',
+          mediaContentUrl: '/api/videos/public/pub_cold/media',
+          publishedAt: '2026-08-04T12:00:00.000Z',
+          createdAt: '2026-08-04T10:00:00.000Z',
+          updatedAt: '2026-08-04T12:00:00.000Z',
+          viewCount: 0,
+          likeCount: 0,
+          commentCount: 0,
+          tags: [],
+        });
+      }
+      return jsonResponse({ error: { code: 'not_found', message: 'missing' } }, 404);
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    await expect(client.resolvePublicMediaContentPath('pub_cold')).resolves.toBe(
+      '/api/videos/public/pub_cold/media',
     );
   });
 

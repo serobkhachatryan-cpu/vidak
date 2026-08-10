@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq } from 'drizzle-orm';
 import type { W3dsDatabase } from './db/client';
 import { type MediaUploadState, mediaAssets, videos } from './db/schema';
 import { MediaAssetError } from './media-asset-errors';
@@ -71,6 +71,11 @@ export interface MediaAssetStore {
    * been validated as published + public/unlisted.
    */
   getReadyAssetForVideo(videoId: string, assetId: string): Promise<MediaAsset | undefined>;
+  /**
+   * Returns the oldest ready asset for `videoId` (stable primary playback source).
+   * Callers must already have validated published public/unlisted visibility.
+   */
+  getPrimaryReadyAssetForVideo(videoId: string): Promise<MediaAsset | undefined>;
 }
 
 function cloneAsset(asset: MediaAsset): MediaAsset {
@@ -259,6 +264,16 @@ export class InMemoryMediaAssetStore implements MediaAssetStore {
     if (!asset || asset.videoId !== videoId || asset.uploadState !== 'ready') return undefined;
     return cloneAsset(asset);
   }
+
+  async getPrimaryReadyAssetForVideo(videoId: string): Promise<MediaAsset | undefined> {
+    const normalized = videoId.trim();
+    if (!normalized) return undefined;
+    const ready = [...this.assetsById.values()]
+      .filter((asset) => asset.videoId === normalized && asset.uploadState === 'ready')
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    const primary = ready[0];
+    return primary ? cloneAsset(primary) : undefined;
+  }
 }
 
 /** PostgreSQL-backed store shared across application instances. */
@@ -367,6 +382,18 @@ export class PostgresMediaAssetStore implements MediaAssetStore {
           eq(mediaAssets.uploadState, 'ready'),
         ),
       )
+      .limit(1);
+    return row ? toMediaAsset(row) : undefined;
+  }
+
+  async getPrimaryReadyAssetForVideo(videoId: string): Promise<MediaAsset | undefined> {
+    const normalized = videoId.trim();
+    if (!normalized) return undefined;
+    const [row] = await this.db
+      .select()
+      .from(mediaAssets)
+      .where(and(eq(mediaAssets.videoId, normalized), eq(mediaAssets.uploadState, 'ready')))
+      .orderBy(asc(mediaAssets.createdAt))
       .limit(1);
     return row ? toMediaAsset(row) : undefined;
   }
