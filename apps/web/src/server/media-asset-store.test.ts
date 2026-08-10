@@ -48,6 +48,10 @@ describe('InMemoryMediaAssetStore', () => {
 
     const updated = await store.updateUploadState('asset-1', ownerId, 'ready');
     expect(updated).toMatchObject({ id: 'asset-1', uploadState: 'ready' });
+    await expect(store.getPrimaryReadyAssetForVideo(videoId)).resolves.toMatchObject({
+      id: 'asset-1',
+      uploadState: 'ready',
+    });
 
     const deleted = await store.deleteOwnedAsset('asset-1', ownerId);
     expect(deleted).toMatchObject({ id: 'asset-1', storageKey: created.storageKey });

@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { CreatorVideoError, getCreatorVideoService } from '../../../../server/creator-video';
+import { withPublicMediaContentUrls } from '../../../../server/public-video-playback';
 
 export const runtime = 'nodejs';
 
@@ -33,7 +34,10 @@ export async function GET(request: NextRequest) {
       ...(cursor ? { cursor } : {}),
       ...(limit !== undefined ? { limit } : {}),
     });
-    return NextResponse.json(page);
+    return NextResponse.json({
+      ...page,
+      items: await withPublicMediaContentUrls(page.items),
+    });
   } catch (error) {
     return errorResponse(error);
   }

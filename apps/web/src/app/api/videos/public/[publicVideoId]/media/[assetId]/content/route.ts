@@ -34,7 +34,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     const video = await getCreatorVideoService().getPublicVideo(publicVideoId);
     const download = await getMediaAssetService().openPublishedDownload(video.id, assetId);
     return new NextResponse(download.body, {
-      status: 200,
+      status: download.status,
       headers: download.headers,
     });
   } catch (error) {

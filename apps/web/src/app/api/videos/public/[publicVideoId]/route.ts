@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { CreatorVideoError, getCreatorVideoService } from '../../../../../server/creator-video';
+import { withPublicMediaContentUrl } from '../../../../../server/public-video-playback';
 
 export const runtime = 'nodejs';
 
@@ -27,7 +28,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
   try {
     const { publicVideoId } = await context.params;
     const video = await getCreatorVideoService().getPublicVideo(publicVideoId);
-    return NextResponse.json(video);
+    return NextResponse.json(await withPublicMediaContentUrl(video));
   } catch (error) {
     return errorResponse(error);
   }

@@ -47,7 +47,7 @@ import {
   mockVideos,
 } from './mock-data';
 import { createCursorPage } from './pagination';
-import { publicMediaContentPath } from './public-media-path';
+import { publicMediaContentPath, publicPrimaryMediaPath } from './public-media-path';
 import type { VideoApiClient } from './video-client';
 
 /** Placeholder thumbs for the development mock upload UX only (not from the media API). */
@@ -490,8 +490,9 @@ export class MockVideoApiClient implements VideoApiClient {
       publishedAt: video.publishedAt ?? now,
       updatedAt: now,
     };
-    this.videos = this.videos.map((item) => (item.id === id ? next : item));
-    return next;
+    const withPlayback = this.withMockMediaContentUrl(next);
+    this.videos = this.videos.map((item) => (item.id === id ? withPlayback : item));
+    return withPlayback;
   }
 
   async unpublishVideo(id: VideoId): Promise<Video> {
@@ -499,8 +500,9 @@ export class MockVideoApiClient implements VideoApiClient {
     const video = this.videos.find((item) => item.id === id);
     if (!video) throw new Error(`Video ${id} was not found`);
     const now = new Date().toISOString();
-    const { publishedAt: _publishedAt, ...rest } = video;
+    const { publishedAt: _publishedAt, mediaContentUrl: _mediaContentUrl, ...rest } = video;
     void _publishedAt;
+    void _mediaContentUrl;
     const next: Video = {
       ...rest,
       status: 'draft',
@@ -678,7 +680,8 @@ export class MockVideoApiClient implements VideoApiClient {
         (first, second) =>
           new Date(second.publishedAt ?? second.createdAt).getTime() -
           new Date(first.publishedAt ?? first.createdAt).getTime(),
-      );
+      )
+      .map((video) => this.withMockMediaContentUrl(video));
     return createCursorPage(items, pagination);
   }
 
@@ -686,12 +689,13 @@ export class MockVideoApiClient implements VideoApiClient {
     await this.wait();
     const normalized = publicVideoId.trim();
     if (!normalized) return undefined;
-    return this.videos.find(
-      (video) =>
-        video.publicVideoId === normalized &&
-        video.status === 'published' &&
-        (video.visibility === 'public' || video.visibility === 'unlisted'),
+    const video = this.videos.find(
+      (item) =>
+        item.publicVideoId === normalized &&
+        item.status === 'published' &&
+        (item.visibility === 'public' || item.visibility === 'unlisted'),
     );
+    return video ? this.withMockMediaContentUrl(video) : undefined;
   }
 
   publicMediaContentPath(publicVideoId: string, assetId: string): string {
@@ -702,10 +706,38 @@ export class MockVideoApiClient implements VideoApiClient {
     await this.wait();
     const video = await this.getPublicVideo(publicVideoId);
     if (!video?.publicVideoId) return undefined;
+    if (video.mediaContentUrl?.trim()) {
+      return video.mediaContentUrl.trim();
+    }
     const asset = [...this.draftMediaById.values()].find(
       (item) => item.videoId === video.id && item.uploadState === 'ready',
     );
-    return asset ? publicMediaContentPath(video.publicVideoId, asset.id) : undefined;
+    return asset ? publicPrimaryMediaPath(video.publicVideoId) : undefined;
+  }
+
+  private withMockMediaContentUrl(video: Video): Video {
+    if (!video.publicVideoId || video.status !== 'published') {
+      const { mediaContentUrl: _omit, ...rest } = video;
+      void _omit;
+      return rest;
+    }
+    if (video.visibility !== 'public' && video.visibility !== 'unlisted') {
+      const { mediaContentUrl: _omit, ...rest } = video;
+      void _omit;
+      return rest;
+    }
+    const hasReady = [...this.draftMediaById.values()].some(
+      (asset) => asset.videoId === video.id && asset.uploadState === 'ready',
+    );
+    if (!hasReady) {
+      const { mediaContentUrl: _omit, ...rest } = video;
+      void _omit;
+      return rest;
+    }
+    return {
+      ...video,
+      mediaContentUrl: publicPrimaryMediaPath(video.publicVideoId),
+    };
   }
 
   private filterVideos(filters: VideoListFilters): readonly Video[] {

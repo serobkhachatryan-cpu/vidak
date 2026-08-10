@@ -29,6 +29,7 @@ import {
 } from './drafts/[videoId]/route';
 import { POST as createDraft } from './drafts/route';
 import { GET as getPublicMediaContent } from './public/[publicVideoId]/media/[assetId]/content/route';
+import { GET as getPublicPrimaryMedia } from './public/[publicVideoId]/media/route';
 import { GET as getPublicVideo } from './public/[publicVideoId]/route';
 import { GET as listPublicVideos } from './public/route';
 
@@ -198,7 +199,28 @@ describe('authenticated video workflow (end-to-end)', () => {
       title: 'Workflow draft saved',
       status: 'published',
       publicVideoId: publishedBody.publicVideoId,
+      mediaContentUrl: `/api/videos/public/${publishedBody.publicVideoId}/media`,
     });
+
+    const primaryPlayback = await getPublicPrimaryMedia(
+      new NextRequest(`${appOrigin}/api/videos/public/${publishedBody.publicVideoId}/media`),
+      { params: Promise.resolve({ publicVideoId: publishedBody.publicVideoId }) },
+    );
+    expect(primaryPlayback.status).toBe(200);
+    expect(primaryPlayback.headers.get('Content-Type')).toBe('video/mp4');
+    expect(primaryPlayback.headers.get('Content-Disposition')).toMatch(/^inline;/);
+    expect(primaryPlayback.headers.get('Accept-Ranges')).toBe('bytes');
+    await expect(primaryPlayback.text()).resolves.toBe('workflow-video-bytes');
+
+    const rangedPlayback = await getPublicPrimaryMedia(
+      new NextRequest(`${appOrigin}/api/videos/public/${publishedBody.publicVideoId}/media`, {
+        headers: { Range: 'bytes=0-7' },
+      }),
+      { params: Promise.resolve({ publicVideoId: publishedBody.publicVideoId }) },
+    );
+    expect(rangedPlayback.status).toBe(206);
+    expect(rangedPlayback.headers.get('Content-Range')).toMatch(/^bytes 0-7\//);
+    await expect(rangedPlayback.text()).resolves.toBe('workflow');
 
     const playback = await getPublicMediaContent(
       new NextRequest(

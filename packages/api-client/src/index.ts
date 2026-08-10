@@ -22,6 +22,7 @@ export { createCursorPage, getNextPageParam } from './pagination';
 export {
   isPublicVideoId,
   publicMediaContentPath,
+  publicPrimaryMediaPath,
   publicVideoWatchPath,
 } from './public-media-path';
 export type { VideoApiClient } from './video-client';

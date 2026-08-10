@@ -147,6 +147,7 @@ function VideoPlayer({ title, mediaSrc }: { title: string; mediaSrc?: string }) 
     <section
       aria-label={`Video player for ${title}`}
       className="relative aspect-video overflow-hidden rounded-xl bg-black text-white shadow-sm"
+      data-testid="public-video-player-unavailable"
     >
       <div
         className="absolute inset-0 bg-gradient-to-br from-primary/40 via-black/70 to-black"
@@ -159,7 +160,7 @@ function VideoPlayer({ title, mediaSrc }: { title: string; mediaSrc?: string }) 
         >
           ▶
         </span>
-        <p className="font-sans text-sm text-white/80">Video player placeholder</p>
+        <p className="font-sans text-sm text-white/80">This video has no playable media.</p>
       </div>
     </section>
   );
