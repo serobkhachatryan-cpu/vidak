@@ -1,4 +1,4 @@
-export const platformName = 'W3DS Video';
+export const platformName = 'Vidak';
 
 /**
  * Environment variable names for authentication provider selection.

@@ -1,7 +1,7 @@
 export default function Page() {
   return (
     <main>
-      <h1>W3DS Admin</h1>
+      <h1>Vidak Admin</h1>
       <p>Platform bootstrap complete.</p>
     </main>
   );

@@ -53,7 +53,7 @@ export function HomeFeed() {
 
   return (
     <ApplicationShell currentHref="/">
-      <Page title="Home" description="Fresh videos from the W3DS community." containerSize="full">
+      <Page title="Home" description="Fresh videos from the Vidak community." containerSize="full">
         {isPending ? (
           <FeedGridSkeleton />
         ) : error ? (

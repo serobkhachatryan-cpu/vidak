@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'W3DS Video',
+  title: 'Vidak',
   description: 'Decentralized video hosting',
 };
 

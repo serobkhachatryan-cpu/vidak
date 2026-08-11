@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'W3DS Documentation',
-  description: 'W3DS Video documentation',
+  title: 'Vidak Documentation',
+  description: 'Vidak documentation',
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

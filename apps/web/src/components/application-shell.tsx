@@ -1,6 +1,5 @@
 'use client';
 
-import { platformName } from '@w3ds/config';
 import { AppShell, Button, Header, SearchInput, Sidebar } from '@w3ds/ui';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -13,6 +12,7 @@ import {
 } from 'react';
 import { useAuthentication, useCurrentUser } from '../features/auth/auth-provider';
 import { useAppearancePreference } from '../features/settings/appearance-preference';
+import { VidakLogo } from './vidak-logo';
 
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
@@ -129,9 +129,9 @@ export function ApplicationShell({
             <a
               href="/"
               onClick={navigateInternally}
-              className="rounded font-sans text-lg font-bold text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+              className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
-              {platformName}
+              <VidakLogo className="h-10 w-auto text-foreground" />
             </a>
           }
           onMenuClick={() => setMobileNavigationOpen(true)}
