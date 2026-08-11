@@ -27,9 +27,12 @@ export default defineConfig({
     url: 'http://127.0.0.1:3000',
     // Stub env must win over a developer `next dev` already bound to :3000.
     reuseExistingServer: false,
+    timeout: 120_000,
     env: {
       ...process.env,
       ...w3dsE2eEnv,
+      CHOKIDAR_USEPOLLING: '1',
+      WATCHPACK_POLLING: 'true',
     },
   },
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],

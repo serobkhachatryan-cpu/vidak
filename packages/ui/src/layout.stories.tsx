@@ -113,7 +113,7 @@ export const States: Story = {
 /** Home discovery when `GET /api/videos/public` returns no published public videos. */
 export const EmptyDiscovery: Story = {
   render: () => (
-    <Page title="Home" description="Fresh videos from the W3DS community." containerSize="full">
+    <Page title="Home" description="Fresh videos from the Vidak community." containerSize="full">
       <EmptyState
         icon="◌"
         title="No videos to show"

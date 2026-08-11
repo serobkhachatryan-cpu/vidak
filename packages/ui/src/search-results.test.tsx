@@ -12,8 +12,8 @@ import {
 const channel: Channel = {
   id: 'channel-studio',
   ownerId: 'user-ada',
-  handle: 'w3ds-studio',
-  name: 'W3DS Studio',
+  handle: 'vidak-studio',
+  name: 'Vidak Studio',
   subscriberCount: 152_400,
   videoCount: 4,
   createdAt: '2025-01-12T09:00:00.000Z',

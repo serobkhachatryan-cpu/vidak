@@ -6,8 +6,8 @@ import { WatchPage } from './watch-page';
 const channel: Channel = {
   id: 'channel-studio',
   ownerId: 'user-ada',
-  handle: 'w3ds-studio',
-  name: 'W3DS Studio',
+  handle: 'vidak-studio',
+  name: 'Vidak Studio',
   subscriberCount: 152_400,
   videoCount: 4,
   createdAt: '2025-01-12T09:00:00.000Z',
@@ -63,7 +63,7 @@ describe('WatchPage', () => {
     expect(markup).toContain('aria-label="Video player for Building a practical design system"');
     expect(markup).toContain('<h1');
     expect(markup).toContain('Building a practical design system');
-    expect(markup).toContain('W3DS Studio');
+    expect(markup).toContain('Vidak Studio');
     expect(markup).toContain('Subscribe');
     expect(markup).toContain('<legend class="sr-only">Video actions</legend>');
     expect(markup).toContain('aria-label="Video tags"');

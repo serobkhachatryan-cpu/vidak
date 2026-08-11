@@ -23,8 +23,8 @@ const video: Video = {
 const channel: Channel = {
   id: 'channel-studio',
   ownerId: 'user-ada',
-  handle: 'w3ds-studio',
-  name: 'W3DS Studio',
+  handle: 'vidak-studio',
+  name: 'Vidak Studio',
   avatarUrl: 'https://images.unsplash.com/photo-1618005198919-d3d4b5a92ead?w=160&h=160&fit=crop',
   subscriberCount: 152_400,
   videoCount: 4,

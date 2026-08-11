@@ -30,8 +30,8 @@ const profileWithoutBio: UserProfile = {
 const channel: Channel = {
   id: 'channel-studio',
   ownerId: profile.id,
-  handle: 'w3ds-studio',
-  name: 'W3DS Studio',
+  handle: 'vidak-studio',
+  name: 'Vidak Studio',
   subscriberCount: 999,
   videoCount: 24,
   createdAt: '2025-01-12T09:00:00.000Z',

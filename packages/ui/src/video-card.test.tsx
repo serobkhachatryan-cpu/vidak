@@ -24,8 +24,8 @@ const video: Video = {
 const channel: Channel = {
   id: 'channel-studio',
   ownerId: 'user-ada',
-  handle: 'w3ds-studio',
-  name: 'W3DS Studio',
+  handle: 'vidak-studio',
+  name: 'Vidak Studio',
   subscriberCount: 152_400,
   videoCount: 4,
   createdAt: '2025-01-12T09:00:00.000Z',
@@ -39,7 +39,7 @@ describe('VideoCard', () => {
     expect(markup).toContain('aria-label="Watch Building a practical design system"');
     expect(markup).toContain('loading="lazy"');
     expect(markup).toContain('12:22');
-    expect(markup).toContain('W3DS Studio');
+    expect(markup).toContain('Vidak Studio');
     expect(markup).toContain('98.3K views');
     expect(markup).toContain('src="https://example.com/thumbnail.jpg"');
   });
