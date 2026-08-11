@@ -11,9 +11,7 @@ import type {
 import { type FormEvent, type KeyboardEvent, useEffect, useId, useRef, useState } from 'react';
 import { EmptyState, ErrorState } from './layout';
 import { Avatar, Button, Skeleton, Text } from './primitives';
-
-const cx = (...classes: Array<string | false | null | undefined>) =>
-  classes.filter(Boolean).join(' ');
+import { cx } from './utils';
 
 const compactNumber = new Intl.NumberFormat('en', {
   notation: 'compact',

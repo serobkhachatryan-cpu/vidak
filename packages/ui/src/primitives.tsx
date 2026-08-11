@@ -10,15 +10,11 @@ import {
   useId,
   useState,
 } from 'react';
+import { cx, focusRing } from './utils';
 
 type Tone = 'default' | 'muted' | 'primary' | 'success' | 'warning' | 'danger';
 type Size = 'sm' | 'md' | 'lg';
 
-const cx = (...classes: Array<string | false | null | undefined>) =>
-  classes.filter(Boolean).join(' ');
-
-const focusRing =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background';
 const textTones: Record<Tone, string> = {
   default: 'text-foreground',
   muted: 'text-muted-foreground',

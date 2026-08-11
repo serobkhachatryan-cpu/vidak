@@ -1,6 +1,6 @@
 'use client';
 
-import { AppShell, Button, Header, SearchInput, Sidebar } from '@w3ds/ui';
+import { AppShell, Button, Header, SearchInput, Sidebar, VidakLogo } from '@w3ds/ui';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   type FormEvent,
@@ -12,7 +12,6 @@ import {
 } from 'react';
 import { useAuthentication, useCurrentUser } from '../features/auth/auth-provider';
 import { useAppearancePreference } from '../features/settings/appearance-preference';
-import { VidakLogo } from './vidak-logo';
 
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },

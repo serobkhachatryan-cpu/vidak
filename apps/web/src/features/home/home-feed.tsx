@@ -8,12 +8,12 @@ import {
   Grid,
   Page,
   Spinner,
+  VidakLogo,
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
 import { useEffect, useRef } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
-import { VidakLogo } from '../../components/vidak-logo';
 import { videoApiClient } from '../../lib/video-api-client';
 
 function FeedVideoCard({ video }: { video: Video }) {

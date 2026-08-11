@@ -1,3 +1,5 @@
+export type { VidakLogoProps } from './brand';
+export { VidakLogo } from './brand';
 export type {
   CommentAuthor,
   CommentEditorProps,
