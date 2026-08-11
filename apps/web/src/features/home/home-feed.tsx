@@ -13,6 +13,7 @@ import {
 } from '@w3ds/ui';
 import { useEffect, useRef } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
+import { VidakLogo } from '../../components/vidak-logo';
 import { videoApiClient } from '../../lib/video-api-client';
 
 function FeedVideoCard({ video }: { video: Video }) {
@@ -64,7 +65,7 @@ export function HomeFeed() {
           />
         ) : videos.length === 0 ? (
           <EmptyState
-            icon="◌"
+            icon={<VidakLogo title="" aria-hidden="true" className="h-12 w-auto text-foreground" />}
             title="No videos to show"
             description="New public videos will appear here."
           />

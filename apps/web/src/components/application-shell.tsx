@@ -131,7 +131,7 @@ export function ApplicationShell({
               onClick={navigateInternally}
               className="rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
             >
-              <VidakLogo className="h-10 w-auto text-foreground" />
+              <VidakLogo className="h-9 w-auto text-foreground sm:h-10" />
             </a>
           }
           onMenuClick={() => setMobileNavigationOpen(true)}
