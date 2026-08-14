@@ -427,7 +427,11 @@ export class MediaAssetService {
    * published public/unlisted video. Callers must resolve visibility first;
    * this method does not accept auth and never returns storage keys.
    */
-  async openPublishedDownload(videoId: string, assetId: string): Promise<MediaAssetDownload> {
+  async openPublishedDownload(
+    videoId: string,
+    assetId: string,
+    options: { rangeHeader?: string | null } = {},
+  ): Promise<MediaAssetDownload> {
     const normalizedVideoId = videoId.trim();
     const normalizedAssetId = assetId.trim();
     if (!normalizedVideoId || !normalizedAssetId) {
@@ -437,7 +441,11 @@ export class MediaAssetService {
     if (!asset) {
       throw new MediaAssetError('Media asset was not found.', 'not_found', 404);
     }
-    return this.openReadyAssetStream(asset, { disposition: 'attachment' });
+    return this.openReadyAssetStream(asset, {
+      disposition: 'inline',
+      ...(options.rangeHeader !== undefined ? { rangeHeader: options.rangeHeader } : {}),
+      acceptRanges: true,
+    });
   }
 
   /**
@@ -471,6 +479,25 @@ export class MediaAssetService {
   async hasPrimaryReadyAsset(videoId: string): Promise<boolean> {
     const asset = await this.store.getPrimaryReadyAssetForVideo(videoId.trim());
     return Boolean(asset);
+  }
+
+  /**
+   * Browser-safe metadata for the primary published video asset.
+   * Does not include storage keys, filesystem paths, or raw blob addresses.
+   */
+  async getPrimaryPublishedAsset(videoId: string): Promise<PublicMediaAsset | undefined> {
+    const asset = await this.store.getPrimaryReadyAssetForVideo(videoId.trim());
+    return asset ? toPublicMediaAsset(asset) : undefined;
+  }
+
+  /**
+   * Browser-safe metadata for every ready video asset on a published video,
+   * oldest first. Does not include storage keys, filesystem paths, or raw blob
+   * addresses.
+   */
+  async listPublishedVideoAssets(videoId: string): Promise<PublicMediaAsset[]> {
+    const assets = await this.store.listReadyVideoAssetsForVideo(videoId.trim());
+    return assets.map(toPublicMediaAsset);
   }
 
   /** True when the video has a ready thumbnail image asset (no ownership check). */

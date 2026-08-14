@@ -28,11 +28,13 @@ function errorResponse(error: unknown): NextResponse {
  * Visibility is enforced via getPublicVideo before any storage read.
  * Never returns storage keys, filesystem paths, or session data.
  */
-export async function GET(_request: NextRequest, context: RouteContext) {
+export async function GET(request: NextRequest, context: RouteContext) {
   try {
     const { publicVideoId, assetId } = await context.params;
     const video = await getCreatorVideoService().getPublicVideo(publicVideoId);
-    const download = await getMediaAssetService().openPublishedDownload(video.id, assetId);
+    const download = await getMediaAssetService().openPublishedDownload(video.id, assetId, {
+      rangeHeader: request.headers.get('range'),
+    });
     return new NextResponse(download.body, {
       status: download.status,
       headers: download.headers,

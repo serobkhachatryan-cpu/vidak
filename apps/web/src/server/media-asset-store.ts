@@ -79,6 +79,11 @@ export interface MediaAssetStore {
    */
   getPrimaryReadyAssetForVideo(videoId: string): Promise<MediaAsset | undefined>;
   /**
+   * Returns all ready *video* assets for `videoId`, oldest first. Used by public
+   * playback metadata after visibility has already been validated.
+   */
+  listReadyVideoAssetsForVideo(videoId: string): Promise<MediaAsset[]>;
+  /**
    * Returns the newest ready thumbnail image asset for `videoId`.
    * Callers must already have validated ownership or published visibility.
    */
@@ -275,16 +280,23 @@ export class InMemoryMediaAssetStore implements MediaAssetStore {
   async getPrimaryReadyAssetForVideo(videoId: string): Promise<MediaAsset | undefined> {
     const normalized = videoId.trim();
     if (!normalized) return undefined;
-    const ready = [...this.assetsById.values()]
+    const ready = await this.listReadyVideoAssetsForVideo(normalized);
+    const primary = ready[0];
+    return primary;
+  }
+
+  async listReadyVideoAssetsForVideo(videoId: string): Promise<MediaAsset[]> {
+    const normalized = videoId.trim();
+    if (!normalized) return [];
+    return [...this.assetsById.values()]
       .filter(
         (asset) =>
           asset.videoId === normalized &&
           asset.uploadState === 'ready' &&
           isVideoMediaContentType(asset.contentType),
       )
-      .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
-    const primary = ready[0];
-    return primary ? cloneAsset(primary) : undefined;
+      .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+      .map(cloneAsset);
   }
 
   async getReadyThumbnailAssetForVideo(videoId: string): Promise<MediaAsset | undefined> {
@@ -416,7 +428,14 @@ export class PostgresMediaAssetStore implements MediaAssetStore {
   async getPrimaryReadyAssetForVideo(videoId: string): Promise<MediaAsset | undefined> {
     const normalized = videoId.trim();
     if (!normalized) return undefined;
-    const [row] = await this.db
+    const [asset] = await this.listReadyVideoAssetsForVideo(normalized);
+    return asset;
+  }
+
+  async listReadyVideoAssetsForVideo(videoId: string): Promise<MediaAsset[]> {
+    const normalized = videoId.trim();
+    if (!normalized) return [];
+    const rows = await this.db
       .select()
       .from(mediaAssets)
       .where(
@@ -426,9 +445,8 @@ export class PostgresMediaAssetStore implements MediaAssetStore {
           like(mediaAssets.contentType, 'video/%'),
         ),
       )
-      .orderBy(asc(mediaAssets.createdAt))
-      .limit(1);
-    return row ? toMediaAsset(row) : undefined;
+      .orderBy(asc(mediaAssets.createdAt));
+    return rows.map(toMediaAsset);
   }
 
   async getReadyThumbnailAssetForVideo(videoId: string): Promise<MediaAsset | undefined> {

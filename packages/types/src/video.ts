@@ -5,6 +5,24 @@ export type VideoId = string;
 export type VideoStatus = 'draft' | 'processing' | 'published' | 'archived';
 export type VideoVisibility = 'public' | 'unlisted' | 'private';
 
+export type VideoMediaRenditionKind = 'original' | 'transcoded';
+
+export interface VideoMediaRendition {
+  /** Browser-safe stable id for this public playback option. */
+  id: string;
+  /** Human-readable quality label, for example "Original" or "720p". */
+  label: string;
+  /** Same-origin anonymous playback path for this rendition. */
+  mediaContentUrl: string;
+  kind: VideoMediaRenditionKind;
+  contentType?: string;
+  byteSize?: number;
+  width?: number;
+  height?: number;
+  bitrateKbps?: number;
+  isDefault?: boolean;
+}
+
 export const videoCategories = [
   'entertainment',
   'education',
@@ -48,6 +66,12 @@ export interface Video {
    * Never a storage key, filesystem path, or signed CDN URL.
    */
   mediaContentUrl?: string;
+  /**
+   * Browser-safe public playback choices. Today this usually contains the
+   * uploaded original; future transcoded renditions can be added here without
+   * changing the watch page contract.
+   */
+  mediaRenditions?: readonly VideoMediaRendition[];
   publishedAt?: string;
   createdAt: string;
   updatedAt: string;

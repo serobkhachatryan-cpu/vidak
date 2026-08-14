@@ -481,10 +481,14 @@ describe('video publishing and public discovery routes', () => {
   it('streams primary public media with inline disposition and safe byte ranges', async () => {
     const ctx = await createPublishingContext({ withMedia: true });
     const payload = new TextEncoder().encode('ABCDEFGHIJ');
+    const renditionPayload = new TextEncoder().encode('abcdefghij');
 
     const draft = await createOwnedDraft(ctx, { title: 'Primary media', visibility: 'public' });
     ctx.mediaStore.registerOwnedDraft(draft.id, ctx.ownerId);
     await uploadReadyMedia(ctx, draft.id, payload);
+    const renditionAsset = await uploadReadyMedia(ctx, draft.id, renditionPayload, {
+      originalFilename: 'clip-720p.mp4',
+    });
     ctx.videoStore.seedReadyMediaAsset(draft.id);
     const published = await publishOwned(ctx, draft.id);
 
@@ -495,10 +499,39 @@ describe('video publishing and public discovery routes', () => {
     expect(detail.status).toBe(200);
     const detailBody = (await detail.json()) as {
       mediaContentUrl?: string;
+      mediaRenditions?: Array<{
+        id: string;
+        label: string;
+        kind: string;
+        mediaContentUrl: string;
+        contentType?: string;
+        byteSize?: number;
+        isDefault?: boolean;
+      }>;
       publicVideoId: string;
     };
     expect(detailBody.mediaContentUrl).toBe(`/api/videos/public/${published.publicVideoId}/media`);
-    expect(JSON.stringify(detailBody)).not.toMatch(/storageKey|asset-|media_/);
+    expect(detailBody.mediaRenditions).toEqual([
+      expect.objectContaining({
+        id: 'original',
+        label: 'Original',
+        kind: 'original',
+        mediaContentUrl: `/api/videos/public/${published.publicVideoId}/media`,
+        contentType: 'video/mp4',
+        byteSize: payload.byteLength,
+        isDefault: true,
+      }),
+      expect.objectContaining({
+        id: renditionAsset.id,
+        label: '720p',
+        kind: 'transcoded',
+        mediaContentUrl: `/api/videos/public/${published.publicVideoId}/media/${renditionAsset.id}/content`,
+        contentType: 'video/mp4',
+        byteSize: renditionPayload.byteLength,
+        isDefault: false,
+      }),
+    ]);
+    expect(JSON.stringify(detailBody)).not.toMatch(/storageKey|media_/);
 
     const full = await getPublicPrimaryMedia(
       new NextRequest(`https://vidak.example/api/videos/public/${published.publicVideoId}/media`),
@@ -524,6 +557,24 @@ describe('video publishing and public discovery routes', () => {
     expect(ranged.headers.get('Accept-Ranges')).toBe('bytes');
     expect(ranged.headers.get('Content-Disposition')).toMatch(/^inline;/);
     await expect(ranged.text()).resolves.toBe('CDEF');
+
+    const renditionPlayback = await getPublicMediaContent(
+      new NextRequest(
+        `https://vidak.example/api/videos/public/${published.publicVideoId}/media/${renditionAsset.id}/content`,
+        { headers: { Range: 'bytes=1-3' } },
+      ),
+      {
+        params: Promise.resolve({
+          publicVideoId: published.publicVideoId,
+          assetId: renditionAsset.id,
+        }),
+      },
+    );
+    expect(renditionPlayback.status).toBe(206);
+    expect(renditionPlayback.headers.get('Content-Range')).toBe('bytes 1-3/10');
+    expect(renditionPlayback.headers.get('Accept-Ranges')).toBe('bytes');
+    expect(renditionPlayback.headers.get('Content-Disposition')).toMatch(/^inline;/);
+    await expect(renditionPlayback.text()).resolves.toBe('bcd');
 
     const multipart = await getPublicPrimaryMedia(
       new NextRequest(`https://vidak.example/api/videos/public/${published.publicVideoId}/media`, {
@@ -603,8 +654,12 @@ describe('video publishing and public discovery routes', () => {
       { params: Promise.resolve({ publicVideoId: emptyPublished.publicVideoId }) },
     );
     expect(emptyDetail.status).toBe(200);
-    const emptyBody = (await emptyDetail.json()) as { mediaContentUrl?: string };
+    const emptyBody = (await emptyDetail.json()) as {
+      mediaContentUrl?: string;
+      mediaRenditions?: unknown;
+    };
     expect(emptyBody.mediaContentUrl).toBeUndefined();
+    expect(emptyBody.mediaRenditions).toBeUndefined();
   });
 
   it('clears blob thumbnail URLs and returns durable public thumbnail URLs', async () => {
@@ -753,6 +808,7 @@ async function uploadReadyMedia(
   ctx: { ownerToken: string },
   videoId: string,
   payload: Uint8Array,
+  options: { contentType?: string; originalFilename?: string } = {},
 ): Promise<{ id: string }> {
   const response = await uploadMedia(
     new NextRequest(`https://vidak.example/api/videos/drafts/${videoId}/media`, {
@@ -760,9 +816,9 @@ async function uploadReadyMedia(
       body: chunkedBody(payload, 8),
       duplex: 'half',
       headers: {
-        'Content-Type': 'video/mp4',
+        'Content-Type': options.contentType ?? 'video/mp4',
         'Content-Length': String(payload.byteLength),
-        'X-Original-Filename': 'clip.mp4',
+        'X-Original-Filename': options.originalFilename ?? 'clip.mp4',
         Authorization: `Bearer ${ctx.ownerToken}`,
       },
     }),

@@ -18,6 +18,7 @@ import type {
   CommentSort,
   Video,
   VideoId,
+  VideoMediaRendition,
 } from '@w3ds/types';
 import {
   AppShell,
@@ -29,13 +30,14 @@ import {
   ErrorState,
   Heading,
   Page,
+  Select,
   Skeleton,
   Tag,
   Text,
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
-import { type ReactNode, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useState } from 'react';
 
 const cx = (...classes: Array<string | false | null | undefined>) =>
   classes.filter(Boolean).join(' ');
@@ -122,23 +124,92 @@ export interface WatchPageDataProps
   videoId: VideoId;
 }
 
-function VideoPlayer({ title, mediaSrc }: { title: string; mediaSrc?: string }) {
-  if (mediaSrc) {
+function buildQualityOptions(
+  mediaSrc?: string,
+  renditions: readonly VideoMediaRendition[] = [],
+): readonly VideoMediaRendition[] {
+  const options = renditions.filter((rendition) => rendition.mediaContentUrl.trim());
+  if (options.length > 0) return options;
+  return mediaSrc
+    ? [
+        {
+          id: 'original',
+          label: 'Original',
+          kind: 'original',
+          mediaContentUrl: mediaSrc,
+          isDefault: true,
+        },
+      ]
+    : [];
+}
+
+function formatQualityLabel(rendition: VideoMediaRendition): string {
+  const contentType = rendition.contentType?.replace(/^video\//, '').toUpperCase();
+  return [rendition.label, contentType].filter(Boolean).join(' · ');
+}
+
+function VideoPlayer({
+  title,
+  mediaSrc,
+  mediaRenditions,
+}: {
+  title: string;
+  mediaSrc?: string;
+  mediaRenditions?: readonly VideoMediaRendition[];
+}) {
+  const qualityOptions = useMemo(
+    () => buildQualityOptions(mediaSrc, mediaRenditions),
+    [mediaSrc, mediaRenditions],
+  );
+  const defaultQualityId =
+    qualityOptions.find((rendition) => rendition.isDefault)?.id ?? qualityOptions[0]?.id ?? '';
+  const [selectedQualityId, setSelectedQualityId] = useState(defaultQualityId);
+
+  useEffect(() => {
+    if (!qualityOptions.some((rendition) => rendition.id === selectedQualityId)) {
+      setSelectedQualityId(defaultQualityId);
+    }
+  }, [defaultQualityId, qualityOptions, selectedQualityId]);
+
+  const selectedQuality =
+    qualityOptions.find((rendition) => rendition.id === selectedQualityId) ?? qualityOptions[0];
+  const selectedMediaSrc = selectedQuality?.mediaContentUrl ?? mediaSrc;
+
+  if (selectedMediaSrc) {
     return (
       <section
         aria-label={`Video player for ${title}`}
         className="relative aspect-video overflow-hidden rounded-xl bg-black text-white shadow-sm"
       >
         <video
+          key={selectedMediaSrc}
           className="h-full w-full"
           controls
           playsInline
           preload="metadata"
-          src={mediaSrc}
+          src={selectedMediaSrc}
           data-testid="public-video-player"
         >
           <track kind="captions" />
         </video>
+        {qualityOptions.length > 0 && (
+          <div className="absolute top-3 right-3 flex items-center gap-2 rounded-md bg-black/75 p-2 shadow-sm backdrop-blur">
+            <span className="font-sans text-xs font-semibold text-white/80">Quality</span>
+            <Select
+              aria-label="Video quality"
+              value={selectedQuality?.id ?? ''}
+              onChange={(event) => setSelectedQualityId(event.currentTarget.value)}
+              className="h-8 w-auto border-white/20 bg-black/85 px-2 py-0 text-xs text-white hover:border-white/40"
+              data-testid="video-quality-select"
+            >
+              {qualityOptions.map((rendition) => (
+                <option key={rendition.id} value={rendition.id}>
+                  {formatQualityLabel(rendition)}
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
       </section>
     );
   }
@@ -269,7 +340,11 @@ function WatchContent({
   return (
     <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_22rem]">
       <div className="min-w-0 space-y-5">
-        <VideoPlayer title={video.title} {...(mediaSrc !== undefined ? { mediaSrc } : {})} />
+        <VideoPlayer
+          title={video.title}
+          {...(mediaSrc !== undefined ? { mediaSrc } : {})}
+          {...(video.mediaRenditions ? { mediaRenditions: video.mediaRenditions } : {})}
+        />
         <div>
           <Heading as="h1" size="xl">
             {video.title}

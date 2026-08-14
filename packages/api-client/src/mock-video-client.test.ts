@@ -210,6 +210,17 @@ describe('MockVideoApiClient', () => {
     );
     expect(mediaPath).toBe(`/api/videos/public/${published.publicVideoId}/media`);
     expect(publicVideo?.mediaContentUrl).toBe(mediaPath);
+    expect(publicVideo?.mediaRenditions).toEqual([
+      expect.objectContaining({
+        id: 'original',
+        label: 'Original',
+        kind: 'original',
+        mediaContentUrl: mediaPath,
+        contentType: 'video/mp4',
+        byteSize: body.size,
+        isDefault: true,
+      }),
+    ]);
 
     const unpublished = await publishClient.unpublishVideo(draft.id);
     expect(unpublished.status).toBe('draft');
