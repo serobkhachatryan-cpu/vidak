@@ -1,8 +1,12 @@
 export default function Page() {
   return (
     <main>
-      <h1>Vidak Admin</h1>
-      <p>Platform bootstrap complete.</p>
+      <div className="brand">
+        <img src="/icon.svg" alt="Vidak" />
+        <span>Vidak</span>
+      </div>
+      <h1>Admin workspace</h1>
+      <p>Manage the Vidak platform.</p>
     </main>
   );
 }

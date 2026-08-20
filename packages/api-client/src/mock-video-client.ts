@@ -32,6 +32,7 @@ import type {
   Video,
   VideoId,
   VideoListFilters,
+  VideoMediaRendition,
 } from '@w3ds/types';
 import {
   defaultUserPreferences,
@@ -802,20 +803,30 @@ export class MockVideoApiClient implements VideoApiClient {
 
     const publicVideoId = next.publicVideoId;
     if (!publicVideoId || next.status !== 'published') {
-      const { mediaContentUrl: _omit, ...rest } = next;
-      void _omit;
+      const {
+        mediaContentUrl: _mediaContentUrl,
+        mediaRenditions: _mediaRenditions,
+        ...rest
+      } = next;
+      void _mediaContentUrl;
+      void _mediaRenditions;
       return rest;
     }
     if (next.visibility !== 'public' && next.visibility !== 'unlisted') {
-      const { mediaContentUrl: _omit, ...rest } = next;
-      void _omit;
+      const {
+        mediaContentUrl: _mediaContentUrl,
+        mediaRenditions: _mediaRenditions,
+        ...rest
+      } = next;
+      void _mediaContentUrl;
+      void _mediaRenditions;
       return rest;
     }
 
     const readyAssets = [...this.draftMediaById.values()].filter(
       (asset) => asset.videoId === next.id && asset.uploadState === 'ready',
     );
-    const hasReadyVideo = readyAssets.some((asset) => asset.contentType.startsWith('video/'));
+    const readyVideos = readyAssets.filter((asset) => asset.contentType.startsWith('video/'));
     const hasReadyThumbnail = readyAssets.some((asset) =>
       (mockThumbnailMimeTypes as readonly string[]).includes(asset.contentType),
     );
@@ -827,14 +838,23 @@ export class MockVideoApiClient implements VideoApiClient {
       };
     }
 
-    if (!hasReadyVideo) {
-      const { mediaContentUrl: _omit, ...rest } = next;
-      void _omit;
+    if (readyVideos.length === 0) {
+      const {
+        mediaContentUrl: _mediaContentUrl,
+        mediaRenditions: _mediaRenditions,
+        ...rest
+      } = next;
+      void _mediaContentUrl;
+      void _mediaRenditions;
       return rest;
     }
+    const mediaContentUrl = publicPrimaryMediaPath(publicVideoId);
     return {
       ...next,
-      mediaContentUrl: publicPrimaryMediaPath(publicVideoId),
+      mediaContentUrl,
+      mediaRenditions: readyVideos.map((asset, index) =>
+        mockMediaRendition(publicVideoId, asset, index),
+      ),
     };
   }
 
@@ -926,6 +946,30 @@ export class MockVideoApiClient implements VideoApiClient {
       await new Promise<void>((resolve) => setTimeout(resolve, this.delayMs));
     }
   }
+}
+
+function mockMediaRendition(
+  publicVideoId: string,
+  asset: DraftMediaAsset,
+  index: number,
+): VideoMediaRendition {
+  const isPrimary = index === 0;
+  return {
+    id: isPrimary ? 'original' : asset.id,
+    label: isPrimary ? 'Original' : mockRenditionLabel(asset, index),
+    kind: isPrimary ? 'original' : 'transcoded',
+    mediaContentUrl: isPrimary
+      ? publicPrimaryMediaPath(publicVideoId)
+      : publicMediaContentPath(publicVideoId, asset.id),
+    contentType: asset.contentType,
+    byteSize: asset.byteSize,
+    isDefault: isPrimary,
+  };
+}
+
+function mockRenditionLabel(asset: DraftMediaAsset, index: number): string {
+  const match = asset.originalFilename.match(/(?:^|[^0-9])([1-9][0-9]{2,3})p(?:[^0-9]|$)/i);
+  return match?.[1] ? `${match[1]}p` : `Option ${index + 1}`;
 }
 
 function normalizeHandle(value: string): string {

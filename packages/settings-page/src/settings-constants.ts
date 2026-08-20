@@ -37,7 +37,7 @@ export const settingsSectionLabels: Record<SettingsSectionId, string> = {
 };
 
 export const settingsSectionDescriptions: Record<SettingsSectionId, string> = {
-  profile: 'Update how you appear across W3DS Video.',
+  profile: 'Update how you appear across Vidak.',
   email: 'Manage the email address used to sign in.',
   password: 'Change your password to keep your account secure.',
   notifications: 'Choose which updates you want to receive.',

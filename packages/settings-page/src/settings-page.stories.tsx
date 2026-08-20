@@ -5,7 +5,7 @@ import { SettingsPage } from './settings-page';
 const profile = {
   displayName: 'Demo Creator',
   handle: 'demo-creator',
-  bio: 'Demo account for exploring W3DS Video settings and creator tools.',
+  bio: 'Demo account for exploring Vidak settings and creator tools.',
 };
 
 const connectedAccounts = [
@@ -46,7 +46,7 @@ const meta = {
   parameters: { layout: 'fullscreen' },
   args: {
     state: 'ready',
-    email: 'demo@w3ds.video',
+    email: 'demo@vidak.video',
     profile,
     avatarUrl: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=160&h=160&fit=crop',
     notifications: defaultNotificationPreferences,

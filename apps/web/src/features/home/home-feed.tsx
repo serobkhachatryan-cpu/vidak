@@ -8,6 +8,7 @@ import {
   Grid,
   Page,
   Spinner,
+  VidakLogo,
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
@@ -64,7 +65,7 @@ export function HomeFeed() {
           />
         ) : videos.length === 0 ? (
           <EmptyState
-            icon="◌"
+            icon={<VidakLogo title="" aria-hidden="true" className="h-12 w-auto text-foreground" />}
             title="No videos to show"
             description="New public videos will appear here."
           />

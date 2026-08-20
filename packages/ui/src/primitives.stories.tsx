@@ -113,7 +113,7 @@ export const CardStory: Story = {
     </Card>
   ),
 };
-export const AvatarStory: Story = { name: 'Avatar', render: () => <Avatar name="W3DS Video" /> };
+export const AvatarStory: Story = { name: 'Avatar', render: () => <Avatar name="Vidak" /> };
 export const BadgeStory: Story = {
   name: 'Badge',
   render: () => <Badge tone="success">Published</Badge>,

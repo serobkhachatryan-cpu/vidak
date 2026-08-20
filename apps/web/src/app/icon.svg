@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <title>Vidak</title>
+  <rect width="48" height="48" rx="13" fill="#102A4C"/>
+  <path d="M11 13h7.2L24 31.9 29.8 13H37L24 37 11 13Z" fill="#fff"/>
+  <circle cx="36.5" cy="11.5" r="4.5" fill="#22C6C8"/>
+</svg>

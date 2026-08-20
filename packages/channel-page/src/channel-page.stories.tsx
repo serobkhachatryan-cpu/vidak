@@ -5,8 +5,8 @@ import { ChannelPage } from './channel-page';
 const channel: Channel = {
   id: 'channel-studio',
   ownerId: 'user-ada',
-  handle: 'w3ds-studio',
-  name: 'W3DS Studio',
+  handle: 'vidak-studio',
+  name: 'Vidak Studio',
   description:
     'Design, engineering, and video production workflows.\n\nNew deep dives every other week, plus shorts covering a single idea at a time.',
   avatarUrl: 'https://images.unsplash.com/photo-1618005198919-d3d4b5a92ead?w=160&h=160&fit=crop',

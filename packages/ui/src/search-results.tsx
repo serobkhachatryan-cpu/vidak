@@ -1,11 +1,6 @@
 import type { Channel, Playlist, SearchResultType, SearchSort } from '@w3ds/types';
 import { Avatar, Card, Skeleton } from './primitives';
-
-const cx = (...classes: Array<string | false | null | undefined>) =>
-  classes.filter(Boolean).join(' ');
-
-const focusRing =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background';
+import { cx, focusRing } from './utils';
 
 export const searchResultLabels: Record<SearchResultType, string> = {
   videos: 'Videos',

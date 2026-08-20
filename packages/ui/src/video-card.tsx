@@ -4,11 +4,7 @@ import type { Channel, Video } from '@w3ds/types';
 import { isRenderableThumbnailUrl } from '@w3ds/types';
 import { useState } from 'react';
 import { Avatar, Badge, Skeleton } from './primitives';
-
-const cx = (...classes: Array<string | false | null | undefined>) =>
-  classes.filter(Boolean).join(' ');
-const focusRing =
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background';
+import { cx, focusRing } from './utils';
 
 function formatDuration(durationSeconds: number): string {
   const hours = Math.floor(durationSeconds / 3600);

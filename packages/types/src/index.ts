@@ -60,6 +60,8 @@ export type {
   VideoId,
   VideoLanguage,
   VideoListFilters,
+  VideoMediaRendition,
+  VideoMediaRenditionKind,
   VideoStatus,
   VideoUploadProgress,
   VideoVisibility,

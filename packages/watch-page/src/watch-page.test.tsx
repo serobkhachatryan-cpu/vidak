@@ -6,8 +6,8 @@ import { WatchPage } from './watch-page';
 const channel: Channel = {
   id: 'channel-studio',
   ownerId: 'user-ada',
-  handle: 'w3ds-studio',
-  name: 'W3DS Studio',
+  handle: 'vidak-studio',
+  name: 'Vidak Studio',
   subscriberCount: 152_400,
   videoCount: 4,
   createdAt: '2025-01-12T09:00:00.000Z',
@@ -63,7 +63,7 @@ describe('WatchPage', () => {
     expect(markup).toContain('aria-label="Video player for Building a practical design system"');
     expect(markup).toContain('<h1');
     expect(markup).toContain('Building a practical design system');
-    expect(markup).toContain('W3DS Studio');
+    expect(markup).toContain('Vidak Studio');
     expect(markup).toContain('Subscribe');
     expect(markup).toContain('<legend class="sr-only">Video actions</legend>');
     expect(markup).toContain('aria-label="Video tags"');
@@ -90,7 +90,21 @@ describe('WatchPage', () => {
   it('streams public media through the public media content path when provided', () => {
     const markup = renderToStaticMarkup(
       <WatchPage
-        video={{ ...video, publicVideoId: 'pub_design-system', visibility: 'public' }}
+        video={{
+          ...video,
+          publicVideoId: 'pub_design-system',
+          visibility: 'public',
+          mediaRenditions: [
+            {
+              id: 'original',
+              label: 'Original',
+              kind: 'original',
+              mediaContentUrl: '/api/videos/public/pub_design-system/media',
+              contentType: 'video/mp4',
+              isDefault: true,
+            },
+          ],
+        }}
         channel={channel}
         mediaSrc="/api/videos/public/pub_design-system/media"
       />,
@@ -99,8 +113,46 @@ describe('WatchPage', () => {
     expect(markup).toContain('/api/videos/public/pub_design-system/media');
     expect(markup).toContain('<video');
     expect(markup).toContain('controls');
+    expect(markup).toContain('data-testid="video-quality-select"');
+    expect(markup).toContain('Video quality');
+    expect(markup).toContain('Original · MP4');
     expect(markup).not.toContain('This video has no playable media.');
     expect(markup).not.toMatch(/storageKey|drafts\//);
+  });
+
+  it('renders multiple available quality choices when renditions are provided', () => {
+    const markup = renderToStaticMarkup(
+      <WatchPage
+        video={{
+          ...video,
+          publicVideoId: 'pub_design-system',
+          visibility: 'public',
+          mediaRenditions: [
+            {
+              id: '720p',
+              label: '720p',
+              kind: 'transcoded',
+              mediaContentUrl: '/api/videos/public/pub_design-system/media?quality=720p',
+              contentType: 'video/mp4',
+              isDefault: true,
+            },
+            {
+              id: '480p',
+              label: '480p',
+              kind: 'transcoded',
+              mediaContentUrl: '/api/videos/public/pub_design-system/media?quality=480p',
+              contentType: 'video/mp4',
+            },
+          ],
+        }}
+        channel={channel}
+        mediaSrc="/api/videos/public/pub_design-system/media?quality=720p"
+      />,
+    );
+
+    expect(markup).toContain('720p · MP4');
+    expect(markup).toContain('480p · MP4');
+    expect(markup).toContain('/api/videos/public/pub_design-system/media?quality=720p');
   });
 
   it('renders a non-playable fallback when no public media URL exists', () => {

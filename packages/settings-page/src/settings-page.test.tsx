@@ -8,14 +8,14 @@ import { settingsSectionsForCapabilities } from './settings-page-helpers';
 const profile = {
   displayName: 'Demo Creator',
   handle: 'demo-creator',
-  bio: 'Building on W3DS Video.',
+  bio: 'Building on Vidak.',
 };
 
 describe('SettingsPage', () => {
   it('renders accessible section navigation for the active settings panel', () => {
     const markup = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         notifications={defaultNotificationPreferences}
         privacy={defaultPrivacySettings}
@@ -33,7 +33,7 @@ describe('SettingsPage', () => {
   it('surfaces profile validation messaging', () => {
     const markup = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={{ displayName: '', handle: '', bio: '' }}
         profileErrors={{
           displayName: 'Display name is required.',
@@ -51,7 +51,7 @@ describe('SettingsPage', () => {
   it('renders notification preference switches', () => {
     const markup = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         notifications={defaultNotificationPreferences}
         activeSection="notifications"
@@ -64,7 +64,7 @@ describe('SettingsPage', () => {
 
   it('renders appearance options including system preference', () => {
     const markup = renderToStaticMarkup(
-      <SettingsPage email="demo@w3ds.video" profile={profile} activeSection="appearance" />,
+      <SettingsPage email="demo@vidak.video" profile={profile} activeSection="appearance" />,
     );
     expect(markup).toContain('role="radiogroup"');
     expect(markup).toContain('Light');
@@ -75,7 +75,7 @@ describe('SettingsPage', () => {
   it('renders sessions and connected accounts states', () => {
     const sessions = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         activeSection="sessions"
         sessions={[
@@ -94,7 +94,7 @@ describe('SettingsPage', () => {
 
     const emptySessions = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         activeSection="sessions"
         sessionsEmpty
@@ -104,7 +104,7 @@ describe('SettingsPage', () => {
 
     const loadingSessions = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         activeSection="sessions"
         sessionsLoading
@@ -115,7 +115,7 @@ describe('SettingsPage', () => {
 
     const loadingConnected = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         activeSection="connected"
         connectedAccountsLoading
@@ -126,19 +126,19 @@ describe('SettingsPage', () => {
 
   it('renders email, password, privacy, and language sections', () => {
     const email = renderToStaticMarkup(
-      <SettingsPage email="demo@w3ds.video" profile={profile} activeSection="email" />,
+      <SettingsPage email="demo@vidak.video" profile={profile} activeSection="email" />,
     );
-    expect(email).toContain('demo@w3ds.video');
+    expect(email).toContain('demo@vidak.video');
 
     const password = renderToStaticMarkup(
-      <SettingsPage email="demo@w3ds.video" profile={profile} activeSection="password" />,
+      <SettingsPage email="demo@vidak.video" profile={profile} activeSection="password" />,
     );
     expect(password).toContain('Current password');
     expect(password).toContain('New password');
 
     const privacy = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         privacy={defaultPrivacySettings}
         activeSection="privacy"
@@ -148,7 +148,7 @@ describe('SettingsPage', () => {
     expect(privacy).toContain('Show activity status');
 
     const language = renderToStaticMarkup(
-      <SettingsPage email="demo@w3ds.video" profile={profile} activeSection="language" />,
+      <SettingsPage email="demo@vidak.video" profile={profile} activeSection="language" />,
     );
     expect(language).toContain('English');
     expect(language).toContain('Español');
@@ -157,7 +157,7 @@ describe('SettingsPage', () => {
   it('associates notification switches with visible labels', () => {
     const markup = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         notifications={defaultNotificationPreferences}
         activeSection="notifications"
@@ -169,7 +169,7 @@ describe('SettingsPage', () => {
 
   it('renders delete account confirmation controls', () => {
     const markup = renderToStaticMarkup(
-      <SettingsPage email="demo@w3ds.video" profile={profile} activeSection="danger" />,
+      <SettingsPage email="demo@vidak.video" profile={profile} activeSection="danger" />,
     );
     expect(markup).toContain('Delete account');
     expect(markup).toContain('Deleting your account removes your profile');
@@ -180,7 +180,7 @@ describe('SettingsPage', () => {
     const sections = settingsSectionsForCapabilities(getAuthProviderCapabilities('w3ds'));
     const markup = renderToStaticMarkup(
       <SettingsPage
-        email="demo@w3ds.video"
+        email="demo@vidak.video"
         profile={profile}
         sections={sections}
         activeSection="profile"

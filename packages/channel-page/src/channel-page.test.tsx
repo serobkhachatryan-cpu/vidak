@@ -6,8 +6,8 @@ import { ChannelPage } from './channel-page';
 const channel: Channel = {
   id: 'channel-studio',
   ownerId: 'user-ada',
-  handle: 'w3ds-studio',
-  name: 'W3DS Studio',
+  handle: 'vidak-studio',
+  name: 'Vidak Studio',
   description: 'Design, engineering, and video production workflows.',
   subscriberCount: 999,
   videoCount: 24,
@@ -85,13 +85,13 @@ describe('ChannelPage', () => {
       <ChannelPage channel={channel} isVerified videos={[video]} />,
     );
 
-    expect(markup).toContain('aria-label="W3DS Studio channel banner"');
+    expect(markup).toContain('aria-label="Vidak Studio channel banner"');
     expect(markup).toContain('<h1');
-    expect(markup).toContain('W3DS Studio');
+    expect(markup).toContain('Vidak Studio');
     expect(markup).toContain('aria-label="Verified channel"');
-    expect(markup).toContain('@w3ds-studio · 999 subscribers · 24 videos');
+    expect(markup).toContain('@vidak-studio · 999 subscribers · 24 videos');
     expect(markup).toContain('Design, engineering, and video production workflows.');
-    expect(markup).toContain('aria-label="Subscribe to W3DS Studio"');
+    expect(markup).toContain('aria-label="Subscribe to Vidak Studio"');
   });
 
   it('links every tab to its panel with ids scoped to the rendered instance', () => {
@@ -142,7 +142,7 @@ describe('ChannelPage', () => {
     );
 
     expect(markup).toContain('aria-pressed="true"');
-    expect(markup).toContain('aria-label="Unsubscribe from W3DS Studio"');
+    expect(markup).toContain('aria-label="Unsubscribe from Vidak Studio"');
     expect(markup).toContain('Subscribed');
     expect(markup).toContain('1K subscribers');
   });
