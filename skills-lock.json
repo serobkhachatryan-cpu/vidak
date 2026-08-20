@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "skills": {
+    "w3ds": {
+      "source": "MetaState-Prototype-Project/prototype",
+      "sourceType": "github",
+      "skillPath": "skills/w3ds/SKILL.md",
+      "computedHash": "f9e5ced17a879ffce62b9bed68cb9ed059d99618dc41b416ec80d05e99e6d19b"
+    }
+  }
+}
