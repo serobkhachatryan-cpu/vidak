@@ -15,6 +15,7 @@ import { normalizePersistedThumbnailUrl, videoCategories, videoLanguages } from 
 import { CreatorVideoError } from './creator-video-errors';
 import { type CreatorVideoStore, PostgresCreatorVideoStore } from './creator-video-store';
 import { getW3dsDatabase } from './db/client';
+import { reportOperationalFailure } from './ops-observability';
 import { getW3dsAuthService, W3dsAuthError } from './w3ds-auth';
 import type { W3dsPrivateAdapterSyncService } from './w3ds-private-adapter-sync';
 import { getVidakPrivateAdapterSyncService } from './w3ds-private-adapter-sync';
@@ -221,12 +222,28 @@ export class CreatorVideoService {
   /** Fail-soft private projection sync — never blocks product mutations. */
   private async schedulePrivateChannelSync(channel: Channel, ownerEName: string): Promise<void> {
     if (!this.privateAdapterSync) return;
-    await this.privateAdapterSync.syncChannelSafe({ channel, ownerEName });
+    try {
+      await this.privateAdapterSync.syncChannelSafe({ channel, ownerEName });
+    } catch (error) {
+      reportOperationalFailure({
+        category: 'w3ds_sync',
+        error,
+        code: 'private_adapter_sync',
+      });
+    }
   }
 
   private async schedulePrivateVideoSync(video: Video, ownerEName: string): Promise<void> {
     if (!this.privateAdapterSync) return;
-    await this.privateAdapterSync.syncVideoSafe({ video, ownerEName });
+    try {
+      await this.privateAdapterSync.syncVideoSafe({ video, ownerEName });
+    } catch (error) {
+      reportOperationalFailure({
+        category: 'w3ds_sync',
+        error,
+        code: 'private_adapter_sync',
+      });
+    }
   }
 
   private async requireOwnedDraft(videoId: string, ownerId: string): Promise<Video> {

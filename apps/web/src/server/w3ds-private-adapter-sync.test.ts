@@ -212,6 +212,34 @@ describe('Vidak-private adapter sync', () => {
     );
   });
 
+  it('fail-soft wrappers never throw and never report remote W3DS success', async () => {
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+
+    const service = createInMemoryVidakPrivateAdapterSyncService({
+      ontologyMode: 'vidak_private',
+      ontologyAdapter: privateOntologyAdapter,
+    });
+
+    const failedChannel = await service.syncChannelSafe({
+      channel: { ...channel, name: '' },
+      ownerEName: '@creator.w3id',
+    });
+    expect(failedChannel.outcome).toBe('failed');
+    expect(failedChannel.interoperablePublicW3ds).toBe(false);
+    expect(failedChannel.failureReason).toBeTruthy();
+
+    const failedVideo = await service.syncVideoSafe({ video, ownerEName: '@creator.w3id' });
+    expect(failedVideo.outcome).toBe('failed');
+    expect(failedVideo.interoperablePublicW3ds).toBe(false);
+
+    const synced = await service.syncChannelSafe({ channel, ownerEName: '@creator.w3id' });
+    expect(synced.outcome).toBe('synced');
+    expect(synced.interoperablePublicW3ds).toBe(false);
+    expect(service.getStatus().remoteW3dsNetworkCalls).toBe(false);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('omits non-w3ds media URIs and never invents file envelopes', () => {
     expect(optionalW3dsFileUri('https://cdn.example/a.jpg')).toBeUndefined();
     expect(optionalW3dsFileUri('/var/media/key')).toBeUndefined();

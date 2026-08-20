@@ -2,12 +2,21 @@
 
 import QRCode from 'qrcode';
 import { useEffect, useState } from 'react';
+import { eidSignInCopy } from './eid-sign-in-copy';
 
 /**
  * Renders a product sign-in QR code for an opaque deep-link URI.
  * Uses a small local generator — no external QR service calls.
  */
-export function SignInQr({ value, size = 192 }: { value: string; size?: number }) {
+export function SignInQr({
+  value,
+  size = 192,
+  alt = eidSignInCopy.qrAlt,
+}: {
+  value: string;
+  size?: number;
+  alt?: string;
+}) {
   const [dataUrl, setDataUrl] = useState<string>();
 
   useEffect(() => {
@@ -40,7 +49,7 @@ export function SignInQr({ value, size = 192 }: { value: string; size?: number }
       src={dataUrl}
       width={size}
       height={size}
-      alt="Sign-in QR code"
+      alt={alt}
       className="rounded-md border border-border bg-white"
     />
   );

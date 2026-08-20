@@ -85,5 +85,14 @@ describe('W3DS login challenge state', () => {
     const pending = reduceW3dsLoginChallenge(challenge);
     expect(w3dsLoginStatusMessage(pending)).toMatch(/eID wallet/i);
     expect(w3dsLoginStatusMessage(pending)).not.toMatch(/registry|evault|jwks|certificate/i);
+    expect(w3dsLoginStatusMessage(pending)).not.toMatch(/w3ds:\/\//i);
+
+    const starting = reduceW3dsLoginStart();
+    const expired = reduceW3dsLoginStatus(challenge, { status: 'expired' });
+    for (const state of [starting, pending, expired]) {
+      const message = w3dsLoginStatusMessage(state);
+      expect(message).toBeTruthy();
+      expect(message).not.toMatch(/w3ds:\/\//i);
+    }
   });
 });

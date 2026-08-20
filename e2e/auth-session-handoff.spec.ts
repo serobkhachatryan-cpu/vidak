@@ -78,8 +78,11 @@ test('Return after mocked wallet approval lands authenticated on Settings then U
   await page.goto('/login?returnTo=/settings');
   await expect(page.getByRole('heading', { name: /sign in with eid/i })).toBeVisible();
 
-  const offerLink = page.locator('a[href^="w3ds://auth"]');
+  const offerLink = page.getByRole('link', { name: 'Continue with eID' });
   await expect(offerLink).toBeVisible();
+  await expect(offerLink).toHaveAttribute('href', /^w3ds:\/\/auth/);
+  await expect(offerLink).toHaveText('Continue with eID');
+  await expect(page.getByText(/w3ds:\/\//i)).toHaveCount(0);
   const signInUri = await offerLink.getAttribute('href');
   expect(signInUri).toMatch(/^w3ds:\/\/auth/);
   if (!signInUri) throw new Error('Expected eID sign-in URI');

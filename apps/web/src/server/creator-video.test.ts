@@ -2,6 +2,8 @@ import { createAuthUser } from '@w3ds/auth';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CreatorVideoService, InMemoryCreatorVideoStore } from './creator-video';
 import { W3dsAuthError } from './w3ds-auth';
+import type { W3dsPrivateAdapterSyncService } from './w3ds-private-adapter-sync';
+import type { PrivateAdapterSyncResult } from './w3ds-private-adapter-sync-types';
 
 const owner = createAuthUser({
   id: 'user-owner',
@@ -257,5 +259,46 @@ describe('CreatorVideoService', () => {
       code: 'not_found',
       status: 404,
     });
+  });
+
+  it('keeps product mutations when private adapter sync fails', async () => {
+    const failed: PrivateAdapterSyncResult = {
+      outcome: 'failed',
+      entityType: 'video',
+      localId: 'unused',
+      ownership: 'vidak_private',
+      catalogueVisibility: 'private',
+      interoperablePublicW3ds: false,
+    };
+    const syncCalls: string[] = [];
+    const privateAdapterSync = {
+      async syncChannelSafe() {
+        syncCalls.push('channel');
+        return { ...failed, entityType: 'channel' as const };
+      },
+      async syncVideoSafe() {
+        syncCalls.push('video');
+        throw new Error('private video sync exploded');
+      },
+    } as unknown as W3dsPrivateAdapterSyncService;
+
+    const service = new CreatorVideoService({
+      store: new InMemoryCreatorVideoStore(),
+      resolveUser: async () => owner,
+      createId: (() => {
+        let n = 0;
+        return () => `id-${++n}`;
+      })(),
+      privateAdapterSync,
+    });
+
+    const draft = await service.createDraft('token', { title: 'Local draft survives sync' });
+    expect(draft).toMatchObject({
+      title: 'Local draft survives sync',
+      status: 'draft',
+    });
+    expect(draft.id).toBeTruthy();
+    expect(syncCalls).toEqual(['channel', 'video']);
+    await expect(service.listDrafts('token')).resolves.toEqual([draft]);
   });
 });

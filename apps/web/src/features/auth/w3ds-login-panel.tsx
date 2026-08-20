@@ -5,6 +5,7 @@ import { Button, Text } from '@w3ds/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthentication } from './auth-provider';
 import { buildOfferContinuePath } from './auth-session-handoff';
+import { eidSignInCopy } from './eid-sign-in-copy';
 import { SignInQr } from './sign-in-qr';
 import {
   initialW3dsLoginState,
@@ -117,13 +118,9 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
   return (
     <div className="space-y-5">
       <div className="space-y-2">
-        <Text>
-          Continue with your eID wallet to sign in. Scan the code or open the sign-in link on this
-          device.
-        </Text>
+        <Text>{eidSignInCopy.intro}</Text>
         <Text size="sm" tone="muted">
-          Approve the request in your eID wallet. This page finishes automatically when approval
-          completes.
+          {eidSignInCopy.approveHint}
         </Text>
       </div>
 
@@ -143,17 +140,17 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
 
       {challenge && (
         <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-start">
-          <SignInQr value={challenge.signInUri} />
+          <SignInQr value={challenge.signInUri} alt={eidSignInCopy.qrAlt} />
           <div className="min-w-0 flex-1 space-y-3">
             <div className="space-y-1.5">
               <Text size="sm" tone="muted">
-                Sign-in link
+                {eidSignInCopy.linkLabel}
               </Text>
               <a
                 href={challenge.signInUri}
-                className="block break-all font-sans text-sm font-semibold text-primary hover:underline"
+                className="block font-sans text-sm font-semibold text-primary hover:underline"
               >
-                {challenge.signInUri}
+                {eidSignInCopy.linkText}
               </a>
             </div>
             <Text size="xs" tone="muted">
@@ -161,7 +158,7 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
             </Text>
             {state.kind === 'pending' && (
               <Text size="sm" tone="muted">
-                Waiting for approval…
+                {eidSignInCopy.waiting}
               </Text>
             )}
           </div>
@@ -175,13 +172,13 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
           isLoading={state.kind === 'starting'}
           loadingText="Starting"
         >
-          Continue with eID
+          {eidSignInCopy.continueButton}
         </Button>
       )}
 
       {showRetry && (
         <Button type="button" className="w-full" onClick={() => void startChallenge()}>
-          Try again
+          {eidSignInCopy.retryButton}
         </Button>
       )}
     </div>
