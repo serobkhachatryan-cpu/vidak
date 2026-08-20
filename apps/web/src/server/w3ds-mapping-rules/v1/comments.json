@@ -1,0 +1,17 @@
+{
+  "tableName": "comments",
+  "schemaId": "<ASSIGNED_BY_METASTATE:Comment>",
+  "ownerEnamePath": "w3ds_platform_users(authorId.eName)",
+  "localToUniversalMap": {
+    "id": "id",
+    "ownerEName": "w3ds_platform_users(authorId.eName),ownerEName",
+    "videoId": "videos(videoId.id),videoId",
+    "parentId": "comments(parentId.id),parentId",
+    "body": "body",
+    "visibility": "visibility",
+    "createdAt": "__date(createdAt)",
+    "updatedAt": "__date(updatedAt)",
+    "likeCount": "likeCount",
+    "replyCount": "replyCount"
+  }
+}

@@ -19,6 +19,14 @@ export const W3DS_ADAPTER_ENTITY_TABLES = {
   comment: 'comments',
 } as const satisfies Record<W3dsAdapterEntityType, string>;
 
+/** Reverse lookup used by Mapping Rules `tableName`. */
+export function entityTypeForAdapterTable(tableName: string): W3dsAdapterEntityType | undefined {
+  const match = (
+    Object.entries(W3DS_ADAPTER_ENTITY_TABLES) as Array<[W3dsAdapterEntityType, string]>
+  ).find(([, name]) => name === tableName);
+  return match?.[0];
+}
+
 const eNamePattern = /^@[^\s@]+$/;
 
 export class W3dsAdapterMappingError extends Error {

@@ -1,0 +1,18 @@
+{
+  "tableName": "creator_channels",
+  "schemaId": "<ASSIGNED_BY_METASTATE:Channel>",
+  "ownerEnamePath": "w3ds_platform_users(ownerId.eName)",
+  "localToUniversalMap": {
+    "id": "id",
+    "ownerEName": "w3ds_platform_users(ownerId.eName),ownerEName",
+    "handle": "handle",
+    "name": "name",
+    "description": "description",
+    "avatarUrl": "__file(avatarUrl),avatarFileUri",
+    "bannerUrl": "__file(bannerUrl),bannerFileUri",
+    "subscriberCount": "subscriberCount",
+    "videoCount": "videoCount",
+    "createdAt": "__date(createdAt)",
+    "updatedAt": "__date(updatedAt)"
+  }
+}

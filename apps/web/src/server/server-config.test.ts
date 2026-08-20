@@ -289,6 +289,51 @@ describe('server security configuration', () => {
         W3DS_ONTOLOGY_SCHEMA_ID_COMMENT: VIDAK_PRIVATE_SCHEMA_IDS.Comment,
       }),
     ).toThrow(/rejects Vidak private schema IDs/);
+
+    expect(() =>
+      loadServerSecurityConfig({
+        NODE_ENV: 'production',
+        ...w3dsEnv,
+        W3DS_ONTOLOGY_MODE: 'metastate_official',
+        W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
+        W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
+        W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'schema-profile',
+        W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL: 'schema-channel',
+        W3DS_ONTOLOGY_SCHEMA_ID_VIDEO: '<ASSIGNED_BY_METASTATE:Video>',
+        W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST: 'schema-playlist',
+        W3DS_ONTOLOGY_SCHEMA_ID_COMMENT: 'schema-comment',
+      }),
+    ).toThrow(/placeholder schema IDs/);
+
+    expect(() =>
+      loadServerSecurityConfig({
+        NODE_ENV: 'production',
+        ...w3dsEnv,
+        W3DS_ONTOLOGY_MODE: 'metastate_official',
+        W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
+        W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
+        W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'schema-profile',
+        W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL: 'schema-channel',
+        W3DS_ONTOLOGY_SCHEMA_ID_VIDEO: '550e8400-e29b-41d4-a716-446655440001',
+        W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST: 'schema-playlist',
+        W3DS_ONTOLOGY_SCHEMA_ID_COMMENT: 'schema-comment',
+      }),
+    ).toThrow(/example ontology ID/);
+
+    expect(() =>
+      loadServerSecurityConfig({
+        NODE_ENV: 'production',
+        ...w3dsEnv,
+        W3DS_ONTOLOGY_MODE: 'metastate_official',
+        W3DS_ONTOLOGY_ADAPTER_ENABLED: 'true',
+        W3DS_ONTOLOGY_BASE_URL: DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
+        W3DS_ONTOLOGY_SCHEMA_ID_PROFILE: 'schema-profile-local',
+        W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL: 'schema-channel',
+        W3DS_ONTOLOGY_SCHEMA_ID_VIDEO: 'schema-video',
+        W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST: 'schema-playlist',
+        W3DS_ONTOLOGY_SCHEMA_ID_COMMENT: 'schema-comment',
+      }),
+    ).toThrow(/private Profile latch/);
   });
 
   it('does not treat NEXT_PUBLIC_AUTH_PROVIDER as an explicit production provider', () => {

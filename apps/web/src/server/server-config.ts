@@ -14,6 +14,11 @@ import {
 import { resolveLocalMediaStorageRoot } from './media-storage';
 import type { W3dsAdapterEntityType } from './w3ds-adapter-types';
 import { VIDAK_PRIVATE_SCHEMA_IDS } from './w3ds-private-ontology';
+import {
+  assertAllowedOfficialSchemaId,
+  isDisallowedPlaceholderSchemaId,
+  W3dsSchemaIdPolicyError,
+} from './w3ds-schema-id-policy';
 
 export const MIN_W3DS_JWT_SECRET_LENGTH = 32;
 
@@ -405,12 +410,11 @@ function readOntologyAdapterConfig(
     );
   }
 
-  const profile = requireSchemaId(
-    env.W3DS_ONTOLOGY_SCHEMA_ID_PROFILE,
-    'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PROFILE.',
-  );
-
   if (ontologyMode === 'vidak_private') {
+    const profile = requireSchemaId(
+      env.W3DS_ONTOLOGY_SCHEMA_ID_PROFILE,
+      'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PROFILE.',
+    );
     return {
       ontologyBaseUrl,
       mappingVersion,
@@ -440,34 +444,35 @@ function readOntologyAdapterConfig(
     };
   }
 
-  // metastate_official — explicit MetaState catalogue only.
+  // metastate_official — explicit MetaState catalogue only. Example ontology
+  // UUIDs, private IDs, and ASSIGNED_BY_METASTATE placeholders are rejected.
   const schemaIds = {
-    profile,
-    channel: requireSchemaId(
+    profile: requireOfficialSchemaId(
+      'profile',
+      env.W3DS_ONTOLOGY_SCHEMA_ID_PROFILE,
+      'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PROFILE.',
+    ),
+    channel: requireOfficialSchemaId(
+      'channel',
       env.W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL,
       'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_CHANNEL.',
     ),
-    video: requireSchemaId(
+    video: requireOfficialSchemaId(
+      'video',
       env.W3DS_ONTOLOGY_SCHEMA_ID_VIDEO,
       'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_VIDEO.',
     ),
-    playlist: requireSchemaId(
+    playlist: requireOfficialSchemaId(
+      'playlist',
       env.W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST,
       'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_PLAYLIST.',
     ),
-    comment: requireSchemaId(
+    comment: requireOfficialSchemaId(
+      'comment',
       env.W3DS_ONTOLOGY_SCHEMA_ID_COMMENT,
       'W3DS_ONTOLOGY_ADAPTER_ENABLED requires W3DS_ONTOLOGY_SCHEMA_ID_COMMENT.',
     ),
   };
-
-  for (const [entity, schemaId] of Object.entries(schemaIds)) {
-    if (schemaId.startsWith('vidak:private:')) {
-      throw new ServerConfigError(
-        `W3DS_ONTOLOGY_MODE=metastate_official rejects Vidak private schema IDs for ${entity} ("${schemaId}").`,
-      );
-    }
-  }
 
   return {
     ontologyBaseUrl,
@@ -492,15 +497,25 @@ function resolvePrivateOrConfiguredSchemaId(
   return normalized;
 }
 
+function requireOfficialSchemaId(
+  entityType: W3dsAdapterEntityType,
+  value: string | undefined,
+  message: string,
+): string {
+  const normalized = requireSchemaId(value, message);
+  try {
+    assertAllowedOfficialSchemaId(entityType, normalized);
+  } catch (error) {
+    const detail = error instanceof W3dsSchemaIdPolicyError ? error.message : String(error);
+    throw new ServerConfigError(detail);
+  }
+  return normalized;
+}
+
 function requireSchemaId(value: string | undefined, message: string): string {
   const normalized = requireValue(value, message);
   // Ontology documents schemaId as a W3ID; reject empty/placeholder guesses.
-  if (
-    normalized === 'TODO' ||
-    normalized === 'changeme' ||
-    normalized.toLowerCase() === 'undefined' ||
-    normalized.toLowerCase() === 'null'
-  ) {
+  if (isDisallowedPlaceholderSchemaId(normalized)) {
     throw new ServerConfigError(`${message} Do not use placeholder schema IDs.`);
   }
   return normalized;

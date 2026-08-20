@@ -1,0 +1,17 @@
+{
+  "tableName": "playlists",
+  "schemaId": "<ASSIGNED_BY_METASTATE:Playlist>",
+  "ownerEnamePath": "w3ds_platform_users(ownerId.eName)",
+  "localToUniversalMap": {
+    "id": "id",
+    "ownerEName": "w3ds_platform_users(ownerId.eName),ownerEName",
+    "channelId": "creator_channels(channelId.id),channelId",
+    "title": "title",
+    "description": "description",
+    "visibility": "visibility",
+    "thumbnailUrl": "__file(thumbnailUrl),thumbnailFileUri",
+    "items": "items",
+    "createdAt": "__date(createdAt)",
+    "updatedAt": "__date(updatedAt)"
+  }
+}

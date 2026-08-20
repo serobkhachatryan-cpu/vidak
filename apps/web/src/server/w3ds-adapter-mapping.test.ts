@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { DOCUMENTED_W3DS_ONTOLOGY_BASE_URL, type W3dsOntologyAdapterConfig } from './server-config';
 import {
+  entityTypeForAdapterTable,
   InMemoryW3dsAdapterMappingStore,
   W3DS_ADAPTER_ENTITY_TABLES,
   W3dsAdapterMappingError,
@@ -29,6 +30,8 @@ describe('W3DS adapter mapping foundation', () => {
       playlist: 'playlists',
       comment: 'comments',
     });
+    expect(entityTypeForAdapterTable('videos')).toBe('video');
+    expect(entityTypeForAdapterTable('creator_channels')).toBe('channel');
   });
 
   it('fails closed when Ontology schema IDs are not configured', async () => {

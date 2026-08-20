@@ -1,0 +1,27 @@
+{
+  "tableName": "videos",
+  "schemaId": "<ASSIGNED_BY_METASTATE:Video>",
+  "ownerEnamePath": "w3ds_platform_users(ownerId.eName)",
+  "localToUniversalMap": {
+    "id": "id",
+    "ownerEName": "w3ds_platform_users(ownerId.eName),ownerEName",
+    "channelId": "creator_channels(channelId.id),channelId",
+    "title": "title",
+    "description": "description",
+    "status": "status",
+    "visibility": "visibility",
+    "durationSeconds": "durationSeconds",
+    "mediaFileUri": "__file(mediaFileUri),mediaFileUri",
+    "thumbnailUrl": "__file(thumbnailUrl),thumbnailFileUri",
+    "category": "category",
+    "language": "language",
+    "tags": "tags",
+    "publicVideoId": "publicVideoId",
+    "publishedAt": "__date(publishedAt)",
+    "createdAt": "__date(createdAt)",
+    "updatedAt": "__date(updatedAt)",
+    "viewCount": "viewCount",
+    "likeCount": "likeCount",
+    "commentCount": "commentCount"
+  }
+}
