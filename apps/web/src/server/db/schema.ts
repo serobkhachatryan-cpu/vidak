@@ -381,6 +381,44 @@ export const w3dsPrivateAdapterOutbox = pgTable(
   ],
 );
 
+/**
+ * Retry-safe outbox for official (MetaState) adapter handleChange.
+ * Distinct from w3ds_private_adapter_outbox. Remote writes stay gated off.
+ */
+export type W3dsOfficialAdapterEntityType = 'channel' | 'video' | 'playlist' | 'comment';
+export type W3dsOfficialAdapterSyncStatus = 'pending' | 'synced' | 'failed';
+export type W3dsOfficialAdapterSyncOperation = 'upsert';
+
+export const w3dsOfficialAdapterOutbox = pgTable(
+  'w3ds_official_adapter_outbox',
+  {
+    id: text('id').primaryKey(),
+    entityType: text('entity_type').$type<W3dsOfficialAdapterEntityType>().notNull(),
+    localId: text('local_id').notNull(),
+    operation: text('operation').$type<W3dsOfficialAdapterSyncOperation>().notNull(),
+    syncStatus: text('sync_status').$type<W3dsOfficialAdapterSyncStatus>().notNull(),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lastAttemptedAt: timestamp('last_attempted_at', { withTimezone: true, mode: 'date' }),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true, mode: 'date' }),
+    /** Safe, non-secret failure summary only. */
+    failureReason: text('failure_reason'),
+    correlationId: text('correlation_id'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('w3ds_official_adapter_outbox_entity_type_local_id_uidx').on(
+      table.entityType,
+      table.localId,
+    ),
+    index('w3ds_official_adapter_outbox_status_idx').on(table.syncStatus),
+    index('w3ds_official_adapter_outbox_entity_type_status_idx').on(
+      table.entityType,
+      table.syncStatus,
+    ),
+  ],
+);
+
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
 export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
@@ -392,3 +430,4 @@ export type W3dsAuthorizationSyncRow = typeof w3dsAuthorizationSync.$inferSelect
 export type W3dsAdapterMappingRow = typeof w3dsAdapterMappings.$inferSelect;
 export type W3dsPrivateAdapterProjectionRow = typeof w3dsPrivateAdapterProjections.$inferSelect;
 export type W3dsPrivateAdapterOutboxRow = typeof w3dsPrivateAdapterOutbox.$inferSelect;
+export type W3dsOfficialAdapterOutboxRow = typeof w3dsOfficialAdapterOutbox.$inferSelect;

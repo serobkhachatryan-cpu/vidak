@@ -130,6 +130,10 @@ describe('P1A browser W3DS boundary', () => {
     const forbidden = [
       'w3ds-mapping-rules',
       'w3ds-official-adapter-gate',
+      'w3ds-official-adapter',
+      'w3ds-official-adapter-outbox',
+      'w3ds-official-evault-client',
+      'w3ds-official-mapper',
       'w3ds-schema-id-policy',
       'w3ds-platform-evault',
       'w3ds-adapter-mapping',

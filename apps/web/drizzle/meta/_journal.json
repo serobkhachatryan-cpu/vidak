@@ -57,6 +57,13 @@
       "when": 1785874800000,
       "tag": "0007_private_adapter_sync",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1785876600000,
+      "tag": "0008_official_adapter_outbox",
+      "breakpoints": true
     }
   ]
 }
