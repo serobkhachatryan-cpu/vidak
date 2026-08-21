@@ -419,6 +419,20 @@ export const w3dsOfficialAdapterOutbox = pgTable(
   ],
 );
 
+/**
+ * Durable AaaS webhook receipts keyed by MetaEnvelope id.
+ * Server-only. Slice 1 records verified deliveries; it does not apply product rows.
+ */
+export const w3dsAwarenessReceipts = pgTable(
+  'w3ds_awareness_receipts',
+  {
+    id: text('id').primaryKey(),
+    globalId: text('global_id').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [uniqueIndex('w3ds_awareness_receipts_global_id_uidx').on(table.globalId)],
+);
+
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
 export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
@@ -431,3 +445,4 @@ export type W3dsAdapterMappingRow = typeof w3dsAdapterMappings.$inferSelect;
 export type W3dsPrivateAdapterProjectionRow = typeof w3dsPrivateAdapterProjections.$inferSelect;
 export type W3dsPrivateAdapterOutboxRow = typeof w3dsPrivateAdapterOutbox.$inferSelect;
 export type W3dsOfficialAdapterOutboxRow = typeof w3dsOfficialAdapterOutbox.$inferSelect;
+export type W3dsAwarenessReceiptRow = typeof w3dsAwarenessReceipts.$inferSelect;

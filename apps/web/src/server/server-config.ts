@@ -323,6 +323,29 @@ export function readW3dsOntologyMode(
 }
 
 /**
+ * AaaS webhook HMAC configuration. Both secret and encoding must be set
+ * explicitly. There is no default encoding and no hex/base64 fallback.
+ * Incomplete or invalid configuration is unavailable (handler fail-closes).
+ */
+export type W3dsAaasSignatureEncoding = 'hex' | 'base64';
+
+export interface W3dsAaasWebhookConfig {
+  secret: string;
+  encoding: W3dsAaasSignatureEncoding;
+}
+
+export function readW3dsAaasWebhookConfig(
+  env: Record<string, string | undefined> = process.env,
+): W3dsAaasWebhookConfig | null {
+  const secret = env.W3DS_AAAS_WEBHOOK_SECRET?.trim();
+  const encoding = env.W3DS_AAAS_SIGNATURE_ENCODING?.trim();
+  if (!secret || (encoding !== 'hex' && encoding !== 'base64')) {
+    return null;
+  }
+  return { secret, encoding };
+}
+
+/**
  * Reads the documented Registry entropy → Provisioner → eVault profile flow.
  * It remains off until explicitly enabled so existing W3DS authentication can
  * be deployed independently of platform provisioning credentials.

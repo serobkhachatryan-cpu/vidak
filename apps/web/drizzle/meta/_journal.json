@@ -64,6 +64,13 @@
       "when": 1785876600000,
       "tag": "0008_official_adapter_outbox",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1785878400000,
+      "tag": "0009_awareness_receipts",
+      "breakpoints": true
     }
   ]
 }

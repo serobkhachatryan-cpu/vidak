@@ -20,6 +20,7 @@ const requiredTables = [
   'w3ds_private_adapter_projections',
   'w3ds_private_adapter_outbox',
   'w3ds_official_adapter_outbox',
+  'w3ds_awareness_receipts',
 ] as const;
 
 const requiredIndexes = [
@@ -64,6 +65,7 @@ const requiredIndexes = [
   'w3ds_official_adapter_outbox_entity_type_local_id_uidx',
   'w3ds_official_adapter_outbox_status_idx',
   'w3ds_official_adapter_outbox_entity_type_status_idx',
+  'w3ds_awareness_receipts_global_id_uidx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -105,7 +107,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(9);
+    expect(applied.rows).toHaveLength(10);
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -229,6 +231,15 @@ describe('database migrations (empty database → current set)', () => {
         'failure_reason',
       ]),
     );
+
+    const awarenessReceiptColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'w3ds_awareness_receipts'
+       order by 1`,
+    );
+    expect(awarenessReceiptColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining(['id', 'global_id', 'created_at']),
+    );
   });
 
   it('is idempotent when migrate is invoked twice on the same empty-started database', async () => {
@@ -240,6 +251,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(9);
+    expect(Number(applied.rows[0]?.count)).toBe(10);
   });
 });

@@ -3,6 +3,7 @@ import {
   DOCUMENTED_W3DS_ONTOLOGY_BASE_URL,
   loadServerSecurityConfig,
   normalizeOrigin,
+  readW3dsAaasWebhookConfig,
   readW3dsOntologyMode,
   resolveCookieSecurityConfig,
   resolveRequestCookieSecure,
@@ -371,5 +372,15 @@ describe('server security configuration', () => {
         }),
       ),
     ).toBe(true);
+  });
+
+  it('requires both AaaS webhook secret and an explicit signature encoding', () => {
+    expect(readW3dsAaasWebhookConfig({})).toBeNull();
+    expect(
+      readW3dsAaasWebhookConfig({
+        W3DS_AAAS_WEBHOOK_SECRET: 'secret',
+        W3DS_AAAS_SIGNATURE_ENCODING: 'base64',
+      }),
+    ).toEqual({ secret: 'secret', encoding: 'base64' });
   });
 });
