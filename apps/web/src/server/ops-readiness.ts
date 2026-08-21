@@ -27,7 +27,15 @@ export interface ReadinessProbes {
   probeMigrations?: (databaseUrl: string) => Promise<void>;
 }
 
-const REQUIRED_TABLE = 'w3ds_platform_users';
+/**
+ * Tables that must exist before this process accepts traffic. Keep the
+ * receive-only Awareness receipt table here: without it, a P2 webhook could
+ * authenticate successfully but fail only after AaaS has delivered a packet.
+ */
+export const REQUIRED_READINESS_TABLES = [
+  'w3ds_platform_users',
+  'w3ds_awareness_receipts',
+] as const;
 
 /**
  * Verifies configuration and runtime dependencies needed to serve traffic.
@@ -119,15 +127,14 @@ async function defaultProbeMigrations(databaseUrl: string): Promise<void> {
     idleTimeoutMillis: 1_000,
   });
   try {
-    const result = await pool.query<{ exists: boolean }>(
-      `select exists (
-         select 1
-         from information_schema.tables
-         where table_schema = 'public' and table_name = $1
-       ) as exists`,
-      [REQUIRED_TABLE],
+    const result = await pool.query<{ table_name: string }>(
+      `select table_name
+       from information_schema.tables
+       where table_schema = 'public' and table_name = any($1::text[])`,
+      [REQUIRED_READINESS_TABLES],
     );
-    if (!result.rows[0]?.exists) {
+    const present = new Set(result.rows.map((row) => row.table_name));
+    if (REQUIRED_READINESS_TABLES.some((table) => !present.has(table))) {
       throw new Error('Required database migrations are not applied.');
     }
   } finally {

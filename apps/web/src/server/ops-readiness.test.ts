@@ -12,7 +12,12 @@ import {
   resolveCorrelationId,
   setOperationalLogSinkForTests,
 } from './ops-observability';
-import { checkReadiness, readinessFailureCategory, reportReadinessFailure } from './ops-readiness';
+import {
+  checkReadiness,
+  REQUIRED_READINESS_TABLES,
+  readinessFailureCategory,
+  reportReadinessFailure,
+} from './ops-readiness';
 import { redactSensitiveText } from './ops-redaction';
 import { W3dsAuthError } from './w3ds-auth-errors';
 
@@ -78,6 +83,10 @@ describe('checkReadiness', () => {
       await rm(mediaRoot, { recursive: true, force: true });
       mediaRoot = undefined;
     }
+  });
+
+  it('requires the durable Awareness receipt migration before accepting traffic', () => {
+    expect(REQUIRED_READINESS_TABLES).toEqual(['w3ds_platform_users', 'w3ds_awareness_receipts']);
   });
 
   it('succeeds for development config with accessible media storage', async () => {
