@@ -133,7 +133,7 @@ describe('POST /api/webhook', () => {
     expect(getW3dsDatabase).not.toHaveBeenCalled();
   });
 
-  it('emits redacted accepted, replayed, rejected, and failed outcome metrics', async () => {
+  it('emits redacted ignored, replayed, rejected, and failed outcome metrics', async () => {
     const logs: string[] = [];
     setOperationalLogSinkForTests((line) => logs.push(line));
     vi.stubEnv('W3DS_AAAS_WEBHOOK_SECRET', secret);
@@ -156,7 +156,7 @@ describe('POST /api/webhook', () => {
     const newPacket = JSON.stringify({ ...packet, id: 'route-global-id-2' });
     expect((await POST(signedRequest(newPacket))).status).toBe(500);
 
-    expect(logs.join('\n')).toContain('"code":"awareness_accepted"');
+    expect(logs.join('\n')).toContain('"code":"awareness_ignored"');
     expect(logs.join('\n')).toContain('"code":"awareness_replayed"');
     expect(logs.join('\n')).toContain('"code":"awareness_rejected"');
     expect(logs.join('\n')).toContain('"code":"awareness_failed"');

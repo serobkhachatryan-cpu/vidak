@@ -7,6 +7,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import 'server-only';
 import { CORRELATION_HEADER, resolveCorrelationId } from '../../../server/ops-observability';
+import { resolveW3dsAwarenessAdmission } from '../../../server/w3ds-awareness-admission';
 import type { W3dsAwarenessReceiptStore } from '../../../server/w3ds-awareness-receipts';
 import {
   createDefaultAwarenessReceiptStore,
@@ -38,6 +39,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       config,
       ...(testReceiptStore ? { receipts: testReceiptStore } : {}),
       resolveReceipts: createDefaultAwarenessReceiptStore,
+      resolveAdmission: resolveW3dsAwarenessAdmission,
     });
     reportAwarenessWebhookOutcome({ correlationId, outcome: result.outcome });
     return emptyWebhookResponse(result.status, correlationId);

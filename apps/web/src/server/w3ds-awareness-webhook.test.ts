@@ -93,17 +93,21 @@ describe('AaaS webhook receive-only handler', () => {
       reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-2', outcome: 'duplicate' }),
     ).toBe('awareness_replayed');
     expect(
-      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-3', outcome: 'rejected' }),
+      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-3', outcome: 'ignored' }),
+    ).toBe('awareness_ignored');
+    expect(
+      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-4', outcome: 'rejected' }),
     ).toBe('awareness_rejected');
     expect(
-      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-4', outcome: 'failed' }),
+      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-5', outcome: 'failed' }),
     ).toBe('awareness_failed');
 
-    expect(logs).toHaveLength(4);
+    expect(logs).toHaveLength(5);
     expect(logs).toEqual(
       expect.arrayContaining([
         expect.stringContaining('"code":"awareness_accepted"'),
         expect.stringContaining('"code":"awareness_replayed"'),
+        expect.stringContaining('"code":"awareness_ignored"'),
         expect.stringContaining('"code":"awareness_rejected"'),
         expect.stringContaining('"code":"awareness_failed"'),
       ]),
@@ -180,6 +184,23 @@ describe('AaaS webhook receive-only handler', () => {
     const stored = await receipts.getByGlobalId(packet.id);
     expect(stored?.globalId).toBe(packet.id);
     expect(stored?.id).toBe(result.receiptId);
+  });
+
+  it('acknowledges an admitted-but-ignored packet with one receipt and no product projection', async () => {
+    const receipts = new InMemoryW3dsAwarenessReceiptStore();
+    const resolveAdmission = vi.fn(() => ({ status: 'ignored' as const }));
+    const result = await handleAwarenessWebhookRequest({
+      rawBody,
+      signatureHeader: sign(),
+      config: { secret, encoding },
+      receipts,
+      resolveAdmission,
+    });
+    expect(result).toMatchObject({ status: 200, outcome: 'ignored', ...denied });
+    expect(resolveAdmission).toHaveBeenCalledWith(
+      expect.objectContaining({ id: packet.id, schemaId: packet.schemaId }),
+    );
+    expect(await receipts.getByGlobalId(packet.id)).toMatchObject({ globalId: packet.id });
   });
 
   it('is idempotent on MetaEnvelope id', async () => {
@@ -284,6 +305,18 @@ describe('AaaS webhook receive-only handler', () => {
     expect(resolveReceipts).not.toHaveBeenCalled();
   });
 
+  it('does not resolve mapping admission when HMAC verification fails', async () => {
+    const resolveAdmission = vi.fn(() => ({ status: 'ignored' as const }));
+    const result = await handleAwarenessWebhookRequest({
+      rawBody,
+      signatureHeader: sign(rawBody, 'wrong-secret'),
+      config: { secret, encoding },
+      resolveAdmission,
+    });
+    expect(result.status).toBe(500);
+    expect(resolveAdmission).not.toHaveBeenCalled();
+  });
+
   it('does not acknowledge a packet when store construction fails after a valid HMAC', async () => {
     const resolveReceipts = vi.fn(() => {
       throw new Error('database unavailable');
@@ -332,6 +365,7 @@ describe('P2 browser W3DS boundary', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     for (const file of [
       'w3ds-awareness-webhook.ts',
+      'w3ds-awareness-admission.ts',
       'w3ds-awareness-receipts.ts',
       'w3ds-aaas-signature.ts',
     ]) {

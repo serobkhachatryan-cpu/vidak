@@ -12,6 +12,7 @@ import 'server-only';
 import { reportOperationalEvent } from './ops-observability';
 import { readW3dsAaasWebhookConfig, type W3dsAaasWebhookConfig } from './server-config';
 import { verifyW3dsAaasSignature } from './w3ds-aaas-signature';
+import type { W3dsAwarenessAdmission, W3dsAwarenessEnvelope } from './w3ds-awareness-admission';
 import {
   createPostgresW3dsAwarenessReceiptStore,
   type W3dsAwarenessReceiptStore,
@@ -40,12 +41,14 @@ export interface HandleAwarenessWebhookInput {
   receipts?: W3dsAwarenessReceiptStore;
   /** Invoked only after a valid HMAC when `receipts` is not injected. */
   resolveReceipts?: () => W3dsAwarenessReceiptStore;
+  /** Invoked only after HMAC verification and packet parsing. */
+  resolveAdmission?: (envelope: W3dsAwarenessEnvelope) => W3dsAwarenessAdmission;
   now?: () => number;
 }
 
 export interface HandleAwarenessWebhookResult {
   status: 200 | 500;
-  outcome: 'accepted' | 'duplicate' | 'rejected';
+  outcome: 'accepted' | 'duplicate' | 'ignored' | 'rejected';
   globalId?: string;
   receiptId?: string;
   officialEVaultWrites: false;
@@ -58,6 +61,7 @@ export interface HandleAwarenessWebhookResult {
 export type W3dsAwarenessWebhookOutcomeCode =
   | 'awareness_accepted'
   | 'awareness_replayed'
+  | 'awareness_ignored'
   | 'awareness_rejected'
   | 'awareness_failed';
 
@@ -79,9 +83,11 @@ export function reportAwarenessWebhookOutcome(input: {
       ? 'awareness_accepted'
       : input.outcome === 'duplicate'
         ? 'awareness_replayed'
-        : input.outcome === 'rejected'
-          ? 'awareness_rejected'
-          : 'awareness_failed';
+        : input.outcome === 'ignored'
+          ? 'awareness_ignored'
+          : input.outcome === 'rejected'
+            ? 'awareness_rejected'
+            : 'awareness_failed';
   reportOperationalEvent({ category: 'w3ds_sync', correlationId: input.correlationId, code });
   return code;
 }
@@ -108,6 +114,10 @@ export async function handleAwarenessWebhookRequest(
   const packet = parseAwarenessEnvelope(input.rawBody);
   if (!packet) return rejected;
 
+  // Admission is intentionally before receipt-store construction. Invalid
+  // HMACs never reach it, and it does not allocate the database client.
+  const admission = input.resolveAdmission?.(packet) ?? { status: 'eligible' as const };
+
   const receipts = loadReceiptStore(input);
   const existing = await receipts.getByGlobalId(packet.id);
   if (existing) {
@@ -126,7 +136,7 @@ export async function handleAwarenessWebhookRequest(
   });
   return {
     status: 200,
-    outcome: 'accepted',
+    outcome: admission.status === 'eligible' ? 'accepted' : 'ignored',
     globalId: packet.id,
     receiptId: recorded.id,
     ...deniedFlags,
@@ -154,7 +164,7 @@ function loadReceiptStore(input: HandleAwarenessWebhookInput): W3dsAwarenessRece
  * require the complete documented envelope before writing a receipt, so a
  * malformed signed delivery cannot reserve a MetaEnvelope id.
  */
-function parseAwarenessEnvelope(rawBody: Buffer): { id: string } | undefined {
+function parseAwarenessEnvelope(rawBody: Buffer): W3dsAwarenessEnvelope | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawBody.toString('utf8'));
@@ -167,7 +177,7 @@ function parseAwarenessEnvelope(rawBody: Buffer): { id: string } | undefined {
   const w3id = requiredString(packet.w3id);
   const schemaId = requiredString(packet.schemaId);
   if (!id || !w3id || !schemaId || !isEName(w3id) || !isRecord(packet.data)) return undefined;
-  return { id };
+  return { id, w3id, schemaId, data: packet.data };
 }
 
 function requiredString(value: unknown): string | undefined {
