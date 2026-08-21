@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setOperationalLogSinkForTests } from './ops-observability';
 import { readW3dsAaasWebhookConfig } from './server-config';
+import { InMemoryW3dsAwarenessChannelProjection } from './w3ds-awareness-channel-projection';
 import { InMemoryW3dsAwarenessReceiptStore } from './w3ds-awareness-receipts';
 import {
   handleAwarenessWebhookRequest,
@@ -35,6 +36,21 @@ const denied = {
   interoperablePublicW3ds: false,
   httpEvaultClientConstructed: false,
 } as const;
+
+const channelMapping = {
+  tableName: 'creator_channels',
+  entityType: 'channel' as const,
+  schemaId: 'schema-channel-configured',
+  ownerEnamePath: 'w3ds_platform_users(ownerId.eName)',
+  localToUniversalMap: {
+    id: 'id',
+    ownerEName: 'w3ds_platform_users(ownerId.eName),ownerEName',
+    handle: 'handle',
+    name: 'name',
+    createdAt: '__date(createdAt)',
+    updatedAt: '__date(updatedAt)',
+  },
+};
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
@@ -203,6 +219,60 @@ describe('AaaS webhook receive-only handler', () => {
     expect(await receipts.getByGlobalId(packet.id)).toMatchObject({ globalId: packet.id });
   });
 
+  it('projects an admitted Channel transactionally and does not construct the receipt-only store', async () => {
+    const channelPacket = {
+      id: 'channel-global-1',
+      w3id: '@creator.w3id',
+      schemaId: channelMapping.schemaId,
+      data: {
+        id: 'remote-channel-1',
+        ownerEName: '@creator.w3id',
+        handle: 'creator',
+        name: 'Creator',
+        createdAt: '2026-08-21T01:00:00.000Z',
+        updatedAt: '2026-08-21T01:01:00.000Z',
+      },
+    };
+    const channelBody = Buffer.from(JSON.stringify(channelPacket), 'utf8');
+    const projection = new InMemoryW3dsAwarenessChannelProjection();
+    projection.seedOwner({ id: 'user-local-1', eName: channelPacket.w3id });
+    const resolveReceipts = vi.fn(() => new InMemoryW3dsAwarenessReceiptStore());
+
+    const first = await handleAwarenessWebhookRequest({
+      rawBody: channelBody,
+      signatureHeader: sign(channelBody),
+      config: { secret, encoding },
+      resolveReceipts,
+      channelProjection: projection,
+      resolveAdmission: () => ({
+        status: 'eligible',
+        mapping: channelMapping,
+        mappingVersion: 1,
+      }),
+    });
+    const replay = await handleAwarenessWebhookRequest({
+      rawBody: channelBody,
+      signatureHeader: sign(channelBody),
+      config: { secret, encoding },
+      channelProjection: projection,
+      resolveAdmission: () => ({
+        status: 'eligible',
+        mapping: channelMapping,
+        mappingVersion: 1,
+      }),
+    });
+
+    expect(first).toMatchObject({ status: 200, outcome: 'accepted', ...denied });
+    expect(replay).toMatchObject({
+      status: 200,
+      outcome: 'duplicate',
+      receiptId: first.receiptId,
+      ...denied,
+    });
+    expect(resolveReceipts).not.toHaveBeenCalled();
+    expect(projection.getChannelByGlobalId(channelPacket.id)).toMatchObject({ name: 'Creator' });
+  });
+
   it('is idempotent on MetaEnvelope id', async () => {
     const receipts = new InMemoryW3dsAwarenessReceiptStore();
     const first = await handleAwarenessWebhookRequest({
@@ -361,7 +431,7 @@ describe('P2 browser W3DS boundary', () => {
     }
   });
 
-  it('allows only the local AaaS HMAC helper on the inbound path', () => {
+  it('keeps HMAC, admission, and receipt modules free of product projection code', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     for (const file of [
       'w3ds-awareness-webhook.ts',
@@ -385,6 +455,23 @@ describe('P2 browser W3DS boundary', () => {
       expect(source).not.toMatch(/creatorChannels|w3dsAdapterMappings/);
       expect(source).not.toMatch(/w3dsPrivateAdapterProjections/);
     }
+
+    const projection = readFileSync(join(here, 'w3ds-awareness-channel-projection.ts'), 'utf8');
+    expect(projection).toMatch(/import ['"]server-only['"]/);
+    expect(projection).toMatch(/\bfromGlobal\s*\(/);
+    expect(projection).not.toMatch(/verifySignature/);
+    expect(projection).not.toMatch(/signature-validator/);
+    expect(projection).not.toMatch(/from ['"]\.\/w3ds-auth['"]/);
+    expect(projection).not.toMatch(/from ['"]\.\/w3ds-official-adapter['"]/);
+    expect(projection).not.toMatch(/\bhandleChange\s*\(/);
+    expect(projection).not.toMatch(/\bfetch\s*\(/);
+    expect(projection).not.toMatch(/uploadFile/);
+    expect(projection).not.toMatch(/dereferenceFileUri/);
+    expect(projection).not.toMatch(/from ['"]\.\/w3ds-platform-evault['"]/);
+    expect(projection).not.toMatch(/createMetaEnvelope/);
+    expect(projection).not.toMatch(/\bvideos\b/);
+    expect(projection).not.toMatch(/\bplaylists\b/);
+    expect(projection).not.toMatch(/\bcomments\b/);
 
     const hmacHelper = readFileSync(join(here, 'w3ds-aaas-signature.ts'), 'utf8');
     expect(hmacHelper).toMatch(/createHmac\('sha256'/);

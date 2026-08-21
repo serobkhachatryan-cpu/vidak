@@ -24,7 +24,7 @@ export interface W3dsAwarenessEnvelope {
 }
 
 export type W3dsAwarenessAdmission =
-  | { status: 'eligible'; mapping: W3dsMappingRulesDocument }
+  | { status: 'eligible'; mapping: W3dsMappingRulesDocument; mappingVersion: number }
   | { status: 'ignored' };
 
 /**
@@ -51,7 +51,13 @@ export function admitW3dsAwarenessEnvelope(input: {
     const mapping = loaded.documents.find(
       (document) => document.schemaId === input.envelope.schemaId,
     );
-    return mapping ? { status: 'eligible', mapping } : { status: 'ignored' };
+    // Channel is the sole product projection implemented so far. Every other
+    // configured schema is acknowledged as ignored until it has an equally
+    // transactional, product-specific inbound projection. This avoids partial
+    // Video/media or reserved-table writes from an authenticated broadcast.
+    return mapping?.entityType === 'channel'
+      ? { status: 'eligible', mapping, mappingVersion: input.ontologyAdapter.mappingVersion }
+      : { status: 'ignored' };
   } catch {
     return { status: 'ignored' };
   }

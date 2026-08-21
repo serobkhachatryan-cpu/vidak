@@ -1,7 +1,8 @@
 /// <reference path="../../../server/server-only-module.d.ts" />
 /**
- * POST /api/webhook — AaaS Awareness ingress (receive-only).
+ * POST /api/webhook — AaaS Awareness ingress.
  * Empty 200 on verified handling; empty 500 otherwise. No product-session auth.
+ * Official Channel projection is reachable only through explicit schema admission.
  */
 
 import { type NextRequest, NextResponse } from 'next/server';
@@ -10,6 +11,7 @@ import { CORRELATION_HEADER, resolveCorrelationId } from '../../../server/ops-ob
 import { resolveW3dsAwarenessAdmission } from '../../../server/w3ds-awareness-admission';
 import type { W3dsAwarenessReceiptStore } from '../../../server/w3ds-awareness-receipts';
 import {
+  createDefaultAwarenessChannelProjection,
   createDefaultAwarenessReceiptStore,
   handleAwarenessWebhookRequest,
   reportAwarenessWebhookOutcome,
@@ -39,6 +41,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       config,
       ...(testReceiptStore ? { receipts: testReceiptStore } : {}),
       resolveReceipts: createDefaultAwarenessReceiptStore,
+      resolveChannelProjection: createDefaultAwarenessChannelProjection,
       resolveAdmission: resolveW3dsAwarenessAdmission,
     });
     reportAwarenessWebhookOutcome({ correlationId, outcome: result.outcome });

@@ -173,6 +173,14 @@ still required” are in place.
 3. Expose readiness/metrics for failed, retried, and ignored packets without
    logging credentials or private envelope data.
 
+**Partial (explicitly gated):** an authenticated Awareness packet for the
+configured official Channel schema can create its receipt, local Channel
+projection, and local/global mapping in one database transaction. It remains
+unreachable in the default `vidak_private` deployment and requires complete
+operator-supplied official Ontology configuration. Video, Playlist, and Comment
+packets remain acknowledged as ignored; `w3ds://file` values are not
+dereferenced or exposed as product URLs until Phase C is enabled.
+
 ### Phase E — signing and verification
 
 1. Add product-scoped signing requests through `w3ds://sign` where Vidak has

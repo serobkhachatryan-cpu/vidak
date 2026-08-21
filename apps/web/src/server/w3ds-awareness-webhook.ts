@@ -4,15 +4,20 @@
  *
  * Verifies x-aaas-signature as HMAC-SHA256 of the raw body, validates the
  * documented Awareness envelope, then records a receipt keyed by MetaEnvelope
- * id. Does not apply product rows, mappings, official adapter writes, or eVault
- * writes.
+ * id. A configured official Channel schema may use the separate transactional
+ * projection seam; no outbound adapter, eVault, or network write is used.
  */
 
 import 'server-only';
+import { getW3dsDatabase } from './db/client';
 import { reportOperationalEvent } from './ops-observability';
 import { readW3dsAaasWebhookConfig, type W3dsAaasWebhookConfig } from './server-config';
 import { verifyW3dsAaasSignature } from './w3ds-aaas-signature';
 import type { W3dsAwarenessAdmission, W3dsAwarenessEnvelope } from './w3ds-awareness-admission';
+import {
+  createPostgresW3dsAwarenessChannelProjection,
+  type W3dsAwarenessChannelProjection,
+} from './w3ds-awareness-channel-projection';
 import {
   createPostgresW3dsAwarenessReceiptStore,
   type W3dsAwarenessReceiptStore,
@@ -43,6 +48,10 @@ export interface HandleAwarenessWebhookInput {
   resolveReceipts?: () => W3dsAwarenessReceiptStore;
   /** Invoked only after HMAC verification and packet parsing. */
   resolveAdmission?: (envelope: W3dsAwarenessEnvelope) => W3dsAwarenessAdmission;
+  /** Explicit test injection for an admitted, transactional Channel projection. */
+  channelProjection?: W3dsAwarenessChannelProjection;
+  /** Invoked only after valid HMAC, packet parsing, and Channel admission. */
+  resolveChannelProjection?: () => W3dsAwarenessChannelProjection;
   now?: () => number;
 }
 
@@ -116,7 +125,27 @@ export async function handleAwarenessWebhookRequest(
 
   // Admission is intentionally before receipt-store construction. Invalid
   // HMACs never reach it, and it does not allocate the database client.
-  const admission = input.resolveAdmission?.(packet) ?? { status: 'eligible' as const };
+  const admission = input.resolveAdmission?.(packet);
+
+  // Slice 2: Channel is the only configured official mapping that has a
+  // transactional local projection. The projector owns receipt creation as
+  // part of that transaction, so a failure cannot acknowledge the packet or
+  // leave a partial Channel/mapping row behind.
+  if (admission?.status === 'eligible') {
+    const projected = await loadChannelProjection(input).project({
+      envelope: packet,
+      mapping: admission.mapping,
+      mappingVersion: admission.mappingVersion,
+      now: (input.now ?? Date.now)(),
+    });
+    return {
+      status: 200,
+      outcome: projected.outcome === 'duplicate' ? 'duplicate' : 'accepted',
+      globalId: packet.id,
+      receiptId: projected.receiptId,
+      ...deniedFlags,
+    };
+  }
 
   const receipts = loadReceiptStore(input);
   const existing = await receipts.getByGlobalId(packet.id);
@@ -136,7 +165,9 @@ export async function handleAwarenessWebhookRequest(
   });
   return {
     status: 200,
-    outcome: admission.status === 'eligible' ? 'accepted' : 'ignored',
+    // Direct handler tests deliberately omit admission; retain the original
+    // receipt-only acknowledgement seam. Runtime always supplies admission.
+    outcome: admission?.status === 'ignored' ? 'ignored' : 'accepted',
     globalId: packet.id,
     receiptId: recorded.id,
     ...deniedFlags,
@@ -153,10 +184,20 @@ export function createDefaultAwarenessReceiptStore(): W3dsAwarenessReceiptStore 
   return createPostgresW3dsAwarenessReceiptStore();
 }
 
+export function createDefaultAwarenessChannelProjection(): W3dsAwarenessChannelProjection {
+  return createPostgresW3dsAwarenessChannelProjection(getW3dsDatabase());
+}
+
 function loadReceiptStore(input: HandleAwarenessWebhookInput): W3dsAwarenessReceiptStore {
   if (input.receipts) return input.receipts;
   if (input.resolveReceipts) return input.resolveReceipts();
   return createDefaultAwarenessReceiptStore();
+}
+
+function loadChannelProjection(input: HandleAwarenessWebhookInput): W3dsAwarenessChannelProjection {
+  if (input.channelProjection) return input.channelProjection;
+  if (input.resolveChannelProjection) return input.resolveChannelProjection();
+  return createDefaultAwarenessChannelProjection();
 }
 
 /**

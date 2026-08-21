@@ -9,6 +9,7 @@
  * given that same injected client.
  */
 
+import 'server-only';
 import { entityTypeForAdapterTable, type W3dsAdapterMappingService } from './w3ds-adapter-mapping';
 import type { W3dsMappingRulesDocument } from './w3ds-mapping-rules';
 import {
@@ -149,7 +150,12 @@ export async function toGlobal(input: {
 export async function fromGlobal(input: {
   data: Record<string, unknown>;
   mapping: W3dsMappingRulesDocument;
-  mappingService: W3dsAdapterMappingService;
+  /**
+   * Inbound mapping only needs global-id lookup for non-owner relations.
+   * Keeping this narrow lets the webhook projector run entirely inside its
+   * receipt/product transaction rather than constructing an outbound adapter.
+   */
+  mappingService: Pick<W3dsAdapterMappingService, 'getByGlobalId'>;
   fileClient?: W3dsOfficialFileClient;
 }): Promise<Record<string, unknown>> {
   const local: Record<string, unknown> = {};
