@@ -2,9 +2,10 @@
 /**
  * Receive-only AaaS webhook ingress.
  *
- * Verifies x-aaas-signature as HMAC-SHA256 of the raw body, then records a
- * receipt keyed by MetaEnvelope id. Does not apply product rows, mappings,
- * official adapter writes, or eVault writes.
+ * Verifies x-aaas-signature as HMAC-SHA256 of the raw body, validates the
+ * documented Awareness envelope, then records a receipt keyed by MetaEnvelope
+ * id. Does not apply product rows, mappings, official adapter writes, or eVault
+ * writes.
  */
 
 import 'server-only';
@@ -76,29 +77,29 @@ export async function handleAwarenessWebhookRequest(
   });
   if (verdict !== 'valid') return rejected;
 
-  const globalId = extractMetaEnvelopeId(input.rawBody);
-  if (!globalId) return rejected;
+  const packet = parseAwarenessEnvelope(input.rawBody);
+  if (!packet) return rejected;
 
   const receipts = loadReceiptStore(input);
-  const existing = await receipts.getByGlobalId(globalId);
+  const existing = await receipts.getByGlobalId(packet.id);
   if (existing) {
     return {
       status: 200,
       outcome: 'duplicate',
-      globalId,
+      globalId: packet.id,
       receiptId: existing.id,
       ...deniedFlags,
     };
   }
 
   const recorded = await receipts.recordReceipt({
-    globalId,
+    globalId: packet.id,
     now: (input.now ?? Date.now)(),
   });
   return {
     status: 200,
     outcome: 'accepted',
-    globalId,
+    globalId: packet.id,
     receiptId: recorded.id,
     ...deniedFlags,
   };
@@ -120,7 +121,12 @@ function loadReceiptStore(input: HandleAwarenessWebhookInput): W3dsAwarenessRece
   return createDefaultAwarenessReceiptStore();
 }
 
-function extractMetaEnvelopeId(rawBody: Buffer): string | undefined {
+/**
+ * The AaaS delivery body is authenticated before this parser is called. Still
+ * require the complete documented envelope before writing a receipt, so a
+ * malformed signed delivery cannot reserve a MetaEnvelope id.
+ */
+function parseAwarenessEnvelope(rawBody: Buffer): { id: string } | undefined {
   let parsed: unknown;
   try {
     parsed = JSON.parse(rawBody.toString('utf8'));
@@ -128,8 +134,24 @@ function extractMetaEnvelopeId(rawBody: Buffer): string | undefined {
     return undefined;
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return undefined;
-  const id = (parsed as Record<string, unknown>).id;
-  if (typeof id !== 'string') return undefined;
-  const trimmed = id.trim();
+  const packet = parsed as Record<string, unknown>;
+  const id = requiredString(packet.id);
+  const w3id = requiredString(packet.w3id);
+  const schemaId = requiredString(packet.schemaId);
+  if (!id || !w3id || !schemaId || !isEName(w3id) || !isRecord(packet.data)) return undefined;
+  return { id };
+}
+
+function requiredString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function isEName(value: string): boolean {
+  return /^@[^\s@]+$/.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }

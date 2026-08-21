@@ -189,6 +189,28 @@ describe('AaaS webhook receive-only handler', () => {
     expect(result.globalId).toBeUndefined();
   });
 
+  it.each([
+    ['w3id is missing', { ...packet, w3id: undefined }],
+    ['w3id is not an eName', { ...packet, w3id: 'not-an-ename' }],
+    ['schemaId is blank', { ...packet, schemaId: '   ' }],
+    ['data is not an object', { ...packet, data: ['not', 'an', 'object'] }],
+  ])(
+    'rejects a signed packet when %s before resolving or writing receipts',
+    async (_name, value) => {
+      const body = Buffer.from(JSON.stringify(value), 'utf8');
+      const resolveReceipts = vi.fn(() => new InMemoryW3dsAwarenessReceiptStore());
+      const result = await handleAwarenessWebhookRequest({
+        rawBody: body,
+        signatureHeader: sign(body),
+        config: { secret, encoding },
+        resolveReceipts,
+      });
+
+      expect(result).toMatchObject({ status: 500, outcome: 'rejected', ...denied });
+      expect(resolveReceipts).not.toHaveBeenCalled();
+    },
+  );
+
   it('reads AaaS config from env without enabling metastate_official', () => {
     vi.stubEnv('W3DS_AAAS_WEBHOOK_SECRET', secret);
     vi.stubEnv('W3DS_AAAS_SIGNATURE_ENCODING', 'hex');
