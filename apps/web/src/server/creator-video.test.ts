@@ -224,6 +224,26 @@ describe('CreatorVideoService', () => {
     ]);
   });
 
+  it('publishes a bound owner draft after a server-verified signing session', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    let sequence = 0;
+    const service = new CreatorVideoService({
+      store,
+      resolveUser: async () => owner,
+      createId: () => `id-${++sequence}`,
+    });
+    const draft = await service.createDraft('token', { title: 'Signed publish' });
+    store.seedReadyMediaAsset(draft.id);
+
+    await expect(
+      service.publishVideoAfterVerifiedSignature({
+        videoId: draft.id,
+        ownerId: owner.id,
+        ownerEName: owner.eName,
+      }),
+    ).resolves.toMatchObject({ id: draft.id, status: 'published' });
+  });
+
   it('rejects publish without ready media and hides cross-user publish/unpublish', async () => {
     const store = new InMemoryCreatorVideoStore();
     let sequence = 0;

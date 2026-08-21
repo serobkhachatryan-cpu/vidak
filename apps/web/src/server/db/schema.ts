@@ -433,6 +433,36 @@ export const w3dsAwarenessReceipts = pgTable(
   (table) => [uniqueIndex('w3ds_awareness_receipts_global_id_uidx').on(table.globalId)],
 );
 
+/**
+ * One-time W3DS signing sessions for the opt-in creator-video publication
+ * consent flow. The signature itself is never retained: it is verified
+ * server-side against Registry-attested eVault keys before the local publish.
+ */
+export const w3dsVideoPublicationSigningSessions = pgTable(
+  'w3ds_video_publication_signing_sessions',
+  {
+    id: text('id').primaryKey(),
+    videoId: text('video_id')
+      .notNull()
+      .references(() => videos.id, { onDelete: 'cascade' }),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => w3dsPlatformUsers.id),
+    ownerEName: text('owner_e_name').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    status: text('status')
+      .$type<'pending' | 'verifying' | 'completed' | 'expired' | 'failed' | 'security_violation'>()
+      .notNull(),
+    errorCode: text('error_code'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    index('w3ds_video_publication_signing_status_expires_idx').on(table.status, table.expiresAt),
+    index('w3ds_video_publication_signing_owner_video_idx').on(table.ownerId, table.videoId),
+  ],
+);
+
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
 export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
@@ -446,3 +476,5 @@ export type W3dsPrivateAdapterProjectionRow = typeof w3dsPrivateAdapterProjectio
 export type W3dsPrivateAdapterOutboxRow = typeof w3dsPrivateAdapterOutbox.$inferSelect;
 export type W3dsOfficialAdapterOutboxRow = typeof w3dsOfficialAdapterOutbox.$inferSelect;
 export type W3dsAwarenessReceiptRow = typeof w3dsAwarenessReceipts.$inferSelect;
+export type W3dsVideoPublicationSigningSessionRow =
+  typeof w3dsVideoPublicationSigningSessions.$inferSelect;

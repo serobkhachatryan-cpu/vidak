@@ -71,6 +71,13 @@
       "when": 1785878400000,
       "tag": "0009_awareness_receipts",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785880200000,
+      "tag": "0010_video_publication_signing",
+      "breakpoints": true
     }
   ]
 }

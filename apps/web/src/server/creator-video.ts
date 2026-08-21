@@ -134,6 +134,32 @@ export class CreatorVideoService {
    */
   async publishVideo(accessToken: string, videoId: string): Promise<Video> {
     const user = await this.requireUser(accessToken);
+    return this.publishOwnedVideoForUser(videoId, user);
+  }
+
+  /**
+   * Server-only continuation for a completed one-time W3DS signing session.
+   * This does not authenticate a browser request: its caller must have already
+   * verified the eID signature and the stored session's expected owner.
+   */
+  async publishVideoAfterVerifiedSignature(input: {
+    videoId: string;
+    ownerId: string;
+    ownerEName: string;
+  }): Promise<Video> {
+    if (!input.ownerId.trim() || !input.ownerEName.trim()) {
+      throw new CreatorVideoError('Video publishing is unavailable.', 'internal_error', 500);
+    }
+    return this.publishOwnedVideoForUser(input.videoId, {
+      id: input.ownerId,
+      eName: input.ownerEName,
+    });
+  }
+
+  private async publishOwnedVideoForUser(
+    videoId: string,
+    user: Pick<AuthUser, 'id' | 'eName'>,
+  ): Promise<Video> {
     const normalizedId = videoId.trim();
     if (!normalizedId) {
       throw new CreatorVideoError('Video was not found.', 'not_found', 404);

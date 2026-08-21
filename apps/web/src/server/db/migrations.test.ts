@@ -21,6 +21,7 @@ const requiredTables = [
   'w3ds_private_adapter_outbox',
   'w3ds_official_adapter_outbox',
   'w3ds_awareness_receipts',
+  'w3ds_video_publication_signing_sessions',
 ] as const;
 
 const requiredIndexes = [
@@ -66,6 +67,9 @@ const requiredIndexes = [
   'w3ds_official_adapter_outbox_status_idx',
   'w3ds_official_adapter_outbox_entity_type_status_idx',
   'w3ds_awareness_receipts_global_id_uidx',
+  // W3DS signed video publication
+  'w3ds_video_publication_signing_status_expires_idx',
+  'w3ds_video_publication_signing_owner_video_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -107,7 +111,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(10);
+    expect(applied.rows).toHaveLength(11);
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -240,6 +244,23 @@ describe('database migrations (empty database → current set)', () => {
     expect(awarenessReceiptColumns.rows.map((row) => row.column_name)).toEqual(
       expect.arrayContaining(['id', 'global_id', 'created_at']),
     );
+
+    const signingSessionColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'w3ds_video_publication_signing_sessions'
+       order by 1`,
+    );
+    expect(signingSessionColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'video_id',
+        'owner_id',
+        'owner_e_name',
+        'expires_at',
+        'status',
+        'error_code',
+      ]),
+    );
   });
 
   it('is idempotent when migrate is invoked twice on the same empty-started database', async () => {
@@ -251,6 +272,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(10);
+    expect(Number(applied.rows[0]?.count)).toBe(11);
   });
 });

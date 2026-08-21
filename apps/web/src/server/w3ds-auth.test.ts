@@ -121,6 +121,24 @@ describe('W3dsAuthService', () => {
     expect(reused.eName).toBe('@creator.w3id');
   });
 
+  it('reuses the server-side verifier for arbitrary signed payloads without issuing a login session', async () => {
+    const { service, verifier, store } = createService();
+
+    await expect(
+      service.verifySignedPayload({
+        w3id: verifiedIdentity.eName,
+        payload: 'signing-session-1',
+        signature: 'signature',
+      }),
+    ).resolves.toEqual(verifiedIdentity);
+    expect(verifier.verify).toHaveBeenCalledWith({
+      eName: verifiedIdentity.eName,
+      session: 'signing-session-1',
+      signature: 'signature',
+    });
+    await expect(store.getOfferBySessionId('signing-session-1')).resolves.toBeUndefined();
+  });
+
   it('reconstructs a pending offer for a server-rendered login page', async () => {
     const { service } = createService();
     const created = await service.createOffer('https://vidak.example');

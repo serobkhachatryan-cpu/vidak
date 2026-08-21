@@ -82,6 +82,16 @@ export interface W3dsIdentityVerifier {
   }): Promise<VerifiedW3dsIdentity>;
 }
 
+/**
+ * A verified arbitrary signing payload. Used by `w3ds://sign` flows; unlike
+ * login it does not create a platform session or mutate an auth offer.
+ */
+export interface W3dsSignedPayloadInput {
+  w3id: string;
+  payload: string;
+  signature: string;
+}
+
 interface PlatformTokenClaims {
   sub: string;
   sid: string;
@@ -132,6 +142,25 @@ export class W3dsAuthService {
     const expiresAt = this.now() + this.config.offerLifetimeMs;
     const offer = await this.store.createOffer({ id: offerId, sessionId, expiresAt });
     return this.toLoginOffer(offer, publicBaseUrl);
+  }
+
+  /**
+   * Verifies a wallet signature over an application-owned one-time payload.
+   * Registry/eVault traffic remains confined to the injected server verifier.
+   */
+  async verifySignedPayload(input: W3dsSignedPayloadInput): Promise<VerifiedW3dsIdentity> {
+    if (!isEName(input.w3id) || !input.payload.trim() || !input.signature.trim()) {
+      throw new W3dsAuthError('Signature verification failed.', 'invalid_signature', 401);
+    }
+    const identity = await this.identityVerifier.verify({
+      eName: input.w3id,
+      session: input.payload,
+      signature: input.signature,
+    });
+    if (identity.eName !== input.w3id) {
+      throw new W3dsAuthError('Signature verification failed.', 'invalid_signature', 401);
+    }
+    return identity;
   }
 
   /**
