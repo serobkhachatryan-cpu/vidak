@@ -75,6 +75,24 @@ export function requireW3dsOfficialEVaultClient(): W3dsOfficialEVaultClient {
   );
 }
 
+/** Injected loopback sandbox sources. Production resolve never returns these. */
+export const W3DS_OFFICIAL_SANDBOX_CLIENT_SOURCES = [
+  'sandbox://127.0.0.1',
+  'sandbox://localhost',
+] as const;
+
+/**
+ * Classifies injected test sources. Not authentication and not a write grant.
+ * Production resolveW3dsOfficialEVaultClient never selects these.
+ */
+export function isSandboxInjectedOfficialEVaultClientSource(source: string): boolean {
+  return (W3DS_OFFICIAL_SANDBOX_CLIENT_SOURCES as readonly string[]).includes(source);
+}
+
+export function isAllowedInjectedOfficialEVaultClientSource(source: string): boolean {
+  return source.startsWith('fake://') || isSandboxInjectedOfficialEVaultClientSource(source);
+}
+
 function assertEName(eName: string, method: string): string {
   const trimmed = eName.trim();
   if (!eNamePattern.test(trimmed)) {

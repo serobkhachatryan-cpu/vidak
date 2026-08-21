@@ -383,6 +383,7 @@ describe('P1B browser W3DS boundary', () => {
       'w3ds-official-adapter-outbox',
       'w3ds-official-evault-client',
       'w3ds-official-mapper',
+      'w3ds-official-sandbox-evault-client',
       'createMetaEnvelope',
       'handleChange',
       'ontology.w3ds.metastate.foundation',

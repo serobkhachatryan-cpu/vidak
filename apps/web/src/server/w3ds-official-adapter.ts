@@ -37,6 +37,8 @@ import {
   type W3dsOfficialAdapterOutboxStore,
 } from './w3ds-official-adapter-outbox';
 import {
+  isAllowedInjectedOfficialEVaultClientSource,
+  isSandboxInjectedOfficialEVaultClientSource,
   resolveW3dsOfficialEVaultClient,
   type W3dsOfficialEVaultClient,
 } from './w3ds-official-evault-client';
@@ -387,9 +389,18 @@ export class W3dsOfficialWeb3Adapter {
 
   private resolveClient(): W3dsOfficialEVaultClient {
     if (this.officialClient) {
-      if (!this.officialClient.source.startsWith('fake://')) {
+      if (!isAllowedInjectedOfficialEVaultClientSource(this.officialClient.source)) {
         throw new W3dsOfficialAdapterError(
-          'Official handleChange refuses a non-fake eVault client while HTTP construction is gated off.',
+          'Official handleChange refuses a non-fake, non-loopback-sandbox eVault client while HTTP construction is gated off.',
+          'http_evault_client_unavailable',
+        );
+      }
+      if (
+        isSandboxInjectedOfficialEVaultClientSource(this.officialClient.source) &&
+        process.env.W3DS_SANDBOX_COMPAT_ENABLED !== 'true'
+      ) {
+        throw new W3dsOfficialAdapterError(
+          'Official handleChange refuses an injected sandbox eVault client until W3DS_SANDBOX_COMPAT_ENABLED=true. A sandbox:// source string is not authentication.',
           'http_evault_client_unavailable',
         );
       }

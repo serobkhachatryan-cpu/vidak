@@ -134,6 +134,7 @@ describe('P1A browser W3DS boundary', () => {
       'w3ds-official-adapter-outbox',
       'w3ds-official-evault-client',
       'w3ds-official-mapper',
+      'w3ds-official-sandbox-evault-client',
       'w3ds-schema-id-policy',
       'w3ds-platform-evault',
       'w3ds-adapter-mapping',
