@@ -6,9 +6,18 @@
 import { access, constants, mkdir } from 'node:fs/promises';
 import { Pool } from 'pg';
 import { type OperationalFailureCategory, reportOperationalFailure } from './ops-observability';
-import { loadServerSecurityConfig, type ServerSecurityConfig } from './server-config';
+import {
+  loadServerSecurityConfig,
+  readW3dsAaasWebhookConfig,
+  type ServerSecurityConfig,
+} from './server-config';
 
-export type ReadinessDependency = 'config' | 'database' | 'media_storage' | 'migrations';
+export type ReadinessDependency =
+  | 'config'
+  | 'database'
+  | 'media_storage'
+  | 'migrations'
+  | 'awareness_webhook';
 
 export type ReadinessSuccess = { ready: true };
 export type ReadinessFailure = {
@@ -63,13 +72,26 @@ export async function checkReadiness(
     return { ready: false, failedDependency: 'media_storage', cause };
   }
 
-  if (config.authProvider === 'w3ds') {
-    const databaseUrl = config.w3ds?.databaseUrl;
+  const awarenessWebhook = readW3dsAaasWebhookConfig(env);
+  if (hasAwarenessWebhookConfigInput(env) && !awarenessWebhook) {
+    return {
+      ready: false,
+      failedDependency: 'awareness_webhook',
+      cause: new Error('AaaS webhook configuration is incomplete or invalid.'),
+    };
+  }
+
+  if (config.authProvider === 'w3ds' || awarenessWebhook) {
+    const databaseUrl = config.w3ds?.databaseUrl ?? env.DATABASE_URL?.trim();
     if (!databaseUrl) {
       return {
         ready: false,
-        failedDependency: 'config',
-        cause: new Error('W3DS mode requires a configured database.'),
+        failedDependency: awarenessWebhook ? 'awareness_webhook' : 'config',
+        cause: new Error(
+          awarenessWebhook
+            ? 'AaaS webhook ingress requires a configured database.'
+            : 'W3DS mode requires a configured database.',
+        ),
       };
     }
     try {
@@ -93,6 +115,7 @@ export function readinessFailureCategory(
 ): OperationalFailureCategory {
   if (dependency === 'media_storage') return 'media_storage';
   if (dependency === 'config') return 'authentication';
+  if (dependency === 'awareness_webhook') return 'w3ds_sync';
   return 'migration_readiness';
 }
 
@@ -145,4 +168,11 @@ async function defaultProbeMigrations(databaseUrl: string): Promise<void> {
 async function defaultProbeMediaStorage(rootDir: string): Promise<void> {
   await mkdir(rootDir, { recursive: true });
   await access(rootDir, constants.R_OK | constants.W_OK);
+}
+
+/** A configured ingress is a production dependency; an absent one stays optional. */
+function hasAwarenessWebhookConfigInput(env: Record<string, string | undefined>): boolean {
+  return (
+    env.W3DS_AAAS_WEBHOOK_SECRET !== undefined || env.W3DS_AAAS_SIGNATURE_ENCODING !== undefined
+  );
 }

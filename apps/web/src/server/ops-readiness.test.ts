@@ -109,6 +109,81 @@ describe('checkReadiness', () => {
     expect(result).toEqual({ ready: true });
   });
 
+  it('fails closed when only part of the AaaS webhook configuration is supplied', async () => {
+    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
+    const probeDatabase = vi.fn(async () => undefined);
+    const probeMigrations = vi.fn(async () => undefined);
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
+
+    const result = await checkReadiness(
+      {
+        NODE_ENV: 'development',
+        AUTH_PROVIDER: 'dev',
+        MEDIA_STORAGE_ROOT: mediaRoot,
+        W3DS_AAAS_WEBHOOK_SECRET: 'do-not-log-this-webhook-secret',
+      },
+      { probeDatabase, probeMigrations },
+    );
+
+    expect(result.ready).toBe(false);
+    if (result.ready) return;
+    expect(result.failedDependency).toBe('awareness_webhook');
+    expect(probeDatabase).not.toHaveBeenCalled();
+    expect(probeMigrations).not.toHaveBeenCalled();
+
+    reportReadinessFailure(result, 'aware-ready-1');
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('"category":"w3ds_sync"');
+    expect(logs[0]).not.toContain('do-not-log-this-webhook-secret');
+  });
+
+  it('requires database and receipt-migration probes when AaaS ingress is fully configured', async () => {
+    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
+    const databaseUrl = 'postgresql://vidak:secret@db.internal:5432/vidak';
+    const probeDatabase = vi.fn(async () => undefined);
+    const probeMigrations = vi.fn(async () => undefined);
+
+    const result = await checkReadiness(
+      {
+        NODE_ENV: 'development',
+        AUTH_PROVIDER: 'dev',
+        MEDIA_STORAGE_ROOT: mediaRoot,
+        DATABASE_URL: databaseUrl,
+        W3DS_AAAS_WEBHOOK_SECRET: 'configured-webhook-secret',
+        W3DS_AAAS_SIGNATURE_ENCODING: 'hex',
+      },
+      { probeDatabase, probeMigrations },
+    );
+
+    expect(result).toEqual({ ready: true });
+    expect(probeDatabase).toHaveBeenCalledWith(databaseUrl);
+    expect(probeMigrations).toHaveBeenCalledWith(databaseUrl);
+  });
+
+  it('fails readiness when configured AaaS ingress has no database URL', async () => {
+    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
+    const probeDatabase = vi.fn(async () => undefined);
+    const probeMigrations = vi.fn(async () => undefined);
+
+    const result = await checkReadiness(
+      {
+        NODE_ENV: 'development',
+        AUTH_PROVIDER: 'dev',
+        MEDIA_STORAGE_ROOT: mediaRoot,
+        W3DS_AAAS_WEBHOOK_SECRET: 'configured-webhook-secret',
+        W3DS_AAAS_SIGNATURE_ENCODING: 'base64',
+      },
+      { probeDatabase, probeMigrations },
+    );
+
+    expect(result.ready).toBe(false);
+    if (result.ready) return;
+    expect(result.failedDependency).toBe('awareness_webhook');
+    expect(probeDatabase).not.toHaveBeenCalled();
+    expect(probeMigrations).not.toHaveBeenCalled();
+  });
+
   it('fails closed for W3DS when database probe fails without leaking secrets', async () => {
     mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
     const logs: string[] = [];
@@ -151,6 +226,7 @@ describe('checkReadiness', () => {
     expect(readinessFailureCategory('migrations')).toBe('migration_readiness');
     expect(readinessFailureCategory('database')).toBe('migration_readiness');
     expect(readinessFailureCategory('config')).toBe('authentication');
+    expect(readinessFailureCategory('awareness_webhook')).toBe('w3ds_sync');
   });
 
   it('fails when media storage is inaccessible', async () => {
@@ -236,6 +312,29 @@ describe('health routes', () => {
       expect(logs.join('\n')).not.toContain(blocker);
     } finally {
       await rm(blocker, { force: true });
+    }
+  });
+
+  it('does not expose partial AaaS webhook configuration through readiness', async () => {
+    const mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-route-'));
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('AUTH_PROVIDER', 'dev');
+    vi.stubEnv('MEDIA_STORAGE_ROOT', mediaRoot);
+    vi.stubEnv('W3DS_AAAS_WEBHOOK_SECRET', 'do-not-expose-this-webhook-secret');
+
+    try {
+      const response = await readyGet(new NextRequest('http://localhost/api/health/ready'));
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: 'not_ready', message: 'Service is not ready.' },
+      });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain('"category":"w3ds_sync"');
+      expect(logs[0]).not.toContain('do-not-expose-this-webhook-secret');
+    } finally {
+      await rm(mediaRoot, { recursive: true, force: true });
     }
   });
 
