@@ -2,6 +2,9 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+
 import { DOCUMENTED_W3DS_ONTOLOGY_BASE_URL, type W3dsOntologyAdapterConfig } from './server-config';
 import { InMemoryW3dsAdapterMappingStore, W3dsAdapterMappingService } from './w3ds-adapter-mapping';
 import {
@@ -17,6 +20,7 @@ import {
   FakeW3dsOfficialEVaultClient,
   resolveW3dsOfficialEVaultClient,
 } from './w3ds-official-evault-client';
+import { FakeW3dsOfficialFileClient } from './w3ds-official-file-client';
 import { fromGlobal, resolveOwnerENameFromPath, toGlobal } from './w3ds-official-mapper';
 import { InMemoryW3dsPrivateAdapterSyncStore } from './w3ds-private-adapter-sync-store';
 import { VIDAK_PRIVATE_SCHEMA_IDS } from './w3ds-private-ontology';
@@ -321,12 +325,12 @@ describe('official handleChange outbox seam', () => {
       ?.payload;
     expect(payload?.channelId).toBe(channel.globalId);
     expect(payload?.channelId).not.toBe('ch_1');
-    expect(payload?.thumbnailFileUri).toBeUndefined();
+    expect(payload?.thumbnailFileUri).toBe('https://cdn.example/thumb.jpg');
   });
 });
 
 describe('official mapper fixtures', () => {
-  it('resolves ownerEnamePath and omits non-w3ds file values', async () => {
+  it('resolves ownerEnamePath and maps documented File URI values without a production client', async () => {
     const mappingService = new W3dsAdapterMappingService({
       store: new InMemoryW3dsAdapterMappingStore(),
       ontologyAdapter: officialAdapter,
@@ -357,7 +361,7 @@ describe('official mapper fixtures', () => {
     });
     expect(mapped.ownerEName).toBe('@creator.w3id');
     expect(mapped.payload.avatarFileUri).toBe('w3ds://file?id=@creator.w3id/env_1');
-    expect(mapped.payload.bannerFileUri).toBeUndefined();
+    expect(mapped.payload.bannerFileUri).toBe('https://cdn.example/banner.jpg');
     expect(mapped.payload.name).toBe('Creator Demo');
 
     const roundTrip = await fromGlobal({
@@ -368,6 +372,89 @@ describe('official mapper fixtures', () => {
     expect(roundTrip.name).toBe('Creator Demo');
     expect(roundTrip.ownerEName).toBe('@creator.w3id');
     expect(bundledOfficialMappingRuleSources()).toHaveLength(4);
+  });
+
+  it('uploads and dereferences inline File URI data only through an explicit test client', async () => {
+    const mappingService = new W3dsAdapterMappingService({
+      store: new InMemoryW3dsAdapterMappingStore(),
+      ontologyAdapter: officialAdapter,
+      now: () => 1,
+    });
+    const channelMapping = loadOfficialMappingRules({
+      ontologyMode: 'metastate_official',
+      ontologyAdapter: officialAdapter,
+    }).documents.find((doc) => doc.tableName === 'creator_channels');
+    expect(channelMapping).toBeDefined();
+    if (!channelMapping) return;
+
+    await expect(
+      toGlobal({
+        data: { ...channelData, avatarUrl: 'data:image/png;base64,aGVsbG8=' },
+        mapping: channelMapping,
+        mappingService,
+      }),
+    ).rejects.toMatchObject({ code: 'file_upload_unavailable' });
+
+    const fileClient = new FakeW3dsOfficialFileClient();
+    const mapped = await toGlobal({
+      data: { ...channelData, avatarUrl: 'data:image/png;base64,aGVsbG8=' },
+      mapping: channelMapping,
+      mappingService,
+      fileUpload: {
+        client: fileClient,
+        createInput: ({ ownerEName, value }) => ({
+          ownerEName,
+          filename: 'avatar.png',
+          contentType: 'image/png',
+          content: value,
+          acl: ['*'],
+        }),
+      },
+    });
+    expect(mapped.payload.avatarFileUri).toBe('w3ds://file?id=@creator.w3id/file_fake_1');
+
+    await expect(
+      fromGlobal({
+        data: mapped.payload,
+        mapping: channelMapping,
+        mappingService,
+        fileClient,
+      }),
+    ).resolves.toMatchObject({ avatarUrl: 'https://files.invalid/file_fake_1/avatar.png' });
+  });
+
+  it('passes documented __file array paths through without a client', async () => {
+    const mappingService = new W3dsAdapterMappingService({
+      store: new InMemoryW3dsAdapterMappingStore(),
+      ontologyAdapter: officialAdapter,
+      now: () => 1,
+    });
+    const channelMapping = loadOfficialMappingRules({
+      ontologyMode: 'metastate_official',
+      ontologyAdapter: officialAdapter,
+    }).documents.find((doc) => doc.tableName === 'creator_channels');
+    expect(channelMapping).toBeDefined();
+    if (!channelMapping) return;
+
+    const mapped = await toGlobal({
+      data: {
+        ...channelData,
+        images: [
+          { src: 'https://cdn.example/one.png' },
+          { src: 'w3ds://file?id=@creator.w3id/env_2' },
+        ],
+      },
+      mapping: {
+        ...channelMapping,
+        localToUniversalMap: { imageFileUris: '__file(images[].src),imageFileUris' },
+      },
+      mappingService,
+    });
+
+    expect(mapped.payload.imageFileUris).toEqual([
+      'https://cdn.example/one.png',
+      'w3ds://file?id=@creator.w3id/env_2',
+    ]);
   });
 });
 
@@ -382,9 +469,12 @@ describe('P1B browser W3DS boundary', () => {
       'w3ds-official-adapter',
       'w3ds-official-adapter-outbox',
       'w3ds-official-evault-client',
+      'w3ds-official-file-client',
       'w3ds-official-mapper',
       'w3ds-official-sandbox-evault-client',
       'createMetaEnvelope',
+      'uploadFile',
+      'dereferenceFileUri',
       'handleChange',
       'ontology.w3ds.metastate.foundation',
       'X-ENAME',

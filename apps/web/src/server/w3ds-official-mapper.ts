@@ -2,16 +2,22 @@
  * Fixture toGlobal / fromGlobal mapper for official Mapping Rules.
  *
  * Directives are the documented Mapping Rules set only (direct fields, relations,
- * __date, __file, __calc). __file is pass-through for existing w3ds://file URIs
- * and otherwise omitted — no uploadFile (P3). __calc is rejected rather than
- * evaluated. fromGlobal does not dereference files over the network.
+ * __date, __file, __calc). __file passes through existing W3DS file URIs and
+ * plain HTTP(S) URLs. Inline data URIs require an explicit, server-test-injected
+ * file client; the production eVault file client remains unavailable. __calc is
+ * rejected rather than evaluated. fromGlobal only dereferences when explicitly
+ * given that same injected client.
  */
 
 import { entityTypeForAdapterTable, type W3dsAdapterMappingService } from './w3ds-adapter-mapping';
 import type { W3dsMappingRulesDocument } from './w3ds-mapping-rules';
+import {
+  optionalW3dsFileUri,
+  type W3dsOfficialFileClient,
+  type W3dsOfficialFileUploadInput,
+} from './w3ds-official-file-client';
 
 const eNamePattern = /^@[^\s@]+$/;
-const w3dsFileUriPattern = /^w3ds:\/\/file\?id=@[^/\s]+\/[^\s]+$/;
 const DATE_DIRECTIVE = /^__date\((.+)\)$/;
 const FILE_DIRECTIVE = /^__file\((.+)\)(?:,([A-Za-z_][A-Za-z0-9_]*))?$/;
 const RELATION_DIRECTIVE = /^([A-Za-z_][A-Za-z0-9_]*)\((.+)\),([A-Za-z_][A-Za-z0-9_]*)$/;
@@ -34,6 +40,20 @@ export interface OfficialToGlobalResult {
   ownerEName: string | undefined;
 }
 
+/**
+ * P3 stays injection-only until the official eVault client gate opens. The
+ * caller supplies every documented upload input; no ACL, filename, or MIME type
+ * is guessed from a product URL or media-storage record.
+ */
+export interface W3dsOfficialMapperFileUploadPolicy {
+  client: W3dsOfficialFileClient;
+  createInput(input: {
+    localField: string;
+    value: string;
+    ownerEName: string;
+  }): W3dsOfficialFileUploadInput;
+}
+
 export function resolveOwnerENameFromPath(
   data: Record<string, unknown>,
   ownerEnamePath: string,
@@ -52,8 +72,10 @@ export async function toGlobal(input: {
   data: Record<string, unknown>;
   mapping: W3dsMappingRulesDocument;
   mappingService: W3dsAdapterMappingService;
+  fileUpload?: W3dsOfficialMapperFileUploadPolicy;
 }): Promise<OfficialToGlobalResult> {
   const payload: Record<string, unknown> = {};
+  const ownerEName = resolveOwnerENameFromPath(input.data, input.mapping.ownerEnamePath);
 
   for (const [localField, directive] of Object.entries(input.mapping.localToUniversalMap)) {
     if (CALC_DIRECTIVE.test(directive)) {
@@ -75,7 +97,12 @@ export async function toGlobal(input: {
     const fileMatch = FILE_DIRECTIVE.exec(directive);
     if (fileMatch) {
       const alias = fileMatch[2] ?? fileMatch[1] ?? localField;
-      const mapped = mapFileValue(getAtPath(input.data, fileMatch[1] ?? localField));
+      const mapped = await mapFileValue({
+        value: getFileValueAtPath(input.data, fileMatch[1] ?? localField),
+        localField,
+        ownerEName,
+        fileUpload: input.fileUpload,
+      });
       if (mapped !== undefined) {
         payload[alias] = mapped;
       }
@@ -115,7 +142,7 @@ export async function toGlobal(input: {
 
   return {
     payload,
-    ownerEName: resolveOwnerENameFromPath(input.data, input.mapping.ownerEnamePath),
+    ownerEName,
   };
 }
 
@@ -123,6 +150,7 @@ export async function fromGlobal(input: {
   data: Record<string, unknown>;
   mapping: W3dsMappingRulesDocument;
   mappingService: W3dsAdapterMappingService;
+  fileClient?: W3dsOfficialFileClient;
 }): Promise<Record<string, unknown>> {
   const local: Record<string, unknown> = {};
 
@@ -138,8 +166,15 @@ export async function fromGlobal(input: {
     if (fileMatch) {
       const alias = fileMatch[2] ?? fileMatch[1] ?? localField;
       const value = input.data[alias];
-      if (typeof value === 'string' && w3dsFileUriPattern.test(value)) {
-        local[localField] = value;
+      if (typeof value === 'string') {
+        const fileUri = optionalW3dsFileUri(value);
+        if (fileUri) {
+          local[localField] = input.fileClient
+            ? await input.fileClient.dereferenceFileUri(fileUri)
+            : fileUri;
+        } else if (isPlainHttpUrl(value)) {
+          local[localField] = value;
+        }
       }
       continue;
     }
@@ -223,21 +258,81 @@ async function mapRelationValue(input: {
   return mapped.globalId;
 }
 
-function mapFileValue(value: unknown): string | string[] | undefined {
-  if (Array.isArray(value)) {
-    const mapped = value
-      .map((entry) => (typeof entry === 'string' ? optionalW3dsFileUri(entry) : undefined))
-      .filter((entry): entry is string => Boolean(entry));
-    return mapped.length > 0 ? mapped : undefined;
+async function mapFileValue(input: {
+  value: unknown;
+  localField: string;
+  ownerEName: string | undefined;
+  fileUpload: W3dsOfficialMapperFileUploadPolicy | undefined;
+}): Promise<string | string[] | undefined> {
+  const mapOne = async (value: unknown): Promise<string | undefined> => {
+    if (typeof value !== 'string') return undefined;
+    const fileUri = optionalW3dsFileUri(value);
+    if (fileUri || isPlainHttpUrl(value)) return value.trim();
+    if (!isDataUri(value)) return undefined;
+    if (!input.ownerEName || !input.fileUpload) {
+      throw new W3dsOfficialMapperError(
+        `Official mapper cannot upload inline file data for "${input.localField}" while the eVault file client is unavailable.`,
+        'file_upload_unavailable',
+      );
+    }
+    const uploadInput = input.fileUpload.createInput({
+      localField: input.localField,
+      value,
+      ownerEName: input.ownerEName,
+    });
+    if (uploadInput.ownerEName.trim() !== input.ownerEName) {
+      throw new W3dsOfficialMapperError(
+        `Official mapper file upload for "${input.localField}" changed the resolved owner eName.`,
+        'invalid_file_owner',
+      );
+    }
+    return (await input.fileUpload.client.uploadFile(uploadInput)).uri;
+  };
+
+  if (Array.isArray(input.value)) {
+    const mapped = await Promise.all(input.value.map(mapOne));
+    const entries = mapped.filter((entry): entry is string => Boolean(entry));
+    return entries.length > 0 ? entries : undefined;
   }
-  return typeof value === 'string' ? optionalW3dsFileUri(value) : undefined;
+  return mapOne(input.value);
 }
 
-export function optionalW3dsFileUri(value: string | undefined | null): string | undefined {
-  const trimmed = value?.trim();
-  if (!trimmed) return undefined;
-  if (!w3dsFileUriPattern.test(trimmed)) return undefined;
-  return trimmed;
+function isDataUri(value: string): boolean {
+  return /^data:[^,]+,/i.test(value.trim());
+}
+
+function isPlainHttpUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+export { optionalW3dsFileUri };
+
+/**
+ * Mapping Rules allow __file(images[].src). Keep this narrow to file directives
+ * so normal direct-field and relation traversal retain their existing behavior.
+ */
+function getFileValueAtPath(data: unknown, path: string): unknown {
+  if (!path) return undefined;
+  return readFilePath(data, path.split('.'));
+}
+
+function readFilePath(value: unknown, segments: readonly string[]): unknown {
+  const [segment, ...rest] = segments;
+  if (!segment) return value;
+  const arraySegment = segment.endsWith('[]');
+  const key = arraySegment ? segment.slice(0, -2) : segment;
+  if (!isRecord(value)) return undefined;
+  const next = value[key];
+  if (!arraySegment) return readFilePath(next, rest);
+  if (!Array.isArray(next)) return undefined;
+  return next
+    .map((entry) => readFilePath(entry, rest))
+    .filter((entry) => entry !== undefined && entry !== null);
 }
 
 function toIsoDate(value: unknown): string | undefined {
