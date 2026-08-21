@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -364,7 +364,7 @@ describe('AaaS webhook receive-only handler', () => {
     });
   });
 
-  it('is idempotent on MetaEnvelope id', async () => {
+  it('deduplicates the exact authenticated payload but reprocesses a changed one by MetaEnvelope id', async () => {
     const receipts = new InMemoryW3dsAwarenessReceiptStore();
     const first = await handleAwarenessWebhookRequest({
       rawBody,
@@ -382,15 +382,31 @@ describe('AaaS webhook receive-only handler', () => {
       config: { secret, encoding },
       receipts,
     });
+    const replay = await handleAwarenessWebhookRequest({
+      rawBody: changed,
+      signatureHeader: sign(changed),
+      config: { secret, encoding },
+      receipts,
+    });
     expect(first.status).toBe(200);
     expect(second).toMatchObject({
+      status: 200,
+      outcome: 'accepted',
+      globalId: packet.id,
+      receiptId: first.receiptId,
+      ...denied,
+    });
+    expect(replay).toMatchObject({
       status: 200,
       outcome: 'duplicate',
       globalId: packet.id,
       receiptId: first.receiptId,
       ...denied,
     });
-    expect((await receipts.getByGlobalId(packet.id))?.id).toBe(first.receiptId);
+    expect(await receipts.getByGlobalId(packet.id)).toMatchObject({
+      id: first.receiptId,
+      payloadHash: createHash('sha256').update(changed).digest('hex'),
+    });
   });
 
   it('returns 500 without a receipt when HMAC is valid but id is missing', async () => {

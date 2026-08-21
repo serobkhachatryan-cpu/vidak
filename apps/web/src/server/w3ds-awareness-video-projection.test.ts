@@ -37,30 +37,32 @@ const mapping: W3dsMappingRulesDocument = {
 };
 
 function input(overrides: Partial<Record<string, unknown>> = {}) {
+  const data = {
+    id: 'remote-video-1',
+    ownerEName: '@creator.w3id',
+    channelId: 'global-channel-1',
+    title: 'Inbound draft metadata',
+    description: 'No remote media is adopted.',
+    status: 'draft',
+    visibility: 'private',
+    durationSeconds: 42,
+    category: 'education',
+    language: 'en',
+    tags: ['W3DS', ' metadata '],
+    createdAt: '2026-08-21T01:00:00.000Z',
+    updatedAt: '2026-08-21T01:01:00.000Z',
+    ...overrides,
+  };
   return {
     envelope: {
       id: 'global-video-1',
       w3id: '@creator.w3id',
       schemaId: mapping.schemaId,
-      data: {
-        id: 'remote-video-1',
-        ownerEName: '@creator.w3id',
-        channelId: 'global-channel-1',
-        title: 'Inbound draft metadata',
-        description: 'No remote media is adopted.',
-        status: 'draft',
-        visibility: 'private',
-        durationSeconds: 42,
-        category: 'education',
-        language: 'en',
-        tags: ['W3DS', ' metadata '],
-        createdAt: '2026-08-21T01:00:00.000Z',
-        updatedAt: '2026-08-21T01:01:00.000Z',
-        ...overrides,
-      },
+      data,
     },
     mapping,
     mappingVersion: 1,
+    payloadHash: JSON.stringify(data),
     now: Date.parse('2026-08-21T02:00:00.000Z'),
   };
 }
@@ -78,20 +80,28 @@ function seededProjector() {
 }
 
 describe('transactional Awareness Video projection', () => {
-  it('creates one private draft metadata row, local/global mapping, and receipt', async () => {
+  it('deduplicates exact replays and updates mapped private draft metadata', async () => {
     const projector = seededProjector();
 
     const first = await projector.project(input());
-    const replay = await projector.project(input({ title: 'Must not overwrite on replay' }));
+    const replay = await projector.project(input());
+    const changed = await projector.project(
+      input({ title: 'Updated private draft', updatedAt: '2026-08-21T01:02:00.000Z' }),
+    );
 
     expect(first.outcome).toBe('applied');
     expect(replay).toEqual({ outcome: 'duplicate', receiptId: first.receiptId });
+    expect(changed).toEqual({
+      outcome: 'applied',
+      receiptId: first.receiptId,
+      localId: first.localId,
+    });
     expect(projector.getReceipt('global-video-1')?.id).toBe(first.receiptId);
     expect(projector.getVideoByGlobalId('global-video-1')).toMatchObject({
       id: first.localId,
       ownerId: 'user-local-1',
       channelId: 'channel-local-1',
-      title: 'Inbound draft metadata',
+      title: 'Updated private draft',
       status: 'draft',
       visibility: 'private',
       publicVideoId: null,

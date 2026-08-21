@@ -14,7 +14,7 @@ import { randomUUID } from 'node:crypto';
 import type { VideoCategory, VideoLanguage } from '@w3ds/types';
 import { videoCategories, videoLanguages } from '@w3ds/types';
 import 'server-only';
-import { eq } from 'drizzle-orm';
+import { eq, ne } from 'drizzle-orm';
 import type { W3dsDatabase } from './db/client';
 import {
   creatorChannels,
@@ -32,6 +32,8 @@ export interface W3dsAwarenessVideoProjectionInput {
   envelope: W3dsAwarenessEnvelope;
   mapping: W3dsMappingRulesDocument;
   mappingVersion: number;
+  /** SHA-256 of the already-verified raw AaaS delivery body. */
+  payloadHash: string;
   now: number;
 }
 
@@ -81,7 +83,7 @@ interface MemoryVideo {
 /** Explicit in-memory test double; production never falls back to it. */
 export class InMemoryW3dsAwarenessVideoProjection implements W3dsAwarenessVideoProjection {
   private readonly usersByEName = new Map<string, { id: string }>();
-  private readonly receiptsByGlobalId = new Map<string, { id: string }>();
+  private readonly receiptsByGlobalId = new Map<string, { id: string; payloadHash: string }>();
   private readonly mappingsByGlobalId = new Map<string, W3dsAdapterMappingRecord>();
   private readonly channelsById = new Map<string, { id: string; ownerId: string }>();
   private readonly videosById = new Map<string, MemoryVideo>();
@@ -121,11 +123,16 @@ export class InMemoryW3dsAwarenessVideoProjection implements W3dsAwarenessVideoP
     input: W3dsAwarenessVideoProjectionInput,
   ): Promise<W3dsAwarenessVideoProjectionResult> {
     const existingReceipt = this.receiptsByGlobalId.get(input.envelope.id);
-    if (existingReceipt) return { outcome: 'duplicate', receiptId: existingReceipt.id };
+    if (existingReceipt?.payloadHash === input.payloadHash) {
+      return { outcome: 'duplicate', receiptId: existingReceipt.id };
+    }
 
-    const receiptId = randomUUID();
+    const receiptId = existingReceipt?.id ?? randomUUID();
     if (mustIgnoreVideoLifecycle(input.envelope.data)) {
-      this.receiptsByGlobalId.set(input.envelope.id, { id: receiptId });
+      this.receiptsByGlobalId.set(input.envelope.id, {
+        id: receiptId,
+        payloadHash: input.payloadHash,
+      });
       return { outcome: 'ignored', receiptId };
     }
 
@@ -169,7 +176,10 @@ export class InMemoryW3dsAwarenessVideoProjection implements W3dsAwarenessVideoP
         );
       }
       if (existingVideo.status !== 'draft' || existingVideo.visibility !== 'private') {
-        this.receiptsByGlobalId.set(input.envelope.id, { id: receiptId });
+        this.receiptsByGlobalId.set(input.envelope.id, {
+          id: receiptId,
+          payloadHash: input.payloadHash,
+        });
         return { outcome: 'ignored', receiptId };
       }
       this.videosById.set(existingVideo.id, applyVideoUpdate(existingVideo, prepared));
@@ -191,7 +201,10 @@ export class InMemoryW3dsAwarenessVideoProjection implements W3dsAwarenessVideoP
       );
     }
 
-    this.receiptsByGlobalId.set(input.envelope.id, { id: receiptId });
+    this.receiptsByGlobalId.set(input.envelope.id, {
+      id: receiptId,
+      payloadHash: input.payloadHash,
+    });
     return { outcome: 'applied', receiptId, localId };
   }
 }
@@ -203,12 +216,22 @@ export class PostgresW3dsAwarenessVideoProjection implements W3dsAwarenessVideoP
     input: W3dsAwarenessVideoProjectionInput,
   ): Promise<W3dsAwarenessVideoProjectionResult> {
     return this.db.transaction(async (tx) => {
-      const [createdReceipt] = await tx
+      const [changedReceipt] = await tx
         .insert(w3dsAwarenessReceipts)
-        .values({ id: randomUUID(), globalId: input.envelope.id, createdAt: new Date(input.now) })
-        .onConflictDoNothing()
+        .values({
+          id: randomUUID(),
+          globalId: input.envelope.id,
+          payloadHash: input.payloadHash,
+          createdAt: new Date(input.now),
+          updatedAt: new Date(input.now),
+        })
+        .onConflictDoUpdate({
+          target: w3dsAwarenessReceipts.globalId,
+          set: { payloadHash: input.payloadHash, updatedAt: new Date(input.now) },
+          setWhere: ne(w3dsAwarenessReceipts.payloadHash, input.payloadHash),
+        })
         .returning();
-      if (!createdReceipt) {
+      if (!changedReceipt) {
         const [existingReceipt] = await tx
           .select()
           .from(w3dsAwarenessReceipts)
@@ -225,7 +248,7 @@ export class PostgresW3dsAwarenessVideoProjection implements W3dsAwarenessVideoP
       // A webhook never gets to publish a Vidak video or make it externally
       // visible. Record the authenticated delivery, but retain no product data.
       if (mustIgnoreVideoLifecycle(input.envelope.data)) {
-        return { outcome: 'ignored', receiptId: createdReceipt.id };
+        return { outcome: 'ignored', receiptId: changedReceipt.id };
       }
 
       const prepared = await prepareVideoProjection(input, {
@@ -292,7 +315,7 @@ export class PostgresW3dsAwarenessVideoProjection implements W3dsAwarenessVideoP
           );
         }
         if (existingVideo.status !== 'draft' || existingVideo.visibility !== 'private') {
-          return { outcome: 'ignored', receiptId: createdReceipt.id };
+          return { outcome: 'ignored', receiptId: changedReceipt.id };
         }
         const [updated] = await tx
           .update(videos)
@@ -300,7 +323,7 @@ export class PostgresW3dsAwarenessVideoProjection implements W3dsAwarenessVideoP
           .where(eq(videos.id, existingVideo.id))
           .returning({ id: videos.id });
         if (!updated) throw new W3dsAwarenessVideoProjectionError('Failed to update mapped Video.');
-        return { outcome: 'applied', receiptId: createdReceipt.id, localId: updated.id };
+        return { outcome: 'applied', receiptId: changedReceipt.id, localId: updated.id };
       }
 
       const localId = randomUUID();
@@ -327,7 +350,7 @@ export class PostgresW3dsAwarenessVideoProjection implements W3dsAwarenessVideoP
         .returning({ id: w3dsAdapterMappings.id });
       if (!createdMapping)
         throw new W3dsAwarenessVideoProjectionError('Failed to create Video mapping.');
-      return { outcome: 'applied', receiptId: createdReceipt.id, localId };
+      return { outcome: 'applied', receiptId: changedReceipt.id, localId };
     });
   }
 }

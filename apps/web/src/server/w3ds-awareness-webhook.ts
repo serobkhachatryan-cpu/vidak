@@ -9,6 +9,7 @@
  * network write is used.
  */
 
+import { createHash } from 'node:crypto';
 import 'server-only';
 import { getW3dsDatabase } from './db/client';
 import { reportOperationalEvent } from './ops-observability';
@@ -131,6 +132,10 @@ export async function handleAwarenessWebhookRequest(
 
   const packet = parseAwarenessEnvelope(input.rawBody);
   if (!packet) return rejected;
+  // The exact raw delivery is what AaaS authenticated. Keep only its SHA-256
+  // digest so same-id updates can be distinguished from exact replays without
+  // retaining a payload, signature, or secret.
+  const payloadHash = createHash('sha256').update(input.rawBody).digest('hex');
 
   // Admission is intentionally before receipt-store construction. Invalid
   // HMACs never reach it, and it does not allocate the database client.
@@ -153,6 +158,7 @@ export async function handleAwarenessWebhookRequest(
       envelope: packet,
       mapping: admission.mapping,
       mappingVersion: admission.mappingVersion,
+      payloadHash,
       now: (input.now ?? Date.now)(),
     });
     return {
@@ -170,28 +176,23 @@ export async function handleAwarenessWebhookRequest(
   }
 
   const receipts = loadReceiptStore(input);
-  const existing = await receipts.getByGlobalId(packet.id);
-  if (existing) {
-    return {
-      status: 200,
-      outcome: 'duplicate',
-      globalId: packet.id,
-      receiptId: existing.id,
-      ...deniedFlags,
-    };
-  }
-
   const recorded = await receipts.recordReceipt({
     globalId: packet.id,
+    payloadHash,
     now: (input.now ?? Date.now)(),
   });
   return {
     status: 200,
     // Direct handler tests deliberately omit admission; retain the original
     // receipt-only acknowledgement seam. Runtime always supplies admission.
-    outcome: admission?.status === 'ignored' ? 'ignored' : 'accepted',
+    outcome:
+      recorded.outcome === 'duplicate'
+        ? 'duplicate'
+        : admission?.status === 'ignored'
+          ? 'ignored'
+          : 'accepted',
     globalId: packet.id,
-    receiptId: recorded.id,
+    receiptId: recorded.receipt.id,
     ...deniedFlags,
   };
 }

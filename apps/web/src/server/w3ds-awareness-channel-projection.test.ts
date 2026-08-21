@@ -28,46 +28,56 @@ const mapping: W3dsMappingRulesDocument = {
 };
 
 function input(overrides: Partial<Record<string, unknown>> = {}) {
+  const data = {
+    id: 'remote-channel-1',
+    ownerEName: '@creator.w3id',
+    handle: 'creator',
+    name: 'Creator',
+    description: 'Metadata only',
+    subscriberCount: 4,
+    videoCount: 2,
+    createdAt: '2026-08-21T01:00:00.000Z',
+    updatedAt: '2026-08-21T01:01:00.000Z',
+    ...overrides,
+  };
   return {
     envelope: {
       id: 'global-channel-1',
       w3id: '@creator.w3id',
       schemaId: mapping.schemaId,
-      data: {
-        id: 'remote-channel-1',
-        ownerEName: '@creator.w3id',
-        handle: 'creator',
-        name: 'Creator',
-        description: 'Metadata only',
-        subscriberCount: 4,
-        videoCount: 2,
-        createdAt: '2026-08-21T01:00:00.000Z',
-        updatedAt: '2026-08-21T01:01:00.000Z',
-        ...overrides,
-      },
+      data,
     },
     mapping,
     mappingVersion: 1,
+    payloadHash: JSON.stringify(data),
     now: Date.parse('2026-08-21T02:00:00.000Z'),
   };
 }
 
 describe('transactional Awareness Channel projection', () => {
-  it('creates exactly one local Channel, mapping, and receipt for an admitted packet', async () => {
+  it('deduplicates exact replays and updates a mapped Channel for a changed payload', async () => {
     const projector = new InMemoryW3dsAwarenessChannelProjection();
     projector.seedOwner({ id: 'user-local-1', eName: '@creator.w3id' });
 
     const first = await projector.project(input());
-    const replay = await projector.project(input({ name: 'Must not overwrite on replay' }));
+    const replay = await projector.project(input());
+    const changed = await projector.project(
+      input({ name: 'Updated Creator', updatedAt: '2026-08-21T01:02:00.000Z' }),
+    );
 
     expect(first.outcome).toBe('applied');
     expect(replay).toEqual({ outcome: 'duplicate', receiptId: first.receiptId });
+    expect(changed).toEqual({
+      outcome: 'applied',
+      receiptId: first.receiptId,
+      localId: first.localId,
+    });
     expect(projector.getReceipt('global-channel-1')?.id).toBe(first.receiptId);
     expect(projector.getChannelByGlobalId('global-channel-1')).toMatchObject({
       id: first.localId,
       ownerId: 'user-local-1',
       handle: 'creator',
-      name: 'Creator',
+      name: 'Updated Creator',
       subscriberCount: 4,
       videoCount: 2,
     });

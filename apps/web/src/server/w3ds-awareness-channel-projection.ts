@@ -12,7 +12,7 @@
 
 import { randomUUID } from 'node:crypto';
 import 'server-only';
-import { eq } from 'drizzle-orm';
+import { eq, ne } from 'drizzle-orm';
 import type { W3dsDatabase } from './db/client';
 import {
   creatorChannels,
@@ -29,6 +29,8 @@ export interface W3dsAwarenessChannelProjectionInput {
   envelope: W3dsAwarenessEnvelope;
   mapping: W3dsMappingRulesDocument;
   mappingVersion: number;
+  /** SHA-256 of the already-verified raw AaaS delivery body. */
+  payloadHash: string;
   now: number;
 }
 
@@ -88,7 +90,7 @@ interface MemoryMapping {
  */
 export class InMemoryW3dsAwarenessChannelProjection implements W3dsAwarenessChannelProjection {
   private readonly usersByEName = new Map<string, { id: string }>();
-  private readonly receiptsByGlobalId = new Map<string, { id: string }>();
+  private readonly receiptsByGlobalId = new Map<string, { id: string; payloadHash: string }>();
   private readonly mappingsByGlobalId = new Map<string, MemoryMapping>();
   private readonly channelsById = new Map<string, MemoryChannel>();
   private readonly channelIdByOwnerId = new Map<string, string>();
@@ -113,7 +115,9 @@ export class InMemoryW3dsAwarenessChannelProjection implements W3dsAwarenessChan
     input: W3dsAwarenessChannelProjectionInput,
   ): Promise<W3dsAwarenessChannelProjectionResult> {
     const existingReceipt = this.receiptsByGlobalId.get(input.envelope.id);
-    if (existingReceipt) return { outcome: 'duplicate', receiptId: existingReceipt.id };
+    if (existingReceipt?.payloadHash === input.payloadHash) {
+      return { outcome: 'duplicate', receiptId: existingReceipt.id };
+    }
 
     const prepared = await prepareChannelProjection(input);
     const existingMapping = this.mappingsByGlobalId.get(input.envelope.id);
@@ -179,8 +183,11 @@ export class InMemoryW3dsAwarenessChannelProjection implements W3dsAwarenessChan
       });
     }
 
-    const receiptId = randomUUID();
-    this.receiptsByGlobalId.set(input.envelope.id, { id: receiptId });
+    const receiptId = existingReceipt?.id ?? randomUUID();
+    this.receiptsByGlobalId.set(input.envelope.id, {
+      id: receiptId,
+      payloadHash: input.payloadHash,
+    });
     return { outcome: 'applied', receiptId, localId };
   }
 }
@@ -192,17 +199,23 @@ export class PostgresW3dsAwarenessChannelProjection implements W3dsAwarenessChan
     input: W3dsAwarenessChannelProjectionInput,
   ): Promise<W3dsAwarenessChannelProjectionResult> {
     return this.db.transaction(async (tx) => {
-      const [createdReceipt] = await tx
+      const [changedReceipt] = await tx
         .insert(w3dsAwarenessReceipts)
         .values({
           id: randomUUID(),
           globalId: input.envelope.id,
+          payloadHash: input.payloadHash,
           createdAt: new Date(input.now),
+          updatedAt: new Date(input.now),
         })
-        .onConflictDoNothing()
+        .onConflictDoUpdate({
+          target: w3dsAwarenessReceipts.globalId,
+          set: { payloadHash: input.payloadHash, updatedAt: new Date(input.now) },
+          setWhere: ne(w3dsAwarenessReceipts.payloadHash, input.payloadHash),
+        })
         .returning();
 
-      if (!createdReceipt) {
+      if (!changedReceipt) {
         const [existingReceipt] = await tx
           .select()
           .from(w3dsAwarenessReceipts)
@@ -251,7 +264,7 @@ export class PostgresW3dsAwarenessChannelProjection implements W3dsAwarenessChan
           .returning({ id: creatorChannels.id });
         if (!updated)
           throw new W3dsAwarenessChannelProjectionError('Failed to update mapped Channel.');
-        return { outcome: 'applied', receiptId: createdReceipt.id, localId: updated.id };
+        return { outcome: 'applied', receiptId: changedReceipt.id, localId: updated.id };
       }
 
       const [existingOwnerChannel] = await tx
@@ -308,7 +321,7 @@ export class PostgresW3dsAwarenessChannelProjection implements W3dsAwarenessChan
       if (!createdMapping)
         throw new W3dsAwarenessChannelProjectionError('Failed to create Channel mapping.');
 
-      return { outcome: 'applied', receiptId: createdReceipt.id, localId };
+      return { outcome: 'applied', receiptId: changedReceipt.id, localId };
     });
   }
 }

@@ -176,7 +176,10 @@ still required” are in place.
 **Partial (explicitly gated):** authenticated Awareness packets for configured
 official Channel schemas, plus the **draft/private metadata-only** subset of
 the official Video schema, can create their receipt, local projection, and
-local/global mapping in one database transaction. They remain unreachable in
+local/global mapping in one database transaction. Exact authenticated raw-body
+replays are no-ops; a changed authenticated payload with the same global ID
+updates that existing projection (last-write-wins) without creating another
+local row. They remain unreachable in
 the default `vidak_private` deployment and require complete operator-supplied
 official Ontology configuration. Video ingress never imports media references,
 publishes a video, assigns a public ID, or changes visibility: Vidak's ready
@@ -197,5 +200,5 @@ values are not dereferenced or exposed as product URLs until Phase C is enabled.
 Vidak is aligned when a verified eName can authenticate; a creator-owned video
 can be represented by an ontology-backed MetaEnvelope with a documented file
 reference; another platform's Awareness packet can update the local projection
-exactly once; and all unavailable upstream capabilities fail closed with
+without duplicate local rows; and all unavailable upstream capabilities fail closed with
 actionable operator diagnostics.

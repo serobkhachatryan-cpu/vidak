@@ -428,7 +428,9 @@ export const w3dsAwarenessReceipts = pgTable(
   {
     id: text('id').primaryKey(),
     globalId: text('global_id').notNull(),
+    payloadHash: text('payload_hash').notNull().default(''),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull().defaultNow(),
   },
   (table) => [uniqueIndex('w3ds_awareness_receipts_global_id_uidx').on(table.globalId)],
 );

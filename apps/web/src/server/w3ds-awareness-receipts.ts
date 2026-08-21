@@ -6,27 +6,39 @@
 
 import { randomUUID } from 'node:crypto';
 import 'server-only';
-import { eq } from 'drizzle-orm';
+import { eq, ne } from 'drizzle-orm';
 import { getW3dsDatabase, type W3dsDatabase } from './db/client';
 import { w3dsAwarenessReceipts } from './db/schema';
 
 export interface W3dsAwarenessReceiptRecord {
   id: string;
   globalId: string;
+  /** SHA-256 of the authenticated raw AaaS delivery body; never raw payload data. */
+  payloadHash: string;
   createdAt: string;
+  updatedAt: string;
 }
 
 export interface RecordW3dsAwarenessReceiptInput {
   globalId: string;
+  payloadHash: string;
   now: number;
+}
+
+export interface RecordW3dsAwarenessReceiptResult {
+  receipt: W3dsAwarenessReceiptRecord;
+  /** Exact authenticated retransmission of the stored raw payload. */
+  outcome: 'duplicate' | 'changed';
 }
 
 export interface W3dsAwarenessReceiptStore {
   getByGlobalId(globalId: string): Promise<W3dsAwarenessReceiptRecord | undefined>;
   /**
-   * Inserts a receipt for globalId. The same id returns the existing row.
+   * Atomically stores an authenticated payload fingerprint. An exact replay is
+   * a no-op; a changed payload for the same MetaEnvelope id updates the same
+   * durable receipt so the caller can upsert its existing local projection.
    */
-  recordReceipt(input: RecordW3dsAwarenessReceiptInput): Promise<W3dsAwarenessReceiptRecord>;
+  recordReceipt(input: RecordW3dsAwarenessReceiptInput): Promise<RecordW3dsAwarenessReceiptResult>;
 }
 
 function cloneReceipt(record: W3dsAwarenessReceiptRecord): W3dsAwarenessReceiptRecord {
@@ -36,12 +48,16 @@ function cloneReceipt(record: W3dsAwarenessReceiptRecord): W3dsAwarenessReceiptR
 function recordFromRow(row: {
   id: string;
   globalId: string;
+  payloadHash: string;
   createdAt: Date;
+  updatedAt: Date;
 }): W3dsAwarenessReceiptRecord {
   return {
     id: row.id,
     globalId: row.globalId,
+    payloadHash: row.payloadHash,
     createdAt: row.createdAt.toISOString(),
+    updatedAt: row.updatedAt.toISOString(),
   };
 }
 
@@ -54,17 +70,30 @@ export class InMemoryW3dsAwarenessReceiptStore implements W3dsAwarenessReceiptSt
     return found ? cloneReceipt(found) : undefined;
   }
 
-  async recordReceipt(input: RecordW3dsAwarenessReceiptInput): Promise<W3dsAwarenessReceiptRecord> {
+  async recordReceipt(
+    input: RecordW3dsAwarenessReceiptInput,
+  ): Promise<RecordW3dsAwarenessReceiptResult> {
     const existing = this.records.get(input.globalId);
-    if (existing) return cloneReceipt(existing);
+    if (existing?.payloadHash === input.payloadHash) {
+      return { receipt: cloneReceipt(existing), outcome: 'duplicate' };
+    }
+
+    const timestamp = new Date(input.now).toISOString();
+    if (existing) {
+      const changed = { ...existing, payloadHash: input.payloadHash, updatedAt: timestamp };
+      this.records.set(input.globalId, changed);
+      return { receipt: cloneReceipt(changed), outcome: 'changed' };
+    }
 
     const created: W3dsAwarenessReceiptRecord = {
       id: randomUUID(),
       globalId: input.globalId,
-      createdAt: new Date(input.now).toISOString(),
+      payloadHash: input.payloadHash,
+      createdAt: timestamp,
+      updatedAt: timestamp,
     };
     this.records.set(input.globalId, created);
-    return cloneReceipt(created);
+    return { receipt: cloneReceipt(created), outcome: 'changed' };
   }
 }
 
@@ -80,27 +109,32 @@ export class PostgresW3dsAwarenessReceiptStore implements W3dsAwarenessReceiptSt
     return row ? recordFromRow(row) : undefined;
   }
 
-  async recordReceipt(input: RecordW3dsAwarenessReceiptInput): Promise<W3dsAwarenessReceiptRecord> {
-    const existing = await this.getByGlobalId(input.globalId);
-    if (existing) return existing;
-
-    const [created] = await this.db
+  async recordReceipt(
+    input: RecordW3dsAwarenessReceiptInput,
+  ): Promise<RecordW3dsAwarenessReceiptResult> {
+    const [changed] = await this.db
       .insert(w3dsAwarenessReceipts)
       .values({
         id: randomUUID(),
         globalId: input.globalId,
+        payloadHash: input.payloadHash,
         createdAt: new Date(input.now),
+        updatedAt: new Date(input.now),
       })
-      .onConflictDoNothing()
+      .onConflictDoUpdate({
+        target: w3dsAwarenessReceipts.globalId,
+        set: { payloadHash: input.payloadHash, updatedAt: new Date(input.now) },
+        setWhere: ne(w3dsAwarenessReceipts.payloadHash, input.payloadHash),
+      })
       .returning();
 
-    if (created) return recordFromRow(created);
+    if (changed) return { receipt: recordFromRow(changed), outcome: 'changed' };
 
-    const raced = await this.getByGlobalId(input.globalId);
-    if (!raced) {
+    const existing = await this.getByGlobalId(input.globalId);
+    if (!existing) {
       throw new Error('Unable to persist the Awareness webhook receipt.');
     }
-    return raced;
+    return { receipt: existing, outcome: 'duplicate' };
   }
 }
 
