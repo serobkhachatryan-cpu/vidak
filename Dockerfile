@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1.7
 FROM node:22.16.0-alpine AS base
 RUN corepack enable
 WORKDIR /app
@@ -32,6 +31,20 @@ RUN if [ "${APP}" = "web" ]; then \
       ln -s "../../../node_modules/.pnpm/$(basename "${drizzle_target}")/node_modules/drizzle-orm" "${standalone}/apps/${APP}/node_modules/drizzle-orm"; \
       ln -s "../../../node_modules/.pnpm/$(basename "${pg_target}")/node_modules/pg" "${standalone}/apps/${APP}/node_modules/pg"; \
     fi
+# Railway runs the migration in the standalone runner before the application
+# starts. Compile its TypeScript entrypoint during the image build so that
+# pre-deploy can execute it with Node without shipping the tsx dev tool.
+RUN if [ "${APP}" = "web" ]; then \
+      set -eux; \
+      migration_runtime="apps/${APP}/.next/migration-runtime"; \
+      pnpm exec tsc "apps/${APP}/src/server/db/migrate.ts" \
+        --target ES2022 \
+        --module ESNext \
+        --moduleResolution bundler \
+        --skipLibCheck \
+        --outDir "${migration_runtime}"; \
+      mv "${migration_runtime}/migrate.js" "${migration_runtime}/migrate.mjs"; \
+    fi
 
 FROM node:22.16.0-alpine AS runner
 ENV NODE_ENV=production
@@ -41,12 +54,12 @@ ENV APP=${APP}
 COPY --from=builder /app/apps/${APP}/.next/standalone ./
 COPY --from=builder /app/apps/${APP}/.next/static ./apps/${APP}/.next/static
 COPY --from=builder /app/apps/${APP}/public ./apps/${APP}/public
-RUN --mount=from=builder,source=/app,target=/builder \
-    if [ "${APP}" = "web" ]; then \
-      mkdir -p ./apps/${APP}/src/server/db; \
-      cp /builder/apps/${APP}/src/server/db/migrate.ts ./apps/${APP}/src/server/db/migrate.ts; \
-      cp -R /builder/apps/${APP}/drizzle ./apps/${APP}/drizzle; \
-    fi
+# Railway's builder accepts standard COPY stages but not BuildKit's
+# RUN --mount=from=<stage>. These files are needed only by the pre-deploy
+# migration command and remain inside the server-side standalone artifact.
+COPY --from=builder /app/apps/${APP}/src/server/db/migrate.ts ./apps/${APP}/src/server/db/migrate.ts
+COPY --from=builder /app/apps/${APP}/.next/migration-runtime/migrate.mjs ./apps/${APP}/src/server/db/migrate.mjs
+COPY --from=builder /app/apps/${APP}/drizzle ./apps/${APP}/drizzle
 EXPOSE 3000
 ENV PORT=3000 HOSTNAME=0.0.0.0
 CMD ["sh", "-c", "node apps/${APP}/server.js"]
