@@ -2,6 +2,7 @@
 
 import type { DraftMediaAsset, Video, VideoVisibility } from '@w3ds/types';
 import { Badge, Button, EmptyState, LoadingButton, Text } from '@w3ds/ui';
+import type { ReactNode } from 'react';
 import { videoCategoryLabels, videoLanguageLabels, visibilityLabels } from '../upload-constants';
 import type { VideoDetailsValue } from './video-details-step';
 
@@ -19,6 +20,9 @@ export interface PublishConfirmationStepProps {
   publishedVideo?: Video;
   /** Absolute or root-relative share URL using only publicVideoId. */
   shareUrl?: string;
+  /** Product-owned approval UI rendered without coupling this package to a protocol. */
+  publishApproval?: ReactNode;
+  publishActionLabel?: string;
   onPublish?: () => void;
   onSaveDraft?: () => void;
   onUnpublish?: () => void;
@@ -45,6 +49,8 @@ export function PublishConfirmationStep({
   publishError,
   publishedVideo,
   shareUrl,
+  publishApproval,
+  publishActionLabel = 'Publish',
   onPublish,
   onSaveDraft,
   onUnpublish,
@@ -119,7 +125,7 @@ export function PublishConfirmationStep({
                   disabled={busy && !isPublishing}
                   onClick={onPublish}
                 >
-                  Publish
+                  {publishActionLabel}
                 </LoadingButton>
               )}
               {!isDraft && onUnpublish && (
@@ -210,6 +216,7 @@ export function PublishConfirmationStep({
           {publishError}
         </Text>
       )}
+      {publishApproval}
       <div className="flex flex-wrap gap-2">
         {onSaveDraft && (
           <LoadingButton
@@ -228,7 +235,7 @@ export function PublishConfirmationStep({
           disabled={!hasReadyMedia || (busy && !isPublishing)}
           onClick={onPublish}
         >
-          Publish
+          {publishActionLabel}
         </LoadingButton>
       </div>
     </div>

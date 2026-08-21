@@ -46,10 +46,12 @@ function createService(options?: { now?: () => number; sessionLifetimeMs?: numbe
     eVaultUri: 'https://evault.example/owner',
   });
   const publishVerifiedVideo = vi.fn().mockResolvedValue({ ...draft, status: 'published' });
+  const getOwnedVideo = vi.fn().mockResolvedValue({ ...draft, status: 'published' });
   const service = new W3dsVideoPublicationSigningService({
     store,
     resolveUser,
     getOwnedDraft,
+    getOwnedVideo,
     verifySignature,
     publishVerifiedVideo,
     createId: () => 'session-1',
@@ -58,7 +60,15 @@ function createService(options?: { now?: () => number; sessionLifetimeMs?: numbe
       ? {}
       : { sessionLifetimeMs: options.sessionLifetimeMs }),
   });
-  return { store, service, resolveUser, getOwnedDraft, verifySignature, publishVerifiedVideo };
+  return {
+    store,
+    service,
+    resolveUser,
+    getOwnedDraft,
+    getOwnedVideo,
+    verifySignature,
+    publishVerifiedVideo,
+  };
 }
 
 describe('W3DS signed video publication', () => {
@@ -183,6 +193,56 @@ describe('W3DS signed video publication', () => {
     expect(store.get(offer.sessionId)).toMatchObject({ status: 'expired' });
     expect(verifySignature).not.toHaveBeenCalled();
     expect(publishVerifiedVideo).not.toHaveBeenCalled();
+  });
+
+  it('lets only the owner poll a completed offer and returns the completed local video', async () => {
+    const { service, getOwnedVideo } = createService();
+    const offer = await service.createOffer({
+      accessToken: 'access-token',
+      videoId: draft.id,
+      publicBaseUrl: 'https://vidak.example',
+    });
+    await service.completeOffer({
+      sessionId: offer.sessionId,
+      signature: 'signature',
+      w3id: owner.eName,
+      message: offer.sessionId,
+    });
+
+    await expect(
+      service.getOfferStatus({
+        accessToken: 'access-token',
+        sessionId: offer.sessionId,
+        videoId: draft.id,
+      }),
+    ).resolves.toMatchObject({
+      sessionId: offer.sessionId,
+      videoId: draft.id,
+      status: 'completed',
+      video: { id: draft.id, status: 'published' },
+    });
+    expect(getOwnedVideo).toHaveBeenCalledWith('access-token', draft.id);
+  });
+
+  it('does not disclose an offer to another authenticated owner', async () => {
+    const { service, store } = createService();
+    const offer = await service.createOffer({
+      accessToken: 'access-token',
+      videoId: draft.id,
+      publicBaseUrl: 'https://vidak.example',
+    });
+    const otherOwnerService = new W3dsVideoPublicationSigningService({
+      store,
+      resolveUser: async () => ({ id: 'other-owner', eName: '@other.w3id' }),
+    });
+
+    await expect(
+      otherOwnerService.getOfferStatus({
+        accessToken: 'other-token',
+        sessionId: offer.sessionId,
+        videoId: draft.id,
+      }),
+    ).rejects.toMatchObject({ code: 'not_found', status: 404 });
   });
 
   it('keeps signing protocol code out of browser packages and reuses the server verifier', () => {

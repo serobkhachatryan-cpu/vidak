@@ -86,6 +86,10 @@ export interface UploadPageProps {
   publishError?: string;
   publishedVideo?: Video;
   shareUrl?: string;
+  /** Optional product-owned approval UI rendered alongside the publish action. */
+  publishApproval?: ReactNode;
+  /** Product copy for a publish action that needs an approval step. */
+  publishActionLabel?: string;
   onPublish?: () => void;
   onSaveDraft?: () => void;
   onUnpublish?: () => void;
@@ -149,6 +153,8 @@ export function UploadPage({
   publishError,
   publishedVideo,
   shareUrl,
+  publishApproval,
+  publishActionLabel,
   onPublish,
   onSaveDraft,
   onUnpublish,
@@ -292,6 +298,8 @@ export function UploadPage({
           {...(publishError !== undefined ? { publishError } : {})}
           {...(publishedVideo !== undefined ? { publishedVideo } : {})}
           {...(shareUrl !== undefined ? { shareUrl } : {})}
+          {...(publishApproval !== undefined ? { publishApproval } : {})}
+          {...(publishActionLabel !== undefined ? { publishActionLabel } : {})}
           {...(onPublish ? { onPublish } : {})}
           {...(onSaveDraft ? { onSaveDraft } : {})}
           {...(onUnpublish ? { onUnpublish } : {})}

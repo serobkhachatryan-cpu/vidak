@@ -101,6 +101,11 @@ export interface UploadPageDataProps
   /** Optional existing saved draft to attach media to. */
   draftId?: VideoId;
   onWatchVideo?: (video: Video) => void;
+  /**
+   * Lets a product require a creator approval before publishing without putting
+   * its protocol details in this shared upload package.
+   */
+  requestPublishApproval?: (draft: Video) => Promise<Video>;
 }
 
 function buildShareUrl(video: Video): string | undefined {
@@ -123,6 +128,7 @@ export function UploadPageData({
   onWatchVideo,
   onWatch,
   onUploadAnother,
+  requestPublishApproval,
   ...pageProps
 }: UploadPageDataProps) {
   // Channel ownership is resolved by the draft API for W3DS; retained for callers/mock context.
@@ -706,7 +712,9 @@ export function UploadPageData({
     setPublishError(undefined);
     try {
       const draftVideo = await persistDraftMetadata();
-      const video = await client.publishVideo(draftVideo.id);
+      const video = requestPublishApproval
+        ? await requestPublishApproval(draftVideo)
+        : await client.publishVideo(draftVideo.id);
       draftVideoIdRef.current = video.id;
       setDraftVideoId(video.id);
       markCompleted('details');

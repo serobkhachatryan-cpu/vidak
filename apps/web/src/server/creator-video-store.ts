@@ -47,6 +47,8 @@ export interface CreatorVideoStore {
   listDraftsByOwnerId(ownerId: string): Promise<Video[]>;
   /** Returns the draft only when it exists, is a draft, and is owned by `ownerId`. */
   getOwnedDraft(videoId: string, ownerId: string): Promise<Video | undefined>;
+  /** Returns an owned video in any lifecycle state. */
+  getOwnedVideo(videoId: string, ownerId: string): Promise<Video | undefined>;
   updateDraft(
     videoId: string,
     ownerId: string,
@@ -243,6 +245,12 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
     const draft = this.videosById.get(videoId);
     if (!draft || draft.ownerId !== ownerId || draft.status !== 'draft') return undefined;
     return cloneVideo(draft);
+  }
+
+  async getOwnedVideo(videoId: string, ownerId: string): Promise<Video | undefined> {
+    const video = this.videosById.get(videoId);
+    if (!video || video.ownerId !== ownerId) return undefined;
+    return cloneVideo(video);
   }
 
   async updateDraft(
@@ -488,6 +496,15 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       .select()
       .from(videos)
       .where(and(eq(videos.id, videoId), eq(videos.ownerId, ownerId), eq(videos.status, 'draft')))
+      .limit(1);
+    return row ? toVideo(row) : undefined;
+  }
+
+  async getOwnedVideo(videoId: string, ownerId: string): Promise<Video | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(videos)
+      .where(and(eq(videos.id, videoId), eq(videos.ownerId, ownerId)))
       .limit(1);
     return row ? toVideo(row) : undefined;
   }

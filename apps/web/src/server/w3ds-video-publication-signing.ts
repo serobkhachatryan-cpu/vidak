@@ -47,12 +47,27 @@ export interface W3dsVideoPublicationSigningStore {
   complete(sessionId: string): Promise<void>;
   markSecurityViolation(sessionId: string, code: string): Promise<void>;
   markFailed(sessionId: string, code: string): Promise<void>;
+  getForOwner(
+    sessionId: string,
+    ownerId: string,
+    videoId: string,
+  ): Promise<StoredW3dsVideoPublicationSigningSession | undefined>;
 }
 
 export interface W3dsVideoPublicationSigningOffer {
   sessionId: string;
   qrData: string;
   expiresAt: string;
+}
+
+/** Owner-scoped state safe to return to the creator UI while it polls. */
+export interface W3dsVideoPublicationSigningOfferStatus {
+  sessionId: string;
+  videoId: string;
+  status: W3dsVideoPublicationSigningStatus;
+  expiresAt: string;
+  /** Present only after the server verified a signature and published the bound draft. */
+  video?: Video;
 }
 
 export interface W3dsVideoPublicationSigningCallback {
@@ -77,6 +92,7 @@ export interface W3dsVideoPublicationSigningServiceOptions {
   store: W3dsVideoPublicationSigningStore;
   resolveUser?: (accessToken: string) => Promise<{ id: string; eName: string }>;
   getOwnedDraft?: (accessToken: string, videoId: string) => Promise<Video>;
+  getOwnedVideo?: (accessToken: string, videoId: string) => Promise<Video>;
   verifySignature?: (input: {
     w3id: string;
     payload: string;
@@ -101,6 +117,7 @@ export class W3dsVideoPublicationSigningService {
   private readonly store: W3dsVideoPublicationSigningStore;
   private readonly resolveUser: (accessToken: string) => Promise<{ id: string; eName: string }>;
   private readonly getOwnedDraft: (accessToken: string, videoId: string) => Promise<Video>;
+  private readonly getOwnedVideo: (accessToken: string, videoId: string) => Promise<Video>;
   private readonly verifySignature: NonNullable<
     W3dsVideoPublicationSigningServiceOptions['verifySignature']
   >;
@@ -119,6 +136,9 @@ export class W3dsVideoPublicationSigningService {
     this.getOwnedDraft =
       options.getOwnedDraft ??
       ((accessToken, videoId) => getCreatorVideoService().getDraft(accessToken, videoId));
+    this.getOwnedVideo =
+      options.getOwnedVideo ??
+      ((accessToken, videoId) => getCreatorVideoService().getOwnedVideo(accessToken, videoId));
     this.verifySignature =
       options.verifySignature ?? ((input) => getW3dsAuthService().verifySignedPayload(input));
     this.publishVerifiedVideo =
@@ -225,6 +245,51 @@ export class W3dsVideoPublicationSigningService {
       );
     }
   }
+
+  /**
+   * Owner-authenticated poll endpoint state. It exposes no signature, eName,
+   * or internal error detail, and returns a video only after publication.
+   */
+  async getOfferStatus(input: {
+    accessToken: string;
+    sessionId: string;
+    videoId: string;
+  }): Promise<W3dsVideoPublicationSigningOfferStatus> {
+    if (!input.accessToken.trim()) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+    const sessionId = input.sessionId.trim();
+    const videoId = input.videoId.trim();
+    if (!sessionId || !videoId) {
+      throw new W3dsVideoPublicationSigningError(
+        'Signing session was not found.',
+        'not_found',
+        404,
+      );
+    }
+    const owner = await this.resolveUser(input.accessToken);
+    const session = await this.store.getForOwner(sessionId, owner.id, videoId);
+    if (!session) {
+      throw new W3dsVideoPublicationSigningError(
+        'Signing session was not found.',
+        'not_found',
+        404,
+      );
+    }
+
+    const status =
+      session.status === 'pending' && session.expiresAt <= this.now() ? 'expired' : session.status;
+    const result: W3dsVideoPublicationSigningOfferStatus = {
+      sessionId: session.id,
+      videoId: session.videoId,
+      status,
+      expiresAt: new Date(session.expiresAt).toISOString(),
+    };
+    if (status === 'completed') {
+      result.video = await this.getOwnedVideo(input.accessToken, session.videoId);
+    }
+    return result;
+  }
 }
 
 function buildSigningUri(input: {
@@ -330,6 +395,16 @@ export class InMemoryW3dsVideoPublicationSigningStore implements W3dsVideoPublic
     this.transition(sessionId, 'failed', code);
   }
 
+  async getForOwner(
+    sessionId: string,
+    ownerId: string,
+    videoId: string,
+  ): Promise<StoredW3dsVideoPublicationSigningSession | undefined> {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.ownerId !== ownerId || session.videoId !== videoId) return undefined;
+    return { ...session };
+  }
+
   get(sessionId: string): StoredW3dsVideoPublicationSigningSession | undefined {
     const session = this.sessions.get(sessionId);
     return session ? { ...session } : undefined;
@@ -431,6 +506,25 @@ export class PostgresW3dsVideoPublicationSigningStore implements W3dsVideoPublic
 
   async markFailed(sessionId: string, code: string): Promise<void> {
     await this.transition(sessionId, 'failed', code);
+  }
+
+  async getForOwner(
+    sessionId: string,
+    ownerId: string,
+    videoId: string,
+  ): Promise<StoredW3dsVideoPublicationSigningSession | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(w3dsVideoPublicationSigningSessions)
+      .where(
+        and(
+          eq(w3dsVideoPublicationSigningSessions.id, sessionId),
+          eq(w3dsVideoPublicationSigningSessions.ownerId, ownerId),
+          eq(w3dsVideoPublicationSigningSessions.videoId, videoId),
+        ),
+      )
+      .limit(1);
+    return row ? signingSessionFromRow(row) : undefined;
   }
 
   private async transition(

@@ -101,6 +101,20 @@ export class CreatorVideoService {
     return draft;
   }
 
+  /** Authenticated owner lookup for a draft or published video. */
+  async getOwnedVideo(accessToken: string, videoId: string): Promise<Video> {
+    const user = await this.requireUser(accessToken);
+    const normalizedId = videoId.trim();
+    if (!normalizedId) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    const video = await this.store.getOwnedVideo(normalizedId, user.id);
+    if (!video) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    return video;
+  }
+
   async updateDraft(
     accessToken: string,
     videoId: string,
