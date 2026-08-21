@@ -51,11 +51,11 @@ export function admitW3dsAwarenessEnvelope(input: {
     const mapping = loaded.documents.find(
       (document) => document.schemaId === input.envelope.schemaId,
     );
-    // Channel is the sole product projection implemented so far. Every other
-    // configured schema is acknowledged as ignored until it has an equally
-    // transactional, product-specific inbound projection. This avoids partial
-    // Video/media or reserved-table writes from an authenticated broadcast.
-    return mapping?.entityType === 'channel'
+    // Only entities with an equally transactional, product-specific inbound
+    // projection are eligible. Video remains a closed draft/private metadata
+    // subset inside its projector; media, publishing, playlists, and comments
+    // stay ignored rather than accepting a partial product mutation.
+    return mapping?.entityType === 'channel' || mapping?.entityType === 'video'
       ? { status: 'eligible', mapping, mappingVersion: input.ontologyAdapter.mappingVersion }
       : { status: 'ignored' };
   } catch {

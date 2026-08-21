@@ -65,6 +65,18 @@ describe('W3DS Awareness schema admission', () => {
     ).toEqual({ status: 'ignored' });
   });
 
+  it('admits the separately configured Video mapping while leaving other schemas ignored', () => {
+    const admitted = admitW3dsAwarenessEnvelope({
+      envelope: envelope(officialAdapter.schemaIds.video),
+      ontologyMode: 'metastate_official',
+      ontologyAdapter: officialAdapter,
+    });
+    expect(admitted).toMatchObject({
+      status: 'eligible',
+      mapping: { tableName: 'videos', schemaId: officialAdapter.schemaIds.video },
+    });
+  });
+
   it('fails closed rather than reuse documented example ontology IDs', () => {
     expect(
       admitW3dsAwarenessEnvelope({

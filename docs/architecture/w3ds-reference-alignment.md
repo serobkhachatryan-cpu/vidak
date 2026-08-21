@@ -173,13 +173,16 @@ still required” are in place.
 3. Expose readiness/metrics for failed, retried, and ignored packets without
    logging credentials or private envelope data.
 
-**Partial (explicitly gated):** an authenticated Awareness packet for the
-configured official Channel schema can create its receipt, local Channel
-projection, and local/global mapping in one database transaction. It remains
-unreachable in the default `vidak_private` deployment and requires complete
-operator-supplied official Ontology configuration. Video, Playlist, and Comment
-packets remain acknowledged as ignored; `w3ds://file` values are not
-dereferenced or exposed as product URLs until Phase C is enabled.
+**Partial (explicitly gated):** authenticated Awareness packets for configured
+official Channel schemas, plus the **draft/private metadata-only** subset of
+the official Video schema, can create their receipt, local projection, and
+local/global mapping in one database transaction. They remain unreachable in
+the default `vidak_private` deployment and require complete operator-supplied
+official Ontology configuration. Video ingress never imports media references,
+publishes a video, assigns a public ID, or changes visibility: Vidak's ready
+local-media and verified-signature publishing flow remains authoritative.
+Playlist and Comment packets remain acknowledged as ignored; `w3ds://file`
+values are not dereferenced or exposed as product URLs until Phase C is enabled.
 
 ### Phase E — signing and verification
 

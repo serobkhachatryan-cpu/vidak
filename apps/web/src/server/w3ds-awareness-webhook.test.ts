@@ -7,6 +7,7 @@ import { setOperationalLogSinkForTests } from './ops-observability';
 import { readW3dsAaasWebhookConfig } from './server-config';
 import { InMemoryW3dsAwarenessChannelProjection } from './w3ds-awareness-channel-projection';
 import { InMemoryW3dsAwarenessReceiptStore } from './w3ds-awareness-receipts';
+import { InMemoryW3dsAwarenessVideoProjection } from './w3ds-awareness-video-projection';
 import {
   handleAwarenessWebhookRequest,
   reportAwarenessWebhookOutcome,
@@ -49,6 +50,35 @@ const channelMapping = {
     name: 'name',
     createdAt: '__date(createdAt)',
     updatedAt: '__date(updatedAt)',
+  },
+};
+
+const videoMapping = {
+  tableName: 'videos',
+  entityType: 'video' as const,
+  schemaId: 'schema-video-configured',
+  ownerEnamePath: 'w3ds_platform_users(ownerId.eName)',
+  localToUniversalMap: {
+    id: 'id',
+    ownerEName: 'w3ds_platform_users(ownerId.eName),ownerEName',
+    channelId: 'creator_channels(channelId.id),channelId',
+    title: 'title',
+    description: 'description',
+    status: 'status',
+    visibility: 'visibility',
+    durationSeconds: 'durationSeconds',
+    mediaFileUri: '__file(mediaFileUri),mediaFileUri',
+    thumbnailUrl: '__file(thumbnailUrl),thumbnailFileUri',
+    category: 'category',
+    language: 'language',
+    tags: 'tags',
+    publicVideoId: 'publicVideoId',
+    publishedAt: '__date(publishedAt)',
+    createdAt: '__date(createdAt)',
+    updatedAt: '__date(updatedAt)',
+    viewCount: 'viewCount',
+    likeCount: 'likeCount',
+    commentCount: 'commentCount',
   },
 };
 
@@ -273,6 +303,67 @@ describe('AaaS webhook receive-only handler', () => {
     expect(projection.getChannelByGlobalId(channelPacket.id)).toMatchObject({ name: 'Creator' });
   });
 
+  it('projects only an admitted private draft Video and does not construct the receipt-only store', async () => {
+    const videoPacket = {
+      id: 'video-global-1',
+      w3id: '@creator.w3id',
+      schemaId: videoMapping.schemaId,
+      data: {
+        id: 'remote-video-1',
+        ownerEName: '@creator.w3id',
+        channelId: 'channel-global-1',
+        title: 'Private remote draft',
+        status: 'draft',
+        visibility: 'private',
+        createdAt: '2026-08-21T01:00:00.000Z',
+        updatedAt: '2026-08-21T01:01:00.000Z',
+      },
+    };
+    const videoBody = Buffer.from(JSON.stringify(videoPacket), 'utf8');
+    const projection = new InMemoryW3dsAwarenessVideoProjection();
+    projection.seedOwner({ id: 'user-local-1', eName: videoPacket.w3id });
+    projection.seedChannel({
+      id: 'channel-local-1',
+      globalId: videoPacket.data.channelId,
+      ownerId: 'user-local-1',
+      ownerEName: videoPacket.w3id,
+    });
+    const resolveReceipts = vi.fn(() => new InMemoryW3dsAwarenessReceiptStore());
+
+    const first = await handleAwarenessWebhookRequest({
+      rawBody: videoBody,
+      signatureHeader: sign(videoBody),
+      config: { secret, encoding },
+      resolveReceipts,
+      videoProjection: projection,
+      resolveAdmission: () => ({
+        status: 'eligible',
+        mapping: videoMapping,
+        mappingVersion: 1,
+      }),
+    });
+    const replay = await handleAwarenessWebhookRequest({
+      rawBody: videoBody,
+      signatureHeader: sign(videoBody),
+      config: { secret, encoding },
+      videoProjection: projection,
+      resolveAdmission: () => ({
+        status: 'eligible',
+        mapping: videoMapping,
+        mappingVersion: 1,
+      }),
+    });
+
+    expect(first).toMatchObject({ status: 200, outcome: 'accepted', ...denied });
+    expect(replay).toMatchObject({ status: 200, outcome: 'duplicate', ...denied });
+    expect(resolveReceipts).not.toHaveBeenCalled();
+    expect(projection.getVideoByGlobalId(videoPacket.id)).toMatchObject({
+      status: 'draft',
+      visibility: 'private',
+      publicVideoId: null,
+    });
+  });
+
   it('is idempotent on MetaEnvelope id', async () => {
     const receipts = new InMemoryW3dsAwarenessReceiptStore();
     const first = await handleAwarenessWebhookRequest({
@@ -456,22 +547,33 @@ describe('P2 browser W3DS boundary', () => {
       expect(source).not.toMatch(/w3dsPrivateAdapterProjections/);
     }
 
-    const projection = readFileSync(join(here, 'w3ds-awareness-channel-projection.ts'), 'utf8');
-    expect(projection).toMatch(/import ['"]server-only['"]/);
-    expect(projection).toMatch(/\bfromGlobal\s*\(/);
-    expect(projection).not.toMatch(/verifySignature/);
-    expect(projection).not.toMatch(/signature-validator/);
-    expect(projection).not.toMatch(/from ['"]\.\/w3ds-auth['"]/);
-    expect(projection).not.toMatch(/from ['"]\.\/w3ds-official-adapter['"]/);
-    expect(projection).not.toMatch(/\bhandleChange\s*\(/);
-    expect(projection).not.toMatch(/\bfetch\s*\(/);
-    expect(projection).not.toMatch(/uploadFile/);
-    expect(projection).not.toMatch(/dereferenceFileUri/);
-    expect(projection).not.toMatch(/from ['"]\.\/w3ds-platform-evault['"]/);
-    expect(projection).not.toMatch(/createMetaEnvelope/);
-    expect(projection).not.toMatch(/\bvideos\b/);
-    expect(projection).not.toMatch(/\bplaylists\b/);
-    expect(projection).not.toMatch(/\bcomments\b/);
+    for (const file of [
+      'w3ds-awareness-channel-projection.ts',
+      'w3ds-awareness-video-projection.ts',
+    ]) {
+      const projection = readFileSync(join(here, file), 'utf8');
+      expect(projection).toMatch(/import ['"]server-only['"]/);
+      expect(projection).toMatch(/\bfromGlobal\s*\(/);
+      expect(projection).not.toMatch(/verifySignature/);
+      expect(projection).not.toMatch(/signature-validator/);
+      expect(projection).not.toMatch(/from ['"]\.\/w3ds-auth['"]/);
+      expect(projection).not.toMatch(/from ['"]\.\/w3ds-official-adapter['"]/);
+      expect(projection).not.toMatch(/\bhandleChange\s*\(/);
+      expect(projection).not.toMatch(/\bfetch\s*\(/);
+      expect(projection).not.toMatch(/uploadFile/);
+      expect(projection).not.toMatch(/dereferenceFileUri/);
+      expect(projection).not.toMatch(/from ['"]\.\/w3ds-platform-evault['"]/);
+      expect(projection).not.toMatch(/createMetaEnvelope/);
+      expect(projection).not.toMatch(/\bplaylists\b/);
+      expect(projection).not.toMatch(/\bcomments\b/);
+      expect(projection).not.toMatch(/\bmediaAssets\b/);
+    }
+
+    const channelProjection = readFileSync(
+      join(here, 'w3ds-awareness-channel-projection.ts'),
+      'utf8',
+    );
+    expect(channelProjection).not.toMatch(/\bvideos\b/);
 
     const hmacHelper = readFileSync(join(here, 'w3ds-aaas-signature.ts'), 'utf8');
     expect(hmacHelper).toMatch(/createHmac\('sha256'/);

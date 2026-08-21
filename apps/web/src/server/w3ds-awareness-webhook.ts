@@ -4,8 +4,9 @@
  *
  * Verifies x-aaas-signature as HMAC-SHA256 of the raw body, validates the
  * documented Awareness envelope, then records a receipt keyed by MetaEnvelope
- * id. A configured official Channel schema may use the separate transactional
- * projection seam; no outbound adapter, eVault, or network write is used.
+ * id. Configured official Channel and draft/private Video schemas may use
+ * separate transactional projection seams; no outbound adapter, eVault, or
+ * network write is used.
  */
 
 import 'server-only';
@@ -22,6 +23,10 @@ import {
   createPostgresW3dsAwarenessReceiptStore,
   type W3dsAwarenessReceiptStore,
 } from './w3ds-awareness-receipts';
+import {
+  createPostgresW3dsAwarenessVideoProjection,
+  type W3dsAwarenessVideoProjection,
+} from './w3ds-awareness-video-projection';
 
 export const W3DS_AAAS_SIGNATURE_HEADER = 'x-aaas-signature';
 
@@ -52,6 +57,10 @@ export interface HandleAwarenessWebhookInput {
   channelProjection?: W3dsAwarenessChannelProjection;
   /** Invoked only after valid HMAC, packet parsing, and Channel admission. */
   resolveChannelProjection?: () => W3dsAwarenessChannelProjection;
+  /** Explicit test injection for an admitted, transactional draft Video projection. */
+  videoProjection?: W3dsAwarenessVideoProjection;
+  /** Invoked only after valid HMAC, packet parsing, and Video admission. */
+  resolveVideoProjection?: () => W3dsAwarenessVideoProjection;
   now?: () => number;
 }
 
@@ -127,12 +136,20 @@ export async function handleAwarenessWebhookRequest(
   // HMACs never reach it, and it does not allocate the database client.
   const admission = input.resolveAdmission?.(packet);
 
-  // Slice 2: Channel is the only configured official mapping that has a
-  // transactional local projection. The projector owns receipt creation as
-  // part of that transaction, so a failure cannot acknowledge the packet or
-  // leave a partial Channel/mapping row behind.
+  // Each eligible projection owns receipt creation as part of its transaction,
+  // so a failure cannot acknowledge the packet or leave partial product/mapping
+  // rows behind.
   if (admission?.status === 'eligible') {
-    const projected = await loadChannelProjection(input).project({
+    const projection =
+      admission.mapping.entityType === 'channel'
+        ? loadChannelProjection(input)
+        : admission.mapping.entityType === 'video'
+          ? loadVideoProjection(input)
+          : undefined;
+    if (!projection) {
+      throw new Error('Awareness admission selected an unsupported product projection.');
+    }
+    const projected = await projection.project({
       envelope: packet,
       mapping: admission.mapping,
       mappingVersion: admission.mappingVersion,
@@ -140,7 +157,12 @@ export async function handleAwarenessWebhookRequest(
     });
     return {
       status: 200,
-      outcome: projected.outcome === 'duplicate' ? 'duplicate' : 'accepted',
+      outcome:
+        projected.outcome === 'duplicate'
+          ? 'duplicate'
+          : projected.outcome === 'ignored'
+            ? 'ignored'
+            : 'accepted',
       globalId: packet.id,
       receiptId: projected.receiptId,
       ...deniedFlags,
@@ -188,6 +210,10 @@ export function createDefaultAwarenessChannelProjection(): W3dsAwarenessChannelP
   return createPostgresW3dsAwarenessChannelProjection(getW3dsDatabase());
 }
 
+export function createDefaultAwarenessVideoProjection(): W3dsAwarenessVideoProjection {
+  return createPostgresW3dsAwarenessVideoProjection(getW3dsDatabase());
+}
+
 function loadReceiptStore(input: HandleAwarenessWebhookInput): W3dsAwarenessReceiptStore {
   if (input.receipts) return input.receipts;
   if (input.resolveReceipts) return input.resolveReceipts();
@@ -198,6 +224,12 @@ function loadChannelProjection(input: HandleAwarenessWebhookInput): W3dsAwarenes
   if (input.channelProjection) return input.channelProjection;
   if (input.resolveChannelProjection) return input.resolveChannelProjection();
   return createDefaultAwarenessChannelProjection();
+}
+
+function loadVideoProjection(input: HandleAwarenessWebhookInput): W3dsAwarenessVideoProjection {
+  if (input.videoProjection) return input.videoProjection;
+  if (input.resolveVideoProjection) return input.resolveVideoProjection();
+  return createDefaultAwarenessVideoProjection();
 }
 
 /**
