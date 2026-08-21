@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { NextRequest } from 'next/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getW3dsDatabase } from '../../../server/db/client';
+import { setOperationalLogSinkForTests } from '../../../server/ops-observability';
 import {
   InMemoryW3dsAwarenessReceiptStore,
   type W3dsAwarenessReceiptStore,
@@ -45,6 +46,7 @@ function signedRequest(
 describe('POST /api/webhook', () => {
   afterEach(() => {
     setAwarenessWebhookReceiptStoreForTests(undefined);
+    setOperationalLogSinkForTests(undefined);
     vi.mocked(getW3dsDatabase).mockClear();
     vi.unstubAllEnvs();
   });
@@ -129,5 +131,37 @@ describe('POST /api/webhook', () => {
     expect(second.status).toBe(200);
     expect((await receipts.getByGlobalId(packet.id))?.globalId).toBe(packet.id);
     expect(getW3dsDatabase).not.toHaveBeenCalled();
+  });
+
+  it('emits redacted accepted, replayed, rejected, and failed outcome metrics', async () => {
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
+    vi.stubEnv('W3DS_AAAS_WEBHOOK_SECRET', secret);
+    vi.stubEnv('W3DS_AAAS_SIGNATURE_ENCODING', 'hex');
+    const receipts = new InMemoryW3dsAwarenessReceiptStore();
+    setAwarenessWebhookReceiptStoreForTests(receipts);
+
+    expect((await POST(signedRequest())).status).toBe(200);
+    expect((await POST(signedRequest())).status).toBe(200);
+    expect((await POST(signedRequest(rawBody, 'bad'))).status).toBe(500);
+
+    setAwarenessWebhookReceiptStoreForTests({
+      getByGlobalId: async () => {
+        throw new Error('database query failed with secret=never-log-me');
+      },
+      recordReceipt: async () => {
+        throw new Error('unreachable');
+      },
+    });
+    const newPacket = JSON.stringify({ ...packet, id: 'route-global-id-2' });
+    expect((await POST(signedRequest(newPacket))).status).toBe(500);
+
+    expect(logs.join('\n')).toContain('"code":"awareness_accepted"');
+    expect(logs.join('\n')).toContain('"code":"awareness_replayed"');
+    expect(logs.join('\n')).toContain('"code":"awareness_rejected"');
+    expect(logs.join('\n')).toContain('"code":"awareness_failed"');
+    expect(logs.join('\n')).not.toContain('never-log-me');
+    expect(logs.join('\n')).not.toContain(secret);
+    expect(logs.join('\n')).not.toContain(rawBody);
   });
 });

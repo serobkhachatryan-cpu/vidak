@@ -3,10 +3,12 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { setOperationalLogSinkForTests } from './ops-observability';
 import { readW3dsAaasWebhookConfig } from './server-config';
 import { InMemoryW3dsAwarenessReceiptStore } from './w3ds-awareness-receipts';
 import {
   handleAwarenessWebhookRequest,
+  reportAwarenessWebhookOutcome,
   resolveAwarenessWebhookConfig,
 } from './w3ds-awareness-webhook';
 
@@ -77,6 +79,39 @@ describe('AaaS webhook config', () => {
 describe('AaaS webhook receive-only handler', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
+    setOperationalLogSinkForTests(undefined);
+  });
+
+  it('emits only redacted, fixed outcome dimensions for operator metrics', () => {
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
+
+    expect(
+      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-1', outcome: 'accepted' }),
+    ).toBe('awareness_accepted');
+    expect(
+      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-2', outcome: 'duplicate' }),
+    ).toBe('awareness_replayed');
+    expect(
+      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-3', outcome: 'rejected' }),
+    ).toBe('awareness_rejected');
+    expect(
+      reportAwarenessWebhookOutcome({ correlationId: 'aware-corr-4', outcome: 'failed' }),
+    ).toBe('awareness_failed');
+
+    expect(logs).toHaveLength(4);
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('"code":"awareness_accepted"'),
+        expect.stringContaining('"code":"awareness_replayed"'),
+        expect.stringContaining('"code":"awareness_rejected"'),
+        expect.stringContaining('"code":"awareness_failed"'),
+      ]),
+    );
+    expect(logs.join('\n')).toContain('"category":"w3ds_sync"');
+    expect(logs.join('\n')).not.toContain(packet.id);
+    expect(logs.join('\n')).not.toContain(secret);
+    expect(logs.join('\n')).not.toContain(rawBody.toString('utf8'));
   });
 
   it('returns empty-handler 500 without a receipt when config is missing', async () => {

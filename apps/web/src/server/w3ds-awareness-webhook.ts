@@ -9,6 +9,7 @@
  */
 
 import 'server-only';
+import { reportOperationalEvent } from './ops-observability';
 import { readW3dsAaasWebhookConfig, type W3dsAaasWebhookConfig } from './server-config';
 import { verifyW3dsAaasSignature } from './w3ds-aaas-signature';
 import {
@@ -54,8 +55,35 @@ export interface HandleAwarenessWebhookResult {
   httpEvaultClientConstructed: false;
 }
 
+export type W3dsAwarenessWebhookOutcomeCode =
+  | 'awareness_accepted'
+  | 'awareness_replayed'
+  | 'awareness_rejected'
+  | 'awareness_failed';
+
 export function awarenessWebhookDeniedFlags(): W3dsAwarenessWebhookDeniedFlags {
   return deniedFlags;
+}
+
+/**
+ * Produces a redacted server-side metric event for the receive-only ingress.
+ * The only dimensions are an opaque correlation id and a fixed outcome code;
+ * raw packets, signatures, secrets, and MetaEnvelope ids are never logged.
+ */
+export function reportAwarenessWebhookOutcome(input: {
+  correlationId: string;
+  outcome: HandleAwarenessWebhookResult['outcome'] | 'failed';
+}): W3dsAwarenessWebhookOutcomeCode {
+  const code: W3dsAwarenessWebhookOutcomeCode =
+    input.outcome === 'accepted'
+      ? 'awareness_accepted'
+      : input.outcome === 'duplicate'
+        ? 'awareness_replayed'
+        : input.outcome === 'rejected'
+          ? 'awareness_rejected'
+          : 'awareness_failed';
+  reportOperationalEvent({ category: 'w3ds_sync', correlationId: input.correlationId, code });
+  return code;
 }
 
 export async function handleAwarenessWebhookRequest(

@@ -27,6 +27,17 @@ export interface OperationalFailureReport {
   message: string;
 }
 
+/**
+ * A redacted, server-side event suitable for operational counters. Events
+ * intentionally carry no request body, headers, credentials, or entity IDs.
+ */
+export interface OperationalEventReport {
+  level: 'info';
+  category: OperationalFailureCategory;
+  correlationId: string;
+  code: string;
+}
+
 export type OperationalLogSink = (line: string) => void;
 
 const defaultLogSink: OperationalLogSink = (line) => {
@@ -81,6 +92,29 @@ export function reportOperationalFailure(input: {
     correlationId: input.correlationId ?? createCorrelationId(),
     message: redactSensitiveText(input.error, `${input.category} failure`),
     ...(input.code ? { code: input.code } : {}),
+  };
+
+  const line = JSON.stringify(report);
+  assertNoSensitiveLeak(line);
+  logSink(line);
+  return report;
+}
+
+/**
+ * Emits a structured, non-sensitive operational event. Deployment log
+ * aggregation can count `category` and `code` without retaining W3DS packet
+ * contents or credentials.
+ */
+export function reportOperationalEvent(input: {
+  category: OperationalFailureCategory;
+  correlationId?: string;
+  code: string;
+}): OperationalEventReport {
+  const report: OperationalEventReport = {
+    level: 'info',
+    category: input.category,
+    correlationId: input.correlationId ?? createCorrelationId(),
+    code: input.code,
   };
 
   const line = JSON.stringify(report);

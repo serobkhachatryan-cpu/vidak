@@ -11,6 +11,7 @@ import type { W3dsAwarenessReceiptStore } from '../../../server/w3ds-awareness-r
 import {
   createDefaultAwarenessReceiptStore,
   handleAwarenessWebhookRequest,
+  reportAwarenessWebhookOutcome,
   resolveAwarenessWebhookConfig,
   W3DS_AAAS_SIGNATURE_HEADER,
 } from '../../../server/w3ds-awareness-webhook';
@@ -38,8 +39,10 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       ...(testReceiptStore ? { receipts: testReceiptStore } : {}),
       resolveReceipts: createDefaultAwarenessReceiptStore,
     });
+    reportAwarenessWebhookOutcome({ correlationId, outcome: result.outcome });
     return emptyWebhookResponse(result.status, correlationId);
   } catch {
+    reportAwarenessWebhookOutcome({ correlationId, outcome: 'failed' });
     return emptyWebhookResponse(500, correlationId);
   }
 }
