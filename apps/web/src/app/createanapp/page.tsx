@@ -16,46 +16,97 @@ const buildSteps = [
   {
     number: '01',
     title: 'Give your agent W3DS context',
-    body: 'Install the official skill before you start. It gives your coding agent the W3DS vocabulary, references, and implementation guardrails it needs.',
+    body: 'Before scaffolding code, install the official W3DS skill and tell your agent to use it as the source of truth. It gives the agent the vocabulary and the paths to the protocol documents it needs for real implementation decisions.',
     detail:
-      'The skill is grounded in the W3DS docs, so your agent can look up the right ontology, mapping, GraphQL field, and protocol instead of guessing.',
+      'Use the skill whenever a build touches schemas, GraphQL fields, mappings, authentication, files, or signing. That keeps the agent from inventing UUIDs, endpoints, or data-model details that must come from the protocol.',
+    references: [
+      [
+        'AI Agent Skill',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
+      ],
+      ['W3DS Glossary', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Basics/glossary'],
+    ],
   },
   {
     number: '02',
     title: 'Describe the human job, not just screens',
-    body: 'Tell the agent who the app is for, what they need to do, what data they create, and what “done” looks like.',
+    body: 'Write a short product brief before asking for UI: name the person, the moment that brings them here, the outcome they need, the data they create, and the signal that tells them the task is complete.',
     detail:
-      'Start with one valuable loop — for example, publish a collection, coordinate a group, or keep a personal record — then build outward.',
+      'Start with one complete loop, such as publishing a collection or coordinating a group. Specify the record created, who owns it, and the next action it enables; add secondary screens only after that loop works.',
+    references: [
+      [
+        'Platform Development Guide',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/getting-started',
+      ],
+      ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
+    ],
   },
   {
     number: '03',
     title: 'Choose the smallest W3DS surface',
-    body: 'A stateless app that writes directly to eVaults needs less infrastructure than a platform with its own local database.',
+    body: 'Choose the architecture that proves the product with the fewest moving parts. For many first releases, the app can authenticate a person and read or write directly to their eVault without maintaining an app-owned copy of their data.',
     detail:
-      'Only add mappings, the Web3 Adapter, and webhook handling when a local database must stay synchronized with user-owned eVault data.',
+      'Introduce a local database only when local queries, existing systems, or product logic genuinely require it. Then define mappings, use the Web3 Adapter, and process webhooks so the local projection stays aligned with user-owned records.',
+    references: [
+      ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
+      ['Web3 Adapter', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/Web3-Adapter'],
+      [
+        'Mapping Rules',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/mapping-rules',
+      ],
+    ],
   },
   {
     number: '04',
     title: 'Make identity and ownership explicit',
-    body: 'Use the W3DS authentication flow for sign-in, and decide which eVault owns every kind of user-created data.',
+    body: 'Make sign-in and data ownership visible parts of the design. Authenticate with the W3DS flow, then decide which eVault owns each kind of user-created record before you create the first schema or database table.',
     detail:
-      'W3DS lets the same user-owned data move across participating platforms; design the experience around that advantage from the beginning.',
+      'Treat the eVault as the person’s portable data home, not as an app account. An ownership map for profiles, posts, files, and shared records prevents accidental app lock-in and makes later interoperability intentional.',
+    references: [
+      [
+        'Authentication',
+        'https://docs.w3ds.metastate.foundation/docs/W3DS%20Protocol/Authentication',
+      ],
+      ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
+      ['W3ID', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Basics/W3ID'],
+    ],
   },
   {
     number: '05',
     title: 'Test the real protocol loop',
-    body: 'Use the Dev Sandbox to provision a test identity and exercise authentication and signing before relying on a production wallet.',
+    body: 'Use the Dev Sandbox to create a test identity, sign in, approve a signed action, and read back the record you wrote. This tests the protocol boundary rather than only a mocked browser flow.',
     detail:
-      'For sync-enabled apps, verify that outbound changes reach the eVault and inbound webhook packets can be applied safely more than once.',
+      'For a sync-enabled app, also test a change from the app to the eVault and a webhook change back to the app. Repeat the same webhook packet to confirm your handler is idempotent and does not duplicate or corrupt local data.',
+    references: [
+      [
+        'Using the Dev Sandbox',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/dev-sandbox',
+      ],
+      ['Signing', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Protocol/Signing'],
+      [
+        'Webhook Controller Guide',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/webhook-controller',
+      ],
+    ],
   },
   {
     number: '06',
     title: 'Ship a focused first version',
-    body: 'Make the core action delightful, publish it, and let real use determine the next W3DS capability to add.',
+    body: 'Release one end-to-end job that lets a real person feel the benefit of portable, user-owned data. A useful first version needs a clear happy path, understandable ownership, and the smallest set of protocol capabilities that path requires.',
     detail:
-      'The reference library below is here when you need it — there is no need to implement the entire ecosystem on day one.',
+      'Use real feedback to choose the next capability—files, signing, shared records, local search, or synchronization—instead of implementing the whole ecosystem in advance. Keep the reference guides close as the product earns more complexity.',
+    references: [
+      [
+        'Getting Started with W3DS',
+        'https://docs.w3ds.metastate.foundation/docs/Getting%20Started/getting-started',
+      ],
+      [
+        'AI Agent Skill',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
+      ],
+    ],
   },
-];
+] as const;
 
 const referenceGroups = [
   {
@@ -273,6 +324,22 @@ export default function CreateAnAppPage() {
                   <p className="mt-4 border-t border-border pt-4 text-sm leading-6 text-muted-foreground">
                     {step.detail}
                   </p>
+                  <div
+                    className="mt-4 flex flex-wrap gap-x-4 gap-y-2"
+                    aria-label="Related W3DS documentation"
+                  >
+                    {step.references.map(([title, href]) => (
+                      <a
+                        key={href}
+                        className="inline-flex items-center gap-1 text-sm font-semibold text-primary underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                        href={href}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Read: {title} <Arrow />
+                      </a>
+                    ))}
+                  </div>
                 </li>
               ))}
             </ol>
