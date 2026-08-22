@@ -19,6 +19,14 @@ const buildSteps = [
     body: 'Before scaffolding code, install the official W3DS skill and tell your agent to use it as the source of truth. It gives the agent the vocabulary and the paths to the protocol documents it needs for real implementation decisions.',
     detail:
       'Use the skill whenever a build touches schemas, GraphQL fields, mappings, authentication, files, or signing. That keeps the agent from inventing UUIDs, endpoints, or data-model details that must come from the protocol.',
+    example: {
+      title: 'Example: a grounded agent brief',
+      items: [
+        'Install the W3DS skill and use it as the source of truth for this build.',
+        'Before coding, list the authentication, ontology, mapping, and signing documents this feature needs.',
+        'Do not invent UUIDs, GraphQL fields, or endpoints; cite the W3DS guide used for each decision.',
+      ],
+    },
     references: [
       [
         'AI Agent Skill',
@@ -33,6 +41,14 @@ const buildSteps = [
     body: 'Write a short product brief before asking for UI: name the person, the moment that brings them here, the outcome they need, the data they create, and the signal that tells them the task is complete.',
     detail:
       'Start with one complete loop, such as publishing a collection or coordinating a group. Specify the record created, who owns it, and the next action it enables; add secondary screens only after that loop works.',
+    example: {
+      title: 'Example: one complete publishing loop',
+      items: [
+        'For independent filmmakers who need a portable release catalog.',
+        'A creator adds one film, a title, a synopsis, and a file.',
+        'Done means the film appears in that creator’s eVault-backed collection and can be opened again.',
+      ],
+    },
     references: [
       [
         'Platform Development Guide',
@@ -47,6 +63,14 @@ const buildSteps = [
     body: 'Choose the architecture that proves the product with the fewest moving parts. For many first releases, the app can authenticate a person and read or write directly to their eVault without maintaining an app-owned copy of their data.',
     detail:
       'Introduce a local database only when local queries, existing systems, or product logic genuinely require it. Then define mappings, use the Web3 Adapter, and process webhooks so the local projection stays aligned with user-owned records.',
+    example: {
+      title: 'Example: choose direct-to-eVault first',
+      items: [
+        'A personal reading log needs sign-in, a Book record, and eVault reads and writes.',
+        'It does not need a local database until readers need fast cross-user search or recommendations.',
+        'When that need appears, add a mapped local projection and an idempotent webhook handler.',
+      ],
+    },
     references: [
       ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
       ['Web3 Adapter', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/Web3-Adapter'],
@@ -62,6 +86,15 @@ const buildSteps = [
     body: 'Make sign-in and data ownership visible parts of the design. Authenticate with the W3DS flow, then decide which eVault owns each kind of user-created record before you create the first schema or database table.',
     detail:
       'Treat the eVault as the person’s portable data home, not as an app account. An ownership map for profiles, posts, files, and shared records prevents accidental app lock-in and makes later interoperability intentional.',
+    example: {
+      title: 'Example: write an ownership map',
+      items: [
+        'Profile → the person’s eVault.',
+        'Published collection → the creator’s eVault.',
+        'Shared group membership → the agreed shared owner or eVault.',
+        'Write this map before creating the schema or UI.',
+      ],
+    },
     references: [
       [
         'Authentication',
@@ -77,6 +110,14 @@ const buildSteps = [
     body: 'Use the Dev Sandbox to create a test identity, sign in, approve a signed action, and read back the record you wrote. This tests the protocol boundary rather than only a mocked browser flow.',
     detail:
       'For a sync-enabled app, also test a change from the app to the eVault and a webhook change back to the app. Repeat the same webhook packet to confirm your handler is idempotent and does not duplicate or corrupt local data.',
+    example: {
+      title: 'Example: a sandbox acceptance test',
+      items: [
+        'Create a sandbox identity and sign in.',
+        'Create a test record, approve the signed write, and then read it back.',
+        'For sync, replay the same webhook packet twice and confirm there is still one local record.',
+      ],
+    },
     references: [
       [
         'Using the Dev Sandbox',
@@ -95,6 +136,14 @@ const buildSteps = [
     body: 'Release one end-to-end job that lets a real person feel the benefit of portable, user-owned data. A useful first version needs a clear happy path, understandable ownership, and the smallest set of protocol capabilities that path requires.',
     detail:
       'Use real feedback to choose the next capability—files, signing, shared records, local search, or synchronization—instead of implementing the whole ecosystem in advance. Keep the reference guides close as the product earns more complexity.',
+    example: {
+      title: 'Example: a deliberately small v1',
+      items: [
+        'Ship “save one film to my portable catalog.”',
+        'Include sign-in, one metadata form, an eVault write, and a confirmation state.',
+        'Defer collaboration, recommendations, local search, and sync until user feedback calls for them.',
+      ],
+    },
     references: [
       [
         'Getting Started with W3DS',
@@ -324,6 +373,32 @@ export default function CreateAnAppPage() {
                   <p className="mt-4 border-t border-border pt-4 text-sm leading-6 text-muted-foreground">
                     {step.detail}
                   </p>
+                  <details className="group mt-5 overflow-hidden rounded-lg border border-primary/25 bg-primary/5">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm font-semibold text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-inset">
+                      <span>{step.example.title}</span>
+                      <span
+                        aria-hidden="true"
+                        className="shrink-0 text-base transition-transform group-open:rotate-180"
+                      >
+                        ↓
+                      </span>
+                    </summary>
+                    <div className="border-t border-primary/20 bg-background/70 px-4 py-4">
+                      <p className="text-sm leading-6 text-muted-foreground">
+                        Use this as a starting point:
+                      </p>
+                      <ul className="mt-3 space-y-2 text-sm leading-6 text-foreground">
+                        {step.example.items.map((item) => (
+                          <li key={item} className="flex gap-2">
+                            <span aria-hidden="true" className="text-primary">
+                              •
+                            </span>
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </details>
                   <nav
                     className="mt-4 flex flex-wrap gap-x-4 gap-y-2"
                     aria-label="Related W3DS documentation"
