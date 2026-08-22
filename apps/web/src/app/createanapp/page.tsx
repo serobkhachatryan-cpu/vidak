@@ -324,7 +324,7 @@ export default function CreateAnAppPage() {
                   <p className="mt-4 border-t border-border pt-4 text-sm leading-6 text-muted-foreground">
                     {step.detail}
                   </p>
-                  <div
+                  <nav
                     className="mt-4 flex flex-wrap gap-x-4 gap-y-2"
                     aria-label="Related W3DS documentation"
                   >
@@ -339,7 +339,7 @@ export default function CreateAnAppPage() {
                         Read: {title} <Arrow />
                       </a>
                     ))}
-                  </div>
+                  </nav>
                 </li>
               ))}
             </ol>
