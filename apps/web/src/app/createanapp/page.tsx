@@ -15,33 +15,36 @@ export const metadata: Metadata = {
 const buildSteps = [
   {
     number: '01',
-    title: 'Give your agent W3DS context',
-    body: 'Before scaffolding code, install the official W3DS skill and tell your agent to use it as the source of truth. It gives the agent the vocabulary and the paths to the protocol documents it needs for real implementation decisions.',
+    title: 'Start with one human outcome',
+    body: 'Name the person, the moment they arrive, and the change they want to make. Write a plain-language outcome—not a list of screens, schemas, or W3DS components.',
     detail:
-      'Use the skill whenever a build touches schemas, GraphQL fields, mappings, authentication, files, or signing. That keeps the agent from inventing UUIDs, endpoints, or data-model details that must come from the protocol.',
+      'Make the first outcome small enough to judge. “A filmmaker can save one finished film to a catalog they control” is a stronger start than “build a creator platform.”',
     example: {
-      title: 'Example first prompt',
+      title: 'First prompt — define the outcome',
       prompt:
-        'I want to build a W3DS app for independent filmmakers. Install the official W3DS skill and treat it as the source of truth. Before writing code, tell me which W3DS guides I need for authentication, schemas, mappings, and signing; do not invent protocol details.',
+        'I want to build a W3DS app. Help me write a one-paragraph product brief for [person] who needs to [outcome] when [moment]. Keep it focused on one useful change for one person; do not propose screens or technical architecture yet.',
     },
     references: [
       [
-        'AI Agent Skill',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
+        'Getting Started with W3DS',
+        'https://docs.w3ds.metastate.foundation/docs/Getting%20Started/getting-started',
       ],
-      ['W3DS Glossary', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Basics/glossary'],
+      [
+        'Platform Development Guide',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/getting-started',
+      ],
     ],
   },
   {
     number: '02',
-    title: 'Describe the human job, not just screens',
-    body: 'Write a short product brief before asking for UI: name the person, the moment that brings them here, the outcome they need, the data they create, and the signal that tells them the task is complete.',
+    title: 'Define one complete user loop',
+    body: 'Turn that outcome into one journey from start to finish. State what the person does first, the record or action they create, and the signal that tells them they are done.',
     detail:
-      'Start with one complete loop, such as publishing a collection or coordinating a group. Specify the record created, who owns it, and the next action it enables; add secondary screens only after that loop works.',
+      'Include only the screens, data, and actions needed for this path. If you cannot describe the moment of completion, the first loop is still too broad.',
     example: {
-      title: 'Example first prompt',
+      title: 'First prompt — scope the loop',
       prompt:
-        'Help me define the first loop for a portable film catalog. A filmmaker should add one film with a title, synopsis, and file; their eVault owns it. Success is reopening that film from the catalog. Propose only the screens and data required for this loop.',
+        'Using this outcome: [paste outcome], define the smallest complete user loop. Tell me the starting action, the one record or signed action created, who owns it, and the exact confirmation that means the person is done. Include only the screens this loop needs.',
     },
     references: [
       [
@@ -53,34 +56,33 @@ const buildSteps = [
   },
   {
     number: '03',
-    title: 'Choose the smallest W3DS surface',
-    body: 'Choose the architecture that proves the product with the fewest moving parts. For many first releases, the app can authenticate a person and read or write directly to their eVault without maintaining an app-owned copy of their data.',
+    title: 'Give your agent W3DS context',
+    body: 'Before scaffolding code, install the official W3DS skill and tell the agent to use it as the source of truth. It gives the build the vocabulary and documentation paths it needs for protocol decisions.',
     detail:
-      'Introduce a local database only when local queries, existing systems, or product logic genuinely require it. Then define mappings, use the Web3 Adapter, and process webhooks so the local projection stays aligned with user-owned records.',
+      'Use the skill whenever the loop touches schemas, GraphQL fields, mappings, authentication, files, or signing. The agent should look up those details instead of inventing them.',
     example: {
-      title: 'Example first prompt',
+      title: 'First prompt — ground the agent',
       prompt:
-        'Design the smallest W3DS architecture for a personal reading log. Start with sign-in and direct eVault reads and writes of Book records. Do not add a local database; explain which later need, such as cross-user search, would justify a mapped local projection and webhooks.',
+        'Install the official W3DS skill and use it as the source of truth for this app. Here is the first loop: [paste loop]. Before coding, list the W3DS guides we need for identity, ownership, schemas, mappings, files, and signing. Do not invent protocol fields, UUIDs, endpoints, or mappings.',
     },
     references: [
-      ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
-      ['Web3 Adapter', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/Web3-Adapter'],
       [
-        'Mapping Rules',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/mapping-rules',
+        'AI Agent Skill',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
       ],
+      ['W3DS Glossary', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Basics/glossary'],
     ],
   },
   {
     number: '04',
-    title: 'Make identity and ownership explicit',
-    body: 'Make sign-in and data ownership visible parts of the design. Authenticate with the W3DS flow, then decide which eVault owns each kind of user-created record before you create the first schema or database table.',
+    title: 'Map identity and data ownership',
+    body: 'Decide who signs in and which eVault owns every record in the first loop before you create a schema or table. Make this a visible product decision, not a hidden implementation detail.',
     detail:
-      'Treat the eVault as the person’s portable data home, not as an app account. An ownership map for profiles, posts, files, and shared records prevents accidental app lock-in and makes later interoperability intentional.',
+      'Treat the eVault as a person’s portable data home, not as an app account. A short ownership map for profiles, records, files, and shared data prevents accidental lock-in later.',
     example: {
-      title: 'Example first prompt',
+      title: 'First prompt — map ownership',
       prompt:
-        'Design the ownership map before the UI. A profile belongs in the person’s eVault, a published collection belongs in the creator’s eVault, and shared group membership uses the agreed shared owner or eVault. Show the authentication flow and confirm this map before creating a schema.',
+        'For this first loop: [paste loop], create an identity and ownership map before we design the UI. Show who signs in, which eVault owns each record and file, and how shared data would be owned. Confirm the map before proposing schemas or database tables.',
     },
     references: [
       [
@@ -93,14 +95,34 @@ const buildSteps = [
   },
   {
     number: '05',
-    title: 'Test the real protocol loop',
-    body: 'Use the Dev Sandbox to create a test identity, sign in, approve a signed action, and read back the record you wrote. This tests the protocol boundary rather than only a mocked browser flow.',
+    title: 'Choose the smallest data path',
+    body: 'Choose the architecture that proves the first loop with the fewest moving parts. In many v1s, a person signs in and the app reads or writes directly to their eVault.',
     detail:
-      'For a sync-enabled app, also test a change from the app to the eVault and a webhook change back to the app. Repeat the same webhook packet to confirm your handler is idempotent and does not duplicate or corrupt local data.',
+      'Add a local database only when local queries, existing systems, or product logic truly require it. When you add one, define the mapping, Web3 Adapter, and webhook path that keep it aligned with user-owned data.',
     example: {
-      title: 'Example first prompt',
+      title: 'First prompt — choose the architecture',
       prompt:
-        'Create a W3DS Dev Sandbox acceptance test: provision a test identity, sign in, create a record, approve the signed write, and read it back. If this app syncs data, replay the same webhook packet twice and prove there is still only one local record.',
+        'Recommend the smallest W3DS architecture for this first loop: [paste loop and ownership map]. Start with direct eVault reads and writes unless there is a concrete reason for local data. If a local database is needed, explain the mapping, Web3 Adapter, and webhook responsibilities.',
+    },
+    references: [
+      ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
+      ['Web3 Adapter', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/Web3-Adapter'],
+      [
+        'Mapping Rules',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/mapping-rules',
+      ],
+    ],
+  },
+  {
+    number: '06',
+    title: 'Build and prove the first loop',
+    body: 'Build only the happy path, then exercise it with a real W3DS test identity in the Dev Sandbox. Sign in, create the record or action, approve the signed write, and read the result back.',
+    detail:
+      'This proves the protocol boundary—not just a mocked browser flow. If you use synchronization, replay the same webhook packet twice and confirm the local state remains correct.',
+    example: {
+      title: 'First prompt — build and verify',
+      prompt:
+        'Turn this first loop into an implementation plan and acceptance test: [paste loop, ownership map, and architecture]. Build only the happy path. In the Dev Sandbox, sign in with a test identity, create the record, approve the signed write, read it back, and report the result. If sync is included, test an idempotent webhook replay.',
     },
     references: [
       [
@@ -111,28 +133,6 @@ const buildSteps = [
       [
         'Webhook Controller Guide',
         'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/webhook-controller',
-      ],
-    ],
-  },
-  {
-    number: '06',
-    title: 'Ship a focused first version',
-    body: 'Release one end-to-end job that lets a real person feel the benefit of portable, user-owned data. A useful first version needs a clear happy path, understandable ownership, and the smallest set of protocol capabilities that path requires.',
-    detail:
-      'Use real feedback to choose the next capability—files, signing, shared records, local search, or synchronization—instead of implementing the whole ecosystem in advance. Keep the reference guides close as the product earns more complexity.',
-    example: {
-      title: 'Example first prompt',
-      prompt:
-        'Plan a focused W3DS v1 around “save one film to my portable catalog.” Include sign-in, one metadata form, an eVault write, and a confirmation state. Defer collaboration, recommendations, local search, and synchronization until user feedback shows they are needed.',
-    },
-    references: [
-      [
-        'Getting Started with W3DS',
-        'https://docs.w3ds.metastate.foundation/docs/Getting%20Started/getting-started',
-      ],
-      [
-        'AI Agent Skill',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
       ],
     ],
   },
