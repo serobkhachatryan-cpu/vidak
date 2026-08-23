@@ -20,12 +20,9 @@ const buildSteps = [
     detail:
       'Use the skill whenever a build touches schemas, GraphQL fields, mappings, authentication, files, or signing. That keeps the agent from inventing UUIDs, endpoints, or data-model details that must come from the protocol.',
     example: {
-      title: 'Example: a grounded agent brief',
-      items: [
-        'Install the W3DS skill and use it as the source of truth for this build.',
-        'Before coding, list the authentication, ontology, mapping, and signing documents this feature needs.',
-        'Do not invent UUIDs, GraphQL fields, or endpoints; cite the W3DS guide used for each decision.',
-      ],
+      title: 'Example first prompt',
+      prompt:
+        'I want to build a W3DS app for independent filmmakers. Install the official W3DS skill and treat it as the source of truth. Before writing code, tell me which W3DS guides I need for authentication, schemas, mappings, and signing; do not invent protocol details.',
     },
     references: [
       [
@@ -42,12 +39,9 @@ const buildSteps = [
     detail:
       'Start with one complete loop, such as publishing a collection or coordinating a group. Specify the record created, who owns it, and the next action it enables; add secondary screens only after that loop works.',
     example: {
-      title: 'Example: one complete publishing loop',
-      items: [
-        'For independent filmmakers who need a portable release catalog.',
-        'A creator adds one film, a title, a synopsis, and a file.',
-        'Done means the film appears in that creator’s eVault-backed collection and can be opened again.',
-      ],
+      title: 'Example first prompt',
+      prompt:
+        'Help me define the first loop for a portable film catalog. A filmmaker should add one film with a title, synopsis, and file; their eVault owns it. Success is reopening that film from the catalog. Propose only the screens and data required for this loop.',
     },
     references: [
       [
@@ -64,12 +58,9 @@ const buildSteps = [
     detail:
       'Introduce a local database only when local queries, existing systems, or product logic genuinely require it. Then define mappings, use the Web3 Adapter, and process webhooks so the local projection stays aligned with user-owned records.',
     example: {
-      title: 'Example: choose direct-to-eVault first',
-      items: [
-        'A personal reading log needs sign-in, a Book record, and eVault reads and writes.',
-        'It does not need a local database until readers need fast cross-user search or recommendations.',
-        'When that need appears, add a mapped local projection and an idempotent webhook handler.',
-      ],
+      title: 'Example first prompt',
+      prompt:
+        'Design the smallest W3DS architecture for a personal reading log. Start with sign-in and direct eVault reads and writes of Book records. Do not add a local database; explain which later need, such as cross-user search, would justify a mapped local projection and webhooks.',
     },
     references: [
       ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
@@ -87,13 +78,9 @@ const buildSteps = [
     detail:
       'Treat the eVault as the person’s portable data home, not as an app account. An ownership map for profiles, posts, files, and shared records prevents accidental app lock-in and makes later interoperability intentional.',
     example: {
-      title: 'Example: write an ownership map',
-      items: [
-        'Profile → the person’s eVault.',
-        'Published collection → the creator’s eVault.',
-        'Shared group membership → the agreed shared owner or eVault.',
-        'Write this map before creating the schema or UI.',
-      ],
+      title: 'Example first prompt',
+      prompt:
+        'Design the ownership map before the UI. A profile belongs in the person’s eVault, a published collection belongs in the creator’s eVault, and shared group membership uses the agreed shared owner or eVault. Show the authentication flow and confirm this map before creating a schema.',
     },
     references: [
       [
@@ -111,12 +98,9 @@ const buildSteps = [
     detail:
       'For a sync-enabled app, also test a change from the app to the eVault and a webhook change back to the app. Repeat the same webhook packet to confirm your handler is idempotent and does not duplicate or corrupt local data.',
     example: {
-      title: 'Example: a sandbox acceptance test',
-      items: [
-        'Create a sandbox identity and sign in.',
-        'Create a test record, approve the signed write, and then read it back.',
-        'For sync, replay the same webhook packet twice and confirm there is still one local record.',
-      ],
+      title: 'Example first prompt',
+      prompt:
+        'Create a W3DS Dev Sandbox acceptance test: provision a test identity, sign in, create a record, approve the signed write, and read it back. If this app syncs data, replay the same webhook packet twice and prove there is still only one local record.',
     },
     references: [
       [
@@ -137,12 +121,9 @@ const buildSteps = [
     detail:
       'Use real feedback to choose the next capability—files, signing, shared records, local search, or synchronization—instead of implementing the whole ecosystem in advance. Keep the reference guides close as the product earns more complexity.',
     example: {
-      title: 'Example: a deliberately small v1',
-      items: [
-        'Ship “save one film to my portable catalog.”',
-        'Include sign-in, one metadata form, an eVault write, and a confirmation state.',
-        'Defer collaboration, recommendations, local search, and sync until user feedback calls for them.',
-      ],
+      title: 'Example first prompt',
+      prompt:
+        'Plan a focused W3DS v1 around “save one film to my portable catalog.” Include sign-in, one metadata form, an eVault write, and a confirmation state. Defer collaboration, recommendations, local search, and synchronization until user feedback shows they are needed.',
     },
     references: [
       [
@@ -385,18 +366,11 @@ export default function CreateAnAppPage() {
                     </summary>
                     <div className="border-t border-primary/20 bg-background/70 px-4 py-4">
                       <p className="text-sm leading-6 text-muted-foreground">
-                        Use this as a starting point:
+                        Copy and adapt this prompt for your coding agent:
                       </p>
-                      <ul className="mt-3 space-y-2 text-sm leading-6 text-foreground">
-                        {step.example.items.map((item) => (
-                          <li key={item} className="flex gap-2">
-                            <span aria-hidden="true" className="text-primary">
-                              •
-                            </span>
-                            <span>{item}</span>
-                          </li>
-                        ))}
-                      </ul>
+                      <blockquote className="mt-3 border-l-2 border-primary/50 pl-3 text-sm leading-6 text-foreground">
+                        {step.example.prompt}
+                      </blockquote>
                     </div>
                   </details>
                   <nav
