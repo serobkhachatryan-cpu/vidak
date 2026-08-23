@@ -15,14 +15,33 @@ export const metadata: Metadata = {
 const buildSteps = [
   {
     number: '01',
-    title: 'Start with one human outcome',
-    body: 'Name the person, the moment they arrive, and the change they want to make. Write a plain-language outcome—not a list of screens, schemas, or W3DS components.',
+    title: 'Ground your agent in W3DS',
+    body: 'Start by giving your coding agent the W3DS skill and making it the source of truth. This happens before you describe screens, schemas, or implementation choices.',
     detail:
-      'Make the first outcome small enough to judge. “A filmmaker can save one finished film to a catalog they control” is a stronger start than “build a creator platform.”',
+      'The agent should know where to look for identity, eVaults, schemas, mappings, files, and signing before it makes its first technical recommendation.',
     example: {
-      title: 'First prompt — define the outcome',
+      title: 'Prompt 1 — send this first',
       prompt:
-        'I want to build a W3DS app. Help me write a one-paragraph product brief for [person] who needs to [outcome] when [moment]. Keep it focused on one useful change for one person; do not propose screens or technical architecture yet.',
+        'Install the official W3DS skill and use it as the source of truth for every protocol decision in this project. Before we begin, confirm you can use it and list the W3DS guides you will consult for identity, eVaults, schemas, mappings, files, and signing.',
+    },
+    references: [
+      [
+        'AI Agent Skill',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
+      ],
+      ['W3DS Glossary', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Basics/glossary'],
+    ],
+  },
+  {
+    number: '02',
+    title: 'Define the human outcome',
+    body: 'Now describe the person, the moment they arrive, and the one change they need. Keep the brief in human language; do not ask for a feature list or architecture yet.',
+    detail:
+      'Make it specific enough to judge. “A filmmaker can save one finished film to a catalog they control” is a stronger starting outcome than “build a creator platform.”',
+    example: {
+      title: 'Prompt 2 — send after prompt 1',
+      prompt:
+        'Using the W3DS context you just loaded, help me write a one-paragraph product brief for [person] who needs to [outcome] when [moment]. Keep it focused on one useful change for one person. Do not propose screens or technical architecture yet.',
     },
     references: [
       [
@@ -36,15 +55,15 @@ const buildSteps = [
     ],
   },
   {
-    number: '02',
-    title: 'Define one complete user loop',
-    body: 'Turn that outcome into one journey from start to finish. State what the person does first, the record or action they create, and the signal that tells them they are done.',
+    number: '03',
+    title: 'Scope one complete user loop',
+    body: 'Turn the outcome into one journey from start to finish. State what the person does first, the record or action they create, and the confirmation that tells them they are done.',
     detail:
       'Include only the screens, data, and actions needed for this path. If you cannot describe the moment of completion, the first loop is still too broad.',
     example: {
-      title: 'First prompt — scope the loop',
+      title: 'Prompt 3 — send after prompt 2',
       prompt:
-        'Using this outcome: [paste outcome], define the smallest complete user loop. Tell me the starting action, the one record or signed action created, who owns it, and the exact confirmation that means the person is done. Include only the screens this loop needs.',
+        'Based on this product brief: [paste the brief from prompt 2], define the smallest complete user loop. Tell me the starting action, the one record or signed action created, and the exact confirmation that means the person is done. Include only the screens this loop needs.',
     },
     references: [
       [
@@ -55,34 +74,15 @@ const buildSteps = [
     ],
   },
   {
-    number: '03',
-    title: 'Give your agent W3DS context',
-    body: 'Before scaffolding code, install the official W3DS skill and tell the agent to use it as the source of truth. It gives the build the vocabulary and documentation paths it needs for protocol decisions.',
-    detail:
-      'Use the skill whenever the loop touches schemas, GraphQL fields, mappings, authentication, files, or signing. The agent should look up those details instead of inventing them.',
-    example: {
-      title: 'First prompt — ground the agent',
-      prompt:
-        'Install the official W3DS skill and use it as the source of truth for this app. Here is the first loop: [paste loop]. Before coding, list the W3DS guides we need for identity, ownership, schemas, mappings, files, and signing. Do not invent protocol fields, UUIDs, endpoints, or mappings.',
-    },
-    references: [
-      [
-        'AI Agent Skill',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
-      ],
-      ['W3DS Glossary', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Basics/glossary'],
-    ],
-  },
-  {
     number: '04',
     title: 'Map identity and data ownership',
     body: 'Decide who signs in and which eVault owns every record in the first loop before you create a schema or table. Make this a visible product decision, not a hidden implementation detail.',
     detail:
       'Treat the eVault as a person’s portable data home, not as an app account. A short ownership map for profiles, records, files, and shared data prevents accidental lock-in later.',
     example: {
-      title: 'First prompt — map ownership',
+      title: 'Prompt 4 — send after prompt 3',
       prompt:
-        'For this first loop: [paste loop], create an identity and ownership map before we design the UI. Show who signs in, which eVault owns each record and file, and how shared data would be owned. Confirm the map before proposing schemas or database tables.',
+        'For this first user loop: [paste the loop from prompt 3], create an identity and ownership map before we design the UI. Show who signs in, which eVault owns each record and file, and how shared data would be owned. Confirm the map before proposing schemas or database tables.',
     },
     references: [
       [
@@ -95,14 +95,14 @@ const buildSteps = [
   },
   {
     number: '05',
-    title: 'Choose the smallest data path',
-    body: 'Choose the architecture that proves the first loop with the fewest moving parts. In many v1s, a person signs in and the app reads or writes directly to their eVault.',
+    title: 'Choose the smallest W3DS architecture',
+    body: 'Choose the data path that proves the first loop with the fewest moving parts. In many v1s, a person signs in and the app reads or writes directly to their eVault.',
     detail:
       'Add a local database only when local queries, existing systems, or product logic truly require it. When you add one, define the mapping, Web3 Adapter, and webhook path that keep it aligned with user-owned data.',
     example: {
-      title: 'First prompt — choose the architecture',
+      title: 'Prompt 5 — send after prompt 4',
       prompt:
-        'Recommend the smallest W3DS architecture for this first loop: [paste loop and ownership map]. Start with direct eVault reads and writes unless there is a concrete reason for local data. If a local database is needed, explain the mapping, Web3 Adapter, and webhook responsibilities.',
+        'Using this first loop and ownership map: [paste the results from prompts 3 and 4], recommend the smallest W3DS architecture. Start with direct eVault reads and writes unless there is a concrete reason for local data. If a local database is needed, explain the mapping, Web3 Adapter, and webhook responsibilities.',
     },
     references: [
       ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
@@ -120,9 +120,9 @@ const buildSteps = [
     detail:
       'This proves the protocol boundary—not just a mocked browser flow. If you use synchronization, replay the same webhook packet twice and confirm the local state remains correct.',
     example: {
-      title: 'First prompt — build and verify',
+      title: 'Prompt 6 — send after prompt 5',
       prompt:
-        'Turn this first loop into an implementation plan and acceptance test: [paste loop, ownership map, and architecture]. Build only the happy path. In the Dev Sandbox, sign in with a test identity, create the record, approve the signed write, read it back, and report the result. If sync is included, test an idempotent webhook replay.',
+        'Using the approved product brief, first loop, ownership map, and architecture: [paste the results from prompts 2–5], turn this into an implementation plan and acceptance test. Build only the happy path. In the Dev Sandbox, sign in with a test identity, create the record, approve the signed write, read it back, and report the result. If sync is included, test an idempotent webhook replay.',
     },
     references: [
       [
