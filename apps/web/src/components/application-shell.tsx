@@ -17,6 +17,7 @@ const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
   { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
   { label: 'Library', href: '/library', icon: '▣' },
+  { label: 'Meshenger', href: '/meshenger', icon: '◌' },
   { label: 'Upload', href: '/upload', icon: '⇪' },
   { label: 'Settings', href: '/settings', icon: '⚙' },
 ];
