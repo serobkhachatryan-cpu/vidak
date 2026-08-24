@@ -85,6 +85,7 @@ describe('Meshenger video library', () => {
         expect.objectContaining({ kind: 'file', title: 'A shared clip.mp4' }),
       ]));
       expect(JSON.stringify(videos)).not.toContain('https://');
+      expect(fetcher.mock.calls.some(([, init]) => String((init as RequestInit | undefined)?.body).includes('$ontologyId: ID!'))).toBe(true);
       expect(fetcher).toHaveBeenCalledWith(
         expect.objectContaining({ pathname: '/platforms/certification' }),
         expect.objectContaining({ body: JSON.stringify({ platform: 'vidak' }) }),

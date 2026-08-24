@@ -59,7 +59,7 @@ interface DiscoveredVideo {
   createdAt?: string | undefined;
 }
 
-const listQuery = `query MeshengerVideos($ontologyId: String!, $first: Int!, $after: String) {
+const listQuery = `query MeshengerVideos($ontologyId: ID!, $first: Int!, $after: String) {
   metaEnvelopes(filter: { ontologyId: $ontologyId }, first: $first, after: $after) {
     edges { node { id ontology parsed } }
     pageInfo { hasNextPage endCursor }
