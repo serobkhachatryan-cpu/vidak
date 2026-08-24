@@ -119,4 +119,30 @@ describe('Meshenger video library', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('reuses a resolved media URL for repeated byte-range requests from the same signed grant', async () => {
+    const cachedGrant = {
+      eName: '@cache-test.w3id',
+      fileUri: 'w3ds://file?id=@vault.w3id/cache-file',
+      expiresAt: Date.now() + 60_000,
+    };
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') return json({ ename: '@vault.w3id', uri: 'https://vault.example' });
+      if (url.pathname === '/platforms/certification') return json({ token: 'registry-platform-token' });
+      return json({ data: { metaEnvelope: {
+        id: 'cache-file', ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', parsed: { publicUrl: 'https://media.example/video.mp4' },
+      } } });
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const library = configuredLibrary();
+      const streamId = createMeshengerVideoStreamId(cachedGrant, secret);
+      await expect(library.resolveMediaUrl({ eName: cachedGrant.eName }, streamId)).resolves.toBe('https://media.example/video.mp4');
+      await expect(library.resolveMediaUrl({ eName: cachedGrant.eName }, streamId)).resolves.toBe('https://media.example/video.mp4');
+      expect(fetcher).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

@@ -12,6 +12,7 @@ const maxPages = 30;
 const retryBudgetMs = 8_000;
 const requestTimeoutMs = 12_000;
 const streamLifetimeMs = 15 * 60 * 1000;
+const maxCachedMediaUrls = 256;
 
 export type MeshengerVideoKind = 'call-recording' | 'video-message' | 'file';
 
@@ -49,6 +50,7 @@ type RecordValue = Record<string, unknown>;
 interface Envelope { id: string; ontology: string; parsed: RecordValue }
 interface StreamGrant { eName: string; fileUri: string; expiresAt: number }
 interface Config { registryBaseUrl: string; platformName: string; signingSecret: string }
+interface CachedMediaUrl { url: string; expiresAt: number }
 interface DiscoveredVideo {
   key: string;
   fileUri: string;
@@ -66,6 +68,7 @@ const listQuery = `query MeshengerVideos($ontologyId: ID!, $first: Int!, $after:
   }
 }`;
 const readQuery = `query MeshengerVideoEnvelope($id: ID!) { metaEnvelope(id: $id) { id ontology parsed } }`;
+const cachedMediaUrls = new Map<string, CachedMediaUrl>();
 
 /**
  * Read-only Meshenger source. It indexes envelope references and metadata only;
@@ -159,13 +162,19 @@ export class MeshengerVideoLibrary {
     if (grant.eName !== requireEName(user.eName)) {
       throw new MeshengerVideoLibraryError('This video is not available to this account.', 'invalid_stream', 403);
     }
+    const cacheKey = `${grant.eName}\u0000${grant.fileUri}`;
+    const cached = cachedMediaUrls.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.url;
+    if (cached) cachedMediaUrls.delete(cacheKey);
     const file = parseW3dsFileUri(grant.fileUri);
     if (!file) invalidStream();
     const eVaultUri = await this.resolveEVault(file.ownerEName);
     const envelope = await this.readEnvelope(file.ownerEName, eVaultUri, file.metaEnvelopeId);
     const url = optionalString(envelope.parsed.publicUrl) ?? optionalString(envelope.parsed.url);
     if (!url) throw new MeshengerVideoLibraryError('The video file is unavailable.', 'remote_rejected', 404);
-    return safeMediaUrl(url);
+    const mediaUrl = safeMediaUrl(url);
+    cacheMediaUrl(cacheKey, mediaUrl, grant.expiresAt);
+    return mediaUrl;
   }
 
   private async resolveCall(userEName: string, userEVaultUri: string, source: Envelope): Promise<Envelope | undefined> {
@@ -323,6 +332,13 @@ function requireEName(value: string): string { if (!isEName(value)) throw new Me
 function invalidStream(): never { throw new MeshengerVideoLibraryError('The video link is invalid.', 'invalid_stream', 401); }
 function participated(payload: RecordValue, eName: string): boolean { return asArray(payload.participants).some((item) => item === eName) || payload.initiator === eName; }
 function delay(ms: number): Promise<void> { return new Promise((resolve) => setTimeout(resolve, ms)); }
+function cacheMediaUrl(key: string, url: string, expiresAt: number): void {
+  const now = Date.now();
+  for (const [cachedKey, cached] of cachedMediaUrls) {
+    if (cached.expiresAt <= now || cachedMediaUrls.size >= maxCachedMediaUrls) cachedMediaUrls.delete(cachedKey);
+  }
+  cachedMediaUrls.set(key, { url, expiresAt });
+}
 function retryAfterMs(value: string | null): number | undefined { if (!value || !/^\d+$/.test(value.trim())) return undefined; const ms = Number(value) * 1000; return Number.isFinite(ms) && ms >= 0 ? ms : undefined; }
 function httpUrl(value: string): string { try { const url = new URL(value); if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) throw new Error(); return url.toString(); } catch { throw new MeshengerVideoLibraryError('The W3DS video source is misconfigured.', 'not_configured', 503); } }
 function safeMediaUrl(value: string): string {
