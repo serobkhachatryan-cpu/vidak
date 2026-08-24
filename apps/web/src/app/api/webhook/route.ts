@@ -10,7 +10,6 @@ import { type NextRequest, NextResponse } from 'next/server';
 import 'server-only';
 import { CORRELATION_HEADER, resolveCorrelationId } from '../../../server/ops-observability';
 import { resolveW3dsAwarenessAdmission } from '../../../server/w3ds-awareness-admission';
-import type { W3dsAwarenessReceiptStore } from '../../../server/w3ds-awareness-receipts';
 import {
   createDefaultAwarenessChannelProjection,
   createDefaultAwarenessReceiptStore,
@@ -20,16 +19,9 @@ import {
   resolveAwarenessWebhookConfig,
   W3DS_AAAS_SIGNATURE_HEADER,
 } from '../../../server/w3ds-awareness-webhook';
+import { getAwarenessWebhookReceiptStoreForTests } from '../../../server/w3ds-awareness-webhook-test-control';
 
 export const runtime = 'nodejs';
-
-let testReceiptStore: W3dsAwarenessReceiptStore | undefined;
-
-export function setAwarenessWebhookReceiptStoreForTests(
-  store: W3dsAwarenessReceiptStore | undefined,
-): void {
-  testReceiptStore = store;
-}
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   const correlationId = resolveCorrelationId(request.headers);
@@ -37,6 +29,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const config = resolveAwarenessWebhookConfig();
 
   try {
+    const testReceiptStore = getAwarenessWebhookReceiptStoreForTests();
     const result = await handleAwarenessWebhookRequest({
       rawBody,
       signatureHeader: request.headers.get(W3DS_AAAS_SIGNATURE_HEADER),

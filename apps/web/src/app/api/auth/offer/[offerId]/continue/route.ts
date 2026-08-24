@@ -4,11 +4,8 @@ import {
   buildCookieHandoffHtml,
   getSafeReturnTo,
 } from '../../../../../../features/auth/auth-session-handoff';
-import {
-  loadServerSecurityConfig,
-  resolveRequestCookieSecure,
-  type ServerSecurityConfig,
-} from '../../../../../../server/server-config';
+import { resolvePublicOrigin } from '../../../../../../server/public-origin';
+import { resolveRequestCookieSecure } from '../../../../../../server/server-config';
 import {
   applyW3dsSessionCookies,
   getW3dsAuthService,
@@ -17,19 +14,12 @@ import {
 
 export const runtime = 'nodejs';
 
-export function resolveContinuePublicOrigin(
-  request: Request,
-  config: Pick<ServerSecurityConfig, 'trustedOrigins'> = loadServerSecurityConfig(),
-): string {
-  return config.trustedOrigins[0] ?? new URL(request.url).origin;
-}
-
 function loginRedirect(
   request: Request,
   offerId: string | undefined,
   returnTo: string,
 ): NextResponse {
-  const url = new URL('/login', resolveContinuePublicOrigin(request));
+  const url = new URL('/login', resolvePublicOrigin(request));
   url.searchParams.set('returnTo', returnTo);
   if (offerId) url.searchParams.set('offer', offerId);
   const response = NextResponse.redirect(url);

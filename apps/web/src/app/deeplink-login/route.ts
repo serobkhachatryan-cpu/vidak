@@ -4,25 +4,14 @@ import {
   buildCookieHandoffHtml,
 } from '../../features/auth/auth-session-handoff';
 import { normalizeEidAuthPayload } from '../../server/eid-auth-transport';
-import {
-  loadServerSecurityConfig,
-  resolveRequestCookieSecure,
-  type ServerSecurityConfig,
-} from '../../server/server-config';
+import { resolvePublicOrigin } from '../../server/public-origin';
+import { resolveRequestCookieSecure } from '../../server/server-config';
 import { applyW3dsSessionCookies, getW3dsAuthService } from '../../server/w3ds-auth';
 
 export const runtime = 'nodejs';
 
-/** Resolves an externally reachable target when Next.js is behind a proxy. */
-export function resolveDeeplinkPublicOrigin(
-  request: NextRequest,
-  config: Pick<ServerSecurityConfig, 'trustedOrigins'> = loadServerSecurityConfig(),
-): string {
-  return config.trustedOrigins[0] ?? request.nextUrl.origin;
-}
-
 function retryLoginResponse(request: NextRequest): NextResponse {
-  const url = new URL('/login', resolveDeeplinkPublicOrigin(request));
+  const url = new URL('/login', resolvePublicOrigin(request));
   url.searchParams.set('error', 'eid');
   const response = NextResponse.redirect(url);
   response.headers.set('Cache-Control', 'no-store');

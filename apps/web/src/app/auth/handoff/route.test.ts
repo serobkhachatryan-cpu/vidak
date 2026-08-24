@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildLoginPath } from '../../../features/auth/auth-session-handoff';
+import { resolvePublicOrigin } from '../../../server/public-origin';
 import * as w3dsAuth from '../../../server/w3ds-auth';
 import {
   InMemoryW3dsAuthStore,
@@ -10,7 +11,7 @@ import {
   type W3dsIdentityVerifier,
   w3dsAccessCookieName,
 } from '../../../server/w3ds-auth';
-import { GET as handoff, resolveHandoffPublicOrigin } from './route';
+import { GET as handoff } from './route';
 
 const verifiedIdentity: VerifiedW3dsIdentity = {
   eName: '@creator.w3id',
@@ -29,7 +30,7 @@ describe('auth handoff route', () => {
   it('uses the configured public origin behind the reverse proxy', () => {
     const request = new NextRequest('http://localhost:3910/auth/handoff?returnTo=/settings');
     expect(
-      resolveHandoffPublicOrigin(request, {
+      resolvePublicOrigin(request, {
         trustedOrigins: [appOrigin],
       }),
     ).toBe(appOrigin);

@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildAuthHandoffPath } from '../../../../../../features/auth/auth-session-handoff';
+import { resolvePublicOrigin } from '../../../../../../server/public-origin';
 import * as w3dsAuth from '../../../../../../server/w3ds-auth';
 import {
   InMemoryW3dsAuthStore,
@@ -13,7 +14,7 @@ import {
 import { GET as handoff } from '../../../../../auth/handoff/route';
 import { POST as completeOffer } from '../../../route';
 import { GET as getSession } from '../../../session/route';
-import { GET as continueOffer, resolveContinuePublicOrigin } from './route';
+import { GET as continueOffer } from './route';
 
 const verifiedIdentity: VerifiedW3dsIdentity = {
   eName: '@creator.w3id',
@@ -34,7 +35,7 @@ describe('W3DS auth offer continuation route', () => {
     const request = new Request('http://localhost:3910/api/auth/offer/example/continue');
 
     expect(
-      resolveContinuePublicOrigin(request, {
+      resolvePublicOrigin(request, {
         trustedOrigins: [appOrigin],
       }),
     ).toBe(appOrigin);

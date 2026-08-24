@@ -10,7 +10,8 @@ import {
   InMemoryW3dsAwarenessReceiptStore,
   type W3dsAwarenessReceiptStore,
 } from '../../../server/w3ds-awareness-receipts';
-import { POST, setAwarenessWebhookReceiptStoreForTests } from './route';
+import { setAwarenessWebhookReceiptStoreForTests } from '../../../server/w3ds-awareness-webhook-test-control';
+import { POST } from './route';
 
 vi.mock('server-only', () => ({}));
 

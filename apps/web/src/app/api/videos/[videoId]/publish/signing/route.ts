@@ -1,9 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
+import { resolvePublicOrigin } from '../../../../../../server/public-origin';
 import { assertTrustedMutationOrigin } from '../../../../../../server/request-security';
-import {
-  loadServerSecurityConfig,
-  type ServerSecurityConfig,
-} from '../../../../../../server/server-config';
 import {
   getBearerToken,
   W3dsAuthError,
@@ -20,13 +17,6 @@ type RouteContext = { params: Promise<{ videoId: string }> };
 
 function accessTokenFrom(request: NextRequest): string | undefined {
   return getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
-}
-
-export function resolveSigningPublicOrigin(
-  request: NextRequest,
-  config: Pick<ServerSecurityConfig, 'trustedOrigins'> = loadServerSecurityConfig(),
-): string {
-  return config.trustedOrigins[0] ?? request.nextUrl.origin;
 }
 
 function errorResponse(error: unknown): NextResponse {
@@ -58,7 +48,7 @@ export async function POST(request: NextRequest, context: RouteContext) {
     const offer = await getW3dsVideoPublicationSigningService().createOffer({
       accessToken,
       videoId,
-      publicBaseUrl: resolveSigningPublicOrigin(request),
+      publicBaseUrl: resolvePublicOrigin(request),
     });
     return NextResponse.json(offer, {
       headers: { 'Cache-Control': 'no-store' },
