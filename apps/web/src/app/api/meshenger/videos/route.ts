@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     if (!accessToken)
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const session = await getW3dsAuthService().getSession(accessToken);
-    return privateJson({ items: await createMeshengerVideoLibrary().list(session.user) });
+    return privateJson(await createMeshengerVideoLibrary().listWithContext(session.user));
   } catch (error) {
     return privateJson(errorBody(error), errorStatus(error));
   }

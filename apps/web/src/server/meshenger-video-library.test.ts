@@ -159,10 +159,14 @@ describe('Meshenger video library', () => {
     const firstSegment = 'w3ds://file?id=@group.w3id/call-part-1';
     const secondSegment = 'w3ds://file?id=@group.w3id/call-part-2';
     const groupCircle = 'w3ds://file?id=@group.w3id/circle-1';
+    const memberCircle = 'w3ds://file?id=@person.w3id/circle-2';
     const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
       if (url.pathname === '/platforms/certification')
         return json({ token: 'registry-platform-token' });
       if (url.pathname === '/resolve') {
+        if (url.searchParams.get('w3id') === '@person.w3id') {
+          return json({ ename: '@person.w3id', uri: 'https://person-vault.example' });
+        }
         expect(url.searchParams.get('w3id')).toBe('@group.w3id');
         return json({ ename: '@group.w3id', uri: 'https://group-vault.example' });
       }
@@ -246,6 +250,33 @@ describe('Meshenger video library', () => {
         });
       }
       if (
+        url.hostname === 'person-vault.example' &&
+        body.variables.ontologyId === '550e8400-e29b-41d4-a716-446655440004'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'member-circle-message',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      chatId: 'chat-1',
+                      type: 'circle',
+                      mediaUri: memberCircle,
+                      content: 'Member update',
+                      createdAt: '2026-08-24T10:30:00.000Z',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
         url.hostname === 'group-vault.example' &&
         body.variables.ontologyId === '550e8400-e29b-41d4-a716-446655440004'
       ) {
@@ -304,11 +335,12 @@ describe('Meshenger video library', () => {
     vi.stubGlobal('fetch', fetcher);
 
     try {
-      const videos = await configuredLibrary().list({
+      const workspace = await configuredLibrary().listWithContext({
         eName: '@person.w3id',
         eVaultUri: 'https://person-vault.example',
       });
-      expect(videos).toHaveLength(3);
+      const videos = workspace.items;
+      expect(videos).toHaveLength(4);
       const call = videos.find((video) => video.kind === 'call-recording');
       expect(call).toEqual(
         expect.objectContaining({
@@ -333,6 +365,36 @@ describe('Meshenger video library', () => {
           expect.objectContaining({ kind: 'file', title: 'Planning demo.mp4' }),
         ]),
       );
+      expect(workspace.conversations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'group',
+            title: 'Meshenger group',
+            role: 'participant',
+          }),
+        ]),
+      );
+      expect(workspace.messages).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'circle',
+            content: 'Team update',
+            chatId: 'chat-1',
+          }),
+        ]),
+      );
+      expect(
+        fetcher.mock.calls.some(([url, init]) => {
+          if ((url as URL).hostname !== 'person-vault.example') return false;
+          const body = JSON.parse(String((init as RequestInit).body)) as {
+            query: string;
+            variables: { chatId?: string };
+          };
+          return (
+            body.query.includes('MeshengerChatMessages') && body.variables.chatId === 'chat-1'
+          );
+        }),
+      ).toBe(true);
       expect(
         fetcher.mock.calls.some(([url, init]) => {
           if ((url as URL).pathname !== '/graphql') return false;
