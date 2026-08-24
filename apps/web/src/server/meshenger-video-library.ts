@@ -120,49 +120,9 @@ export class MeshengerVideoLibrary {
       calls,
       referenced,
     });
-    found.push(...(await this.discoverGroupCallVideos(eName, chatReferences, referenced)));
-
-    for (const message of messages) {
-      if (optionalString(message.parsed.type) !== 'video') continue;
-      const fileUri = optionalString(message.parsed.fileId);
-      if (!fileUri || !parseW3dsFileUri(fileUri)) continue;
-      referenced.add(fileUri);
-      const file = record(message.parsed.file);
-      found.push({
-        key: `message:${message.id}:${fileUri}`,
-        fileUris: [fileUri],
-        kind: 'video-message',
-        title:
-          optionalString(file?.name) ?? optionalString(file?.filename) ?? 'Meshenger video message',
-        ...(number(message.parsed.durationSec) !== undefined
-          ? { durationSeconds: number(message.parsed.durationSec) }
-          : {}),
-        ...(optionalString(message.parsed.shape)
-          ? { shape: optionalString(message.parsed.shape) }
-          : {}),
-        ...(optionalString(message.parsed.createdAt)
-          ? { createdAt: optionalString(message.parsed.createdAt) }
-          : {}),
-      });
-    }
-
-    for (const file of files) {
-      const contentType =
-        optionalString(file.parsed.contentType) ?? optionalString(file.parsed.mimeType);
-      if (!contentType?.toLowerCase().startsWith('video/')) continue;
-      const fileUri = optionalString(file.parsed.uri) ?? `w3ds://file?id=${eName}/${file.id}`;
-      if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
-      found.push({
-        key: `file:${file.id}:${fileUri}`,
-        fileUris: [fileUri],
-        kind: 'file',
-        title:
-          optionalString(file.parsed.filename) ?? optionalString(file.parsed.name) ?? 'Video file',
-        ...(optionalString(file.parsed.createdAt)
-          ? { createdAt: optionalString(file.parsed.createdAt) }
-          : {}),
-      });
-    }
+    found.push(...this.discoverMessageVideos(messages, referenced));
+    found.push(...this.discoverFileVideos(eName, files, referenced));
+    found.push(...(await this.discoverGroupVideos(eName, chatReferences, referenced)));
 
     const unique = new Map<string, MeshengerVideo>();
     for (const item of found) {
@@ -230,42 +190,55 @@ export class MeshengerVideoLibrary {
   }
 
   /**
-   * A call is hosted by the group's vault. Members discover that vault through
-   * their own thin Chat references; CallSession itself is not fanned out to a
-   * participant's personal vault.
+   * Group calls are only one of the ways Meshenger shares video. The same
+   * trusted chat-reference chain also grants access to that group's video
+   * messages, circles, and ordinary video File envelopes. Read each group
+   * once so multiple references cannot multiply eVault traffic or cards.
    */
-  private async discoverGroupCallVideos(
+  private async discoverGroupVideos(
     viewerEName: string,
     chatReferences: ChatReference[],
     referenced: Set<string>,
   ): Promise<DiscoveredVideo[]> {
-    const discovered: DiscoveredVideo[] = [];
+    const chatsByGroup = new Map<string, Set<string>>();
     for (const reference of chatReferences) {
+      const chatIds = chatsByGroup.get(reference.groupEName) ?? new Set<string>();
+      chatIds.add(reference.chatId);
+      chatsByGroup.set(reference.groupEName, chatIds);
+    }
+
+    const discovered: DiscoveredVideo[] = [];
+    for (const [groupEName, chatIds] of chatsByGroup) {
       try {
-        const groupEVaultUri = await this.resolveEVault(reference.groupEName);
+        const groupEVaultUri = await this.resolveEVault(groupEName);
         const manifests = await this.listEnvelopes(
-          reference.groupEName,
+          groupEName,
           groupEVaultUri,
           groupManifestOntology,
         );
         if (!manifests.some((manifest) => isCurrentGroupMember(manifest.parsed, viewerEName))) {
           continue;
         }
-        const calls = await this.listEnvelopes(
-          reference.groupEName,
-          groupEVaultUri,
-          callSessionOntology,
-        );
+        const calls = await this.listEnvelopes(groupEName, groupEVaultUri, callSessionOntology);
         discovered.push(
           ...(await this.discoverCallVideos({
             viewerEName,
-            sourceEName: reference.groupEName,
+            sourceEName: groupEName,
             sourceEVaultUri: groupEVaultUri,
             calls,
-            chatId: reference.chatId,
+            chatIds,
             referenced,
           })),
         );
+        const messages = await this.listEnvelopes(groupEName, groupEVaultUri, messageOntology);
+        discovered.push(
+          ...this.discoverMessageVideos(
+            messages.filter((message) => chatIds.has(optionalString(message.parsed.chatId) ?? '')),
+            referenced,
+          ),
+        );
+        const files = await this.listEnvelopes(groupEName, groupEVaultUri, fileOntology);
+        discovered.push(...this.discoverFileVideos(groupEName, files, referenced));
       } catch {
         // A stale chat reference or a group that no longer grants access must
         // not hide the rest of a person's Meshenger library.
@@ -280,6 +253,7 @@ export class MeshengerVideoLibrary {
     sourceEVaultUri,
     calls,
     chatId,
+    chatIds,
     referenced,
   }: {
     viewerEName: string;
@@ -287,13 +261,16 @@ export class MeshengerVideoLibrary {
     sourceEVaultUri: string;
     calls: Envelope[];
     chatId?: string;
+    chatIds?: ReadonlySet<string>;
     referenced: Set<string>;
   }): Promise<DiscoveredVideo[]> {
     const discovered: DiscoveredVideo[] = [];
     for (const source of calls) {
       const call = await this.resolveCall(sourceEName, sourceEVaultUri, source);
       if (!call || !participated(call.parsed, viewerEName)) continue;
-      if (chatId && optionalString(call.parsed.chatId) !== chatId) continue;
+      const callChatId = optionalString(call.parsed.chatId);
+      if (chatId && callChatId !== chatId) continue;
+      if (chatIds && (!callChatId || !chatIds.has(callChatId))) continue;
       const recording = record(call.parsed.recording);
       if (recording?.mediaIsVideo !== true) continue;
       const fileUris = orderedRecordingFileUris(recording);
@@ -308,6 +285,61 @@ export class MeshengerVideoLibrary {
         title: startedAt ? `Call recording · ${startedAt.slice(0, 10)}` : 'Call recording',
         ...(durationSeconds !== undefined ? { durationSeconds } : {}),
         ...(startedAt ? { createdAt: startedAt } : {}),
+      });
+    }
+    return discovered;
+  }
+
+  private discoverMessageVideos(messages: Envelope[], referenced: Set<string>): DiscoveredVideo[] {
+    const discovered: DiscoveredVideo[] = [];
+    for (const message of messages) {
+      const fileUris = messageVideoFileUris(message.parsed);
+      if (!fileUris.length) continue;
+      for (const fileUri of fileUris) referenced.add(fileUri);
+      const file = record(message.parsed.file);
+      const shape = optionalString(message.parsed.shape) ?? optionalString(message.parsed.type);
+      discovered.push({
+        key: `message:${message.id}:${fileUris.join(',')}`,
+        fileUris,
+        kind: 'video-message',
+        title:
+          optionalString(file?.name) ??
+          optionalString(file?.filename) ??
+          optionalString(message.parsed.content) ??
+          'Meshenger video message',
+        ...(number(message.parsed.durationSec) !== undefined
+          ? { durationSeconds: number(message.parsed.durationSec) }
+          : {}),
+        ...(shape ? { shape } : {}),
+        ...(optionalString(message.parsed.createdAt)
+          ? { createdAt: optionalString(message.parsed.createdAt) }
+          : {}),
+      });
+    }
+    return discovered;
+  }
+
+  private discoverFileVideos(
+    ownerEName: string,
+    files: Envelope[],
+    referenced: Set<string>,
+  ): DiscoveredVideo[] {
+    const discovered: DiscoveredVideo[] = [];
+    for (const file of files) {
+      const contentType =
+        optionalString(file.parsed.contentType) ?? optionalString(file.parsed.mimeType);
+      if (!contentType?.toLowerCase().startsWith('video/')) continue;
+      const fileUri = optionalString(file.parsed.uri) ?? `w3ds://file?id=${ownerEName}/${file.id}`;
+      if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
+      discovered.push({
+        key: `file:${ownerEName}:${file.id}:${fileUri}`,
+        fileUris: [fileUri],
+        kind: 'file',
+        title:
+          optionalString(file.parsed.filename) ?? optionalString(file.parsed.name) ?? 'Video file',
+        ...(optionalString(file.parsed.createdAt)
+          ? { createdAt: optionalString(file.parsed.createdAt) }
+          : {}),
       });
     }
     return discovered;
@@ -602,6 +634,31 @@ function orderedRecordingFileUris(recording: RecordValue): string[] {
   if (segments.length) return segments;
   const mediaUri = optionalString(recording.mediaUri);
   return mediaUri && parseW3dsFileUri(mediaUri) ? [mediaUri] : [];
+}
+function messageVideoFileUris(message: RecordValue): string[] {
+  const type = optionalString(message.type)?.toLowerCase();
+  const file = record(message.file);
+  const contentType =
+    optionalString(file?.contentType) ??
+    optionalString(file?.mimeType) ??
+    optionalString(message.contentType);
+  const hasVideoType = type === 'video' || type === 'circle';
+  const hasVideoFile = contentType?.toLowerCase().startsWith('video/') === true;
+  if (!hasVideoType && !hasVideoFile) return [];
+
+  const candidates = [
+    ...asArray(message.mediaSegments),
+    message.fileId,
+    message.mediaUri,
+    file?.uri,
+    file?.fileUri,
+  ];
+  const unique = new Set<string>();
+  for (const value of candidates) {
+    const fileUri = optionalString(value);
+    if (fileUri && parseW3dsFileUri(fileUri)) unique.add(fileUri);
+  }
+  return [...unique];
 }
 function parsePayload(value: unknown): RecordValue | undefined {
   if (record(value)) return record(value);

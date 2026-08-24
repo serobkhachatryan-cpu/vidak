@@ -158,6 +158,7 @@ describe('Meshenger video library', () => {
   it('discovers group-vault calls through chat references and keeps recording segments ordered', async () => {
     const firstSegment = 'w3ds://file?id=@group.w3id/call-part-1';
     const secondSegment = 'w3ds://file?id=@group.w3id/call-part-2';
+    const groupCircle = 'w3ds://file?id=@group.w3id/circle-1';
     const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
       if (url.pathname === '/platforms/certification')
         return json({ token: 'registry-platform-token' });
@@ -244,6 +245,58 @@ describe('Meshenger video library', () => {
           },
         });
       }
+      if (
+        url.hostname === 'group-vault.example' &&
+        body.variables.ontologyId === '550e8400-e29b-41d4-a716-446655440004'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'group-circle-message',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      chatId: 'chat-1',
+                      type: 'circle',
+                      mediaUri: groupCircle,
+                      content: 'Team update',
+                      createdAt: '2026-08-24T11:00:00.000Z',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'group-vault.example' &&
+        body.variables.ontologyId === 'a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'group-shared-video',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      contentType: 'video/mp4',
+                      filename: 'Planning demo.mp4',
+                      createdAt: '2026-08-24T12:00:00.000Z',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
       return json({
         data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
       });
@@ -255,8 +308,9 @@ describe('Meshenger video library', () => {
         eName: '@person.w3id',
         eVaultUri: 'https://person-vault.example',
       });
-      expect(videos).toHaveLength(1);
-      expect(videos[0]).toEqual(
+      expect(videos).toHaveLength(3);
+      const call = videos.find((video) => video.kind === 'call-recording');
+      expect(call).toEqual(
         expect.objectContaining({
           id: 'call:@group.w3id:group-call-1',
           kind: 'call-recording',
@@ -264,11 +318,21 @@ describe('Meshenger video library', () => {
         }),
       );
       expect(
-        videos[0]?.streamIds.map((streamId) => verifyMeshengerVideoStreamId(streamId, secret)),
+        call?.streamIds.map((streamId) => verifyMeshengerVideoStreamId(streamId, secret)),
       ).toEqual([
         expect.objectContaining({ fileUri: firstSegment, eName: '@person.w3id' }),
         expect.objectContaining({ fileUri: secondSegment, eName: '@person.w3id' }),
       ]);
+      expect(videos).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'video-message',
+            shape: 'circle',
+            title: 'Team update',
+          }),
+          expect.objectContaining({ kind: 'file', title: 'Planning demo.mp4' }),
+        ]),
+      );
       expect(
         fetcher.mock.calls.some(([url, init]) => {
           if ((url as URL).pathname !== '/graphql') return false;
