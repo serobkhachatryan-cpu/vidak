@@ -79,11 +79,11 @@ export class MeshengerVideoLibrary {
   async list(user: Pick<AuthUser, 'eName' | 'eVaultUri'>): Promise<MeshengerVideo[]> {
     const eName = requireEName(user.eName);
     const eVaultUri = user.eVaultUri ? httpUrl(user.eVaultUri) : await this.resolveEVault(eName);
-    const [calls, messages, files] = await Promise.all([
-      this.listEnvelopes(eName, eVaultUri, callSessionOntology),
-      this.listEnvelopes(eName, eVaultUri, messageOntology),
-      this.listEnvelopes(eName, eVaultUri, fileOntology),
-    ]);
+    // eVaults throttle bursts. Scan each source in order so a first historical
+    // import does not turn three independent reads into a simultaneous spike.
+    const calls = await this.listEnvelopes(eName, eVaultUri, callSessionOntology);
+    const messages = await this.listEnvelopes(eName, eVaultUri, messageOntology);
+    const files = await this.listEnvelopes(eName, eVaultUri, fileOntology);
     const referenced = new Set<string>();
     const found: DiscoveredVideo[] = [];
 
