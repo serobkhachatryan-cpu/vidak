@@ -5,13 +5,18 @@ import type { AuthUser } from '@w3ds/auth';
 import { parseW3dsFileUri } from './w3ds-official-file-client';
 
 const callSessionOntology = 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd';
+const groupManifestOntology = 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e';
+const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
 const messageOntology = '550e8400-e29b-41d4-a716-446655440004';
 const fileOntology = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 const pageSize = 100;
 const maxPages = 30;
 const retryBudgetMs = 8_000;
 const requestTimeoutMs = 12_000;
-const streamLifetimeMs = 15 * 60 * 1000;
+// Call recordings are stored as ~45-second files. A multi-hour recording must
+// remain playable through its final segment, while the authenticated stream
+// route still verifies the current user on every request.
+const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
 
 export type MeshengerVideoKind = 'call-recording' | 'video-message' | 'file';
@@ -23,8 +28,8 @@ export interface MeshengerVideo {
   durationSeconds?: number;
   shape?: string;
   createdAt?: string;
-  /** Opaque, signed, account-bound reference. Never a CDN URL. */
-  streamId: string;
+  /** Ordered, opaque, signed, account-bound references. Never CDN URLs. */
+  streamIds: string[];
 }
 
 export class MeshengerVideoLibraryError extends Error {
@@ -68,12 +73,16 @@ interface CachedMediaUrl {
 }
 interface DiscoveredVideo {
   key: string;
-  fileUri: string;
+  fileUris: string[];
   kind: MeshengerVideoKind;
   title: string;
   durationSeconds?: number | undefined;
   shape?: string | undefined;
   createdAt?: string | undefined;
+}
+interface ChatReference {
+  groupEName: string;
+  chatId: string;
 }
 
 const listQuery = `query MeshengerVideos($ontologyId: ID!, $first: Int!, $after: String) {
@@ -100,32 +109,18 @@ export class MeshengerVideoLibrary {
     // eVaults throttle bursts. Scan each source in order so a first historical
     // import does not turn three independent reads into a simultaneous spike.
     const calls = await this.listEnvelopes(eName, eVaultUri, callSessionOntology);
+    const chatReferences = await this.listChatReferences(eName, eVaultUri);
     const messages = await this.listEnvelopes(eName, eVaultUri, messageOntology);
     const files = await this.listEnvelopes(eName, eVaultUri, fileOntology);
     const referenced = new Set<string>();
-    const found: DiscoveredVideo[] = [];
-
-    for (const source of calls) {
-      const call = await this.resolveCall(eName, eVaultUri, source);
-      if (!call || !participated(call.parsed, eName)) continue;
-      const recording = record(call.parsed.recording);
-      if (recording?.mediaIsVideo !== true) continue;
-      const startedAt = optionalString(call.parsed.startedAt);
-      const durationSeconds = number(call.parsed.durationSec);
-      const uris = uniqueStrings([recording.mediaUri, ...asArray(recording.mediaSegments)]);
-      for (const fileUri of uris) {
-        if (!parseW3dsFileUri(fileUri)) continue;
-        referenced.add(fileUri);
-        found.push({
-          key: `call:${call.id}:${fileUri}`,
-          fileUri,
-          kind: 'call-recording',
-          title: startedAt ? `Call recording · ${startedAt.slice(0, 10)}` : 'Call recording',
-          ...(durationSeconds !== undefined ? { durationSeconds } : {}),
-          ...(startedAt ? { createdAt: startedAt } : {}),
-        });
-      }
-    }
+    const found = await this.discoverCallVideos({
+      viewerEName: eName,
+      sourceEName: eName,
+      sourceEVaultUri: eVaultUri,
+      calls,
+      referenced,
+    });
+    found.push(...(await this.discoverGroupCallVideos(eName, chatReferences, referenced)));
 
     for (const message of messages) {
       if (optionalString(message.parsed.type) !== 'video') continue;
@@ -135,7 +130,7 @@ export class MeshengerVideoLibrary {
       const file = record(message.parsed.file);
       found.push({
         key: `message:${message.id}:${fileUri}`,
-        fileUri,
+        fileUris: [fileUri],
         kind: 'video-message',
         title:
           optionalString(file?.name) ?? optionalString(file?.filename) ?? 'Meshenger video message',
@@ -159,7 +154,7 @@ export class MeshengerVideoLibrary {
       if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
       found.push({
         key: `file:${file.id}:${fileUri}`,
-        fileUri,
+        fileUris: [fileUri],
         kind: 'file',
         title:
           optionalString(file.parsed.filename) ?? optionalString(file.parsed.name) ?? 'Video file',
@@ -179,9 +174,11 @@ export class MeshengerVideoLibrary {
         ...(item.durationSeconds !== undefined ? { durationSeconds: item.durationSeconds } : {}),
         ...(item.shape ? { shape: item.shape } : {}),
         ...(item.createdAt ? { createdAt: item.createdAt } : {}),
-        streamId: createMeshengerVideoStreamId(
-          { eName, fileUri: item.fileUri, expiresAt: Date.now() + streamLifetimeMs },
-          this.config.signingSecret,
+        streamIds: item.fileUris.map((fileUri) =>
+          createMeshengerVideoStreamId(
+            { eName, fileUri, expiresAt: Date.now() + streamLifetimeMs },
+            this.config.signingSecret,
+          ),
         ),
       });
     }
@@ -220,16 +217,110 @@ export class MeshengerVideoLibrary {
   }
 
   private async resolveCall(
-    userEName: string,
-    userEVaultUri: string,
+    sourceEName: string,
+    sourceEVaultUri: string,
     source: Envelope,
   ): Promise<Envelope | undefined> {
     if (source.parsed.isReference !== true) return source;
     const owner = optionalString(source.parsed.canonicalOwnerEName);
     const id = optionalString(source.parsed.canonicalEnvelopeId);
     if (!owner || !id || !isEName(owner)) return undefined;
-    const eVaultUri = owner === userEName ? userEVaultUri : await this.resolveEVault(owner);
+    const eVaultUri = owner === sourceEName ? sourceEVaultUri : await this.resolveEVault(owner);
     return this.readEnvelope(owner, eVaultUri, id);
+  }
+
+  /**
+   * A call is hosted by the group's vault. Members discover that vault through
+   * their own thin Chat references; CallSession itself is not fanned out to a
+   * participant's personal vault.
+   */
+  private async discoverGroupCallVideos(
+    viewerEName: string,
+    chatReferences: ChatReference[],
+    referenced: Set<string>,
+  ): Promise<DiscoveredVideo[]> {
+    const discovered: DiscoveredVideo[] = [];
+    for (const reference of chatReferences) {
+      try {
+        const groupEVaultUri = await this.resolveEVault(reference.groupEName);
+        const manifests = await this.listEnvelopes(
+          reference.groupEName,
+          groupEVaultUri,
+          groupManifestOntology,
+        );
+        if (!manifests.some((manifest) => isCurrentGroupMember(manifest.parsed, viewerEName))) {
+          continue;
+        }
+        const calls = await this.listEnvelopes(
+          reference.groupEName,
+          groupEVaultUri,
+          callSessionOntology,
+        );
+        discovered.push(
+          ...(await this.discoverCallVideos({
+            viewerEName,
+            sourceEName: reference.groupEName,
+            sourceEVaultUri: groupEVaultUri,
+            calls,
+            chatId: reference.chatId,
+            referenced,
+          })),
+        );
+      } catch {
+        // A stale chat reference or a group that no longer grants access must
+        // not hide the rest of a person's Meshenger library.
+      }
+    }
+    return discovered;
+  }
+
+  private async discoverCallVideos({
+    viewerEName,
+    sourceEName,
+    sourceEVaultUri,
+    calls,
+    chatId,
+    referenced,
+  }: {
+    viewerEName: string;
+    sourceEName: string;
+    sourceEVaultUri: string;
+    calls: Envelope[];
+    chatId?: string;
+    referenced: Set<string>;
+  }): Promise<DiscoveredVideo[]> {
+    const discovered: DiscoveredVideo[] = [];
+    for (const source of calls) {
+      const call = await this.resolveCall(sourceEName, sourceEVaultUri, source);
+      if (!call || !participated(call.parsed, viewerEName)) continue;
+      if (chatId && optionalString(call.parsed.chatId) !== chatId) continue;
+      const recording = record(call.parsed.recording);
+      if (recording?.mediaIsVideo !== true) continue;
+      const fileUris = orderedRecordingFileUris(recording);
+      if (!fileUris.length) continue;
+      for (const fileUri of fileUris) referenced.add(fileUri);
+      const startedAt = optionalString(call.parsed.startedAt);
+      const durationSeconds = number(call.parsed.durationSec);
+      discovered.push({
+        key: `call:${sourceEName}:${call.id}`,
+        fileUris,
+        kind: 'call-recording',
+        title: startedAt ? `Call recording · ${startedAt.slice(0, 10)}` : 'Call recording',
+        ...(durationSeconds !== undefined ? { durationSeconds } : {}),
+        ...(startedAt ? { createdAt: startedAt } : {}),
+      });
+    }
+    return discovered;
+  }
+
+  private async listChatReferences(owner: string, eVaultUri: string): Promise<ChatReference[]> {
+    const references = await this.listEnvelopes(owner, eVaultUri, chatOntology);
+    const unique = new Map<string, ChatReference>();
+    for (const envelope of references) {
+      const reference = chatReference(envelope.parsed);
+      if (reference) unique.set(`${reference.groupEName}\u0000${reference.chatId}`, reference);
+    }
+    return [...unique.values()];
   }
 
   private async listEnvelopes(
@@ -490,12 +581,27 @@ function number(value: unknown): number | undefined {
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
-function uniqueStrings(values: unknown[]): string[] {
-  return [
-    ...new Set(
-      values.flatMap((item) => (typeof item === 'string' && item.trim() ? [item.trim()] : [])),
-    ),
-  ];
+function chatReference(payload: RecordValue): ChatReference | undefined {
+  if (payload.isReference !== true) return undefined;
+  const groupEName = optionalString(payload.canonicalOwnerEName);
+  const chatId = optionalString(payload.canonicalChatId);
+  if (!groupEName || !chatId || !isEName(groupEName)) return undefined;
+  return { groupEName, chatId };
+}
+function isCurrentGroupMember(payload: RecordValue, eName: string): boolean {
+  return (
+    optionalString(payload.owner) === eName ||
+    asArray(payload.admins).some((member) => member === eName) ||
+    asArray(payload.members).some((member) => member === eName)
+  );
+}
+function orderedRecordingFileUris(recording: RecordValue): string[] {
+  const segments = asArray(recording.mediaSegments)
+    .map(optionalString)
+    .filter((fileUri): fileUri is string => Boolean(fileUri && parseW3dsFileUri(fileUri)));
+  if (segments.length) return segments;
+  const mediaUri = optionalString(recording.mediaUri);
+  return mediaUri && parseW3dsFileUri(mediaUri) ? [mediaUri] : [];
 }
 function parsePayload(value: unknown): RecordValue | undefined {
   if (record(value)) return record(value);

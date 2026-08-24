@@ -1,7 +1,7 @@
 'use client';
 
 import { Button, EmptyState, ErrorState, Page, Spinner } from '@w3ds/ui';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 
 type LibraryVideo = {
@@ -11,7 +11,7 @@ type LibraryVideo = {
   durationSeconds?: number;
   shape?: string;
   createdAt?: string;
-  streamId: string;
+  streamIds: string[];
 };
 
 type LibraryState =
@@ -78,13 +78,7 @@ export function MeshengerVideoLibraryPage() {
                 key={video.id}
                 className="overflow-hidden rounded-xl border border-border bg-surface-raised"
               >
-                {/* biome-ignore lint/a11y/useMediaCaption: Historical source recordings do not include caption tracks. */}
-                <video
-                  className="aspect-video w-full bg-black"
-                  controls
-                  preload="metadata"
-                  src={`/api/meshenger/videos/${encodeURIComponent(video.streamId)}`}
-                />
+                <SegmentedVideoPlayer video={video} />
                 <div className="space-y-1 p-4">
                   <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                     {label(video)}
@@ -98,6 +92,56 @@ export function MeshengerVideoLibraryPage() {
         )}
       </Page>
     </ApplicationShell>
+  );
+}
+
+function SegmentedVideoPlayer({ video }: { video: LibraryVideo }) {
+  const [segmentIndex, setSegmentIndex] = useState(0);
+  const continuePlayback = useRef(false);
+  const player = useRef<HTMLVideoElement>(null);
+  const streamId = video.streamIds[segmentIndex] ?? video.streamIds[0];
+
+  useEffect(() => {
+    setSegmentIndex(0);
+    continuePlayback.current = false;
+  }, [video.id]);
+
+  if (!streamId) return null;
+
+  const nextSegment = () => {
+    if (segmentIndex >= video.streamIds.length - 1) return;
+    continuePlayback.current = true;
+    setSegmentIndex((current) => current + 1);
+  };
+
+  const resumeWhenReady = () => {
+    if (!continuePlayback.current) return;
+    continuePlayback.current = false;
+    void player.current?.play().catch(() => {
+      // Browser autoplay rules may require the viewer to press play again.
+    });
+  };
+
+  return (
+    <>
+      {/* biome-ignore lint/a11y/useMediaCaption: Historical source recordings do not include caption tracks. */}
+      <video
+        key={streamId}
+        ref={player}
+        aria-label={video.title}
+        className="aspect-video w-full bg-black"
+        controls
+        preload="metadata"
+        src={`/api/meshenger/videos/${encodeURIComponent(streamId)}`}
+        onCanPlay={resumeWhenReady}
+        onEnded={nextSegment}
+      />
+      {video.streamIds.length > 1 ? (
+        <p className="px-4 pt-3 text-xs text-muted-foreground" aria-live="polite">
+          Recording part {segmentIndex + 1} of {video.streamIds.length} · continues automatically
+        </p>
+      ) : null}
+    </>
   );
 }
 

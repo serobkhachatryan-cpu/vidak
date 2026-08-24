@@ -149,7 +149,139 @@ describe('Meshenger video library', () => {
         const init = call[1] as RequestInit | undefined;
         return new Headers(init?.headers).get('Authorization') === 'Bearer registry-platform-token';
       });
-      expect(authenticatedRequests).toHaveLength(3);
+      expect(authenticatedRequests).toHaveLength(4);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('discovers group-vault calls through chat references and keeps recording segments ordered', async () => {
+    const firstSegment = 'w3ds://file?id=@group.w3id/call-part-1';
+    const secondSegment = 'w3ds://file?id=@group.w3id/call-part-2';
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.pathname === '/resolve') {
+        expect(url.searchParams.get('w3id')).toBe('@group.w3id');
+        return json({ ename: '@group.w3id', uri: 'https://group-vault.example' });
+      }
+      const body = JSON.parse(String(init.body)) as { variables: { ontologyId: string } };
+      if (
+        url.hostname === 'person-vault.example' &&
+        body.variables.ontologyId === '550e8400-e29b-41d4-a716-446655440003'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'chat-reference-1',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: '@group.w3id',
+                      canonicalChatId: 'chat-1',
+                      type: 'group',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'group-vault.example' &&
+        body.variables.ontologyId === 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'manifest-1',
+                    ontology: body.variables.ontologyId,
+                    parsed: { owner: '@group.w3id', members: ['@person.w3id'] },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'group-vault.example' &&
+        body.variables.ontologyId === 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'group-call-1',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      chatId: 'chat-1',
+                      participants: ['@person.w3id'],
+                      startedAt: '2026-08-24T10:00:00.000Z',
+                      durationSec: 90,
+                      recording: {
+                        mediaIsVideo: true,
+                        mediaUri: firstSegment,
+                        mediaSegments: [firstSegment, secondSegment],
+                      },
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const videos = await configuredLibrary().list({
+        eName: '@person.w3id',
+        eVaultUri: 'https://person-vault.example',
+      });
+      expect(videos).toHaveLength(1);
+      expect(videos[0]).toEqual(
+        expect.objectContaining({
+          id: 'call:@group.w3id:group-call-1',
+          kind: 'call-recording',
+          durationSeconds: 90,
+        }),
+      );
+      expect(
+        videos[0]?.streamIds.map((streamId) => verifyMeshengerVideoStreamId(streamId, secret)),
+      ).toEqual([
+        expect.objectContaining({ fileUri: firstSegment, eName: '@person.w3id' }),
+        expect.objectContaining({ fileUri: secondSegment, eName: '@person.w3id' }),
+      ]);
+      expect(
+        fetcher.mock.calls.some(([url, init]) => {
+          if ((url as URL).pathname !== '/graphql') return false;
+          const body = JSON.parse(String((init as RequestInit).body)) as {
+            variables: { ontologyId: string };
+          };
+          return (
+            (url as URL).hostname === 'group-vault.example' &&
+            body.variables.ontologyId === 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd' &&
+            new Headers((init as RequestInit).headers).get('X-ENAME') === '@group.w3id'
+          );
+        }),
+      ).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }
