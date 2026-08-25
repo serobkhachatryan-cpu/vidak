@@ -324,9 +324,7 @@ export class MeshengerVideoLibrary {
           for (const authorEName of messageSources) {
             try {
               const authorEVaultUri =
-                authorEName === groupEName
-                  ? groupEVaultUri
-                  : await this.resolveEVault(authorEName);
+                authorEName === groupEName ? groupEVaultUri : await this.resolveEVault(authorEName);
               const authorMessages = await this.listMessagesForChat(
                 authorEName,
                 authorEVaultUri,
@@ -526,16 +524,6 @@ export class MeshengerVideoLibrary {
       });
     }
     return discovered;
-  }
-
-  private async listChatReferences(owner: string, eVaultUri: string): Promise<ChatReference[]> {
-    const references = await this.listEnvelopes(owner, eVaultUri, chatOntology);
-    const unique = new Map<string, ChatReference>();
-    for (const envelope of references) {
-      const reference = chatReference(envelope.parsed);
-      if (reference) unique.set(`${reference.groupEName}\u0000${reference.chatId}`, reference);
-    }
-    return [...unique.values()];
   }
 
   private async listEnvelopes(

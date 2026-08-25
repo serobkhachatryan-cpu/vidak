@@ -34,7 +34,12 @@ type LibraryMessage = {
 
 type LibraryState =
   | { status: 'loading' }
-  | { status: 'ready'; items: LibraryVideo[]; conversations: LibraryConversation[]; messages: LibraryMessage[] }
+  | {
+      status: 'ready';
+      items: LibraryVideo[];
+      conversations: LibraryConversation[];
+      messages: LibraryMessage[];
+    }
   | { status: 'error'; message: string };
 
 export function MeshengerVideoLibraryPage() {
@@ -95,12 +100,17 @@ export function MeshengerVideoLibraryPage() {
               {state.conversations.length ? (
                 <div className="grid gap-3 sm:grid-cols-2">
                   {state.conversations.map((conversation) => (
-                    <article key={conversation.id} className="rounded-xl border border-border bg-surface-raised p-4">
+                    <article
+                      key={conversation.id}
+                      className="rounded-xl border border-border bg-surface-raised p-4"
+                    >
                       <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                         {conversation.kind === 'group' ? 'Group' : 'Personal chat'}
                       </p>
                       <h3 className="mt-1 font-semibold text-foreground">{conversation.title}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">{conversationDetails(conversation)}</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        {conversationDetails(conversation)}
+                      </p>
                     </article>
                   ))}
                 </div>
@@ -112,8 +122,12 @@ export function MeshengerVideoLibraryPage() {
             </section>
             <section aria-labelledby="meshenger-messages" className="space-y-3">
               <div>
-                <h2 id="meshenger-messages" className="text-lg font-semibold text-foreground">Latest messages</h2>
-                <p className="text-sm text-muted-foreground">Your 12 most recent authorized Meshenger messages.</p>
+                <h2 id="meshenger-messages" className="text-lg font-semibold text-foreground">
+                  Latest messages
+                </h2>
+                <p className="text-sm text-muted-foreground">
+                  Your 12 most recent authorized Meshenger messages.
+                </p>
               </div>
               <MessageList messages={state.messages} />
             </section>
@@ -251,7 +265,9 @@ function conversationDetails(conversation: LibraryConversation): string {
   const values = [
     conversation.participantCount ? `${conversation.participantCount} people` : undefined,
     conversation.role,
-    conversation.updatedAt ? `Updated ${new Date(conversation.updatedAt).toLocaleDateString()}` : undefined,
+    conversation.updatedAt
+      ? `Updated ${new Date(conversation.updatedAt).toLocaleDateString()}`
+      : undefined,
   ].filter(Boolean);
   return values.join(' · ') || 'Meshenger';
 }

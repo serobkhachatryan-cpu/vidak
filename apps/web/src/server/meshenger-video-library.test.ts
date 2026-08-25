@@ -390,9 +390,7 @@ describe('Meshenger video library', () => {
             query: string;
             variables: { chatId?: string };
           };
-          return (
-            body.query.includes('MeshengerChatMessages') && body.variables.chatId === 'chat-1'
-          );
+          return body.query.includes('MeshengerChatMessages') && body.variables.chatId === 'chat-1';
         }),
       ).toBe(true);
       expect(
