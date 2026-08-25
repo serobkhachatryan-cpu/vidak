@@ -10,6 +10,7 @@ export const CORRELATION_HEADER = 'x-request-id';
 export const CORRELATION_HEADER_ALT = 'x-correlation-id';
 
 export type OperationalFailureCategory =
+  | 'support'
   | 'authentication'
   | 'media_storage'
   | 'migration_readiness'

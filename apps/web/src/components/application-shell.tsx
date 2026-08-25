@@ -16,6 +16,7 @@ import { useAppearancePreference } from '../features/settings/appearance-prefere
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
   { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
+  { label: 'Support', href: '/support', icon: '⚑' },
   { label: 'Library', href: '/library', icon: '▣' },
   { label: 'Meshenger', href: '/meshenger', icon: '◌' },
   { label: 'Upload', href: '/upload', icon: '⇪' },
@@ -169,6 +170,9 @@ export function ApplicationShell({
               {!isLoading &&
                 (user ? (
                   <>
+                    <Button size="sm" variant="ghost" onClick={() => router.push('/support')}>
+                      Report a problem
+                    </Button>
                     <Button size="sm" variant="secondary" onClick={() => router.push('/upload')}>
                       Upload
                     </Button>

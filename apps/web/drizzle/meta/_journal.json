@@ -85,6 +85,13 @@
       "when": 1785882000000,
       "tag": "0011_awareness_receipt_payload_hash",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1785883800000,
+      "tag": "0012_support_tasks",
+      "breakpoints": true
     }
   ]
 }

@@ -465,12 +465,59 @@ export const w3dsVideoPublicationSigningSessions = pgTable(
   ],
 );
 
-export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
-export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
-export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
+/**
+ * A private, user-submitted product-support report. Report contents are never
+ * written to operational logs, copied to a public tracker, or exposed through
+ * a public API. Technical diagnostics are stored only after explicit consent.
+ */
+export const supportReports = pgTable(
+  'support_reports',
+  {
+    id: text('id').primaryKey(),
+    reporterId: text('reporter_id')
+      .notNull()
+      .references(() => w3dsPlatformUsers.id, { onDelete: 'cascade' }),
+    description: text('description').notNull(),
+    technicalDiagnostics: jsonb('technical_diagnostics').$type<Record<string, unknown>>(),
+    diagnosticsConsent: boolean('diagnostics_consent').notNull().default(false),
+    automatedAnalysisConsent: boolean('automated_analysis_consent').notNull().default(false),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('support_reports_reporter_created_idx').on(table.reporterId, table.createdAt)],
+);
+
+/**
+ * Internal engineering work created only when a reporter gives explicit
+ * automated-analysis consent. This is Vidak's private queue, not a public
+ * GitHub issue or an externally visible W3DS record.
+ */
+export type SupportTaskStatus = 'queued' | 'in_progress' | 'resolved' | 'needs_more_info';
+
+export const supportTasks = pgTable(
+  'support_tasks',
+  {
+    id: text('id').primaryKey(),
+    reportId: text('report_id')
+      .notNull()
+      .references(() => supportReports.id, { onDelete: 'cascade' })
+      .unique(),
+    status: text('status').$type<SupportTaskStatus>().notNull(),
+    analysisAttemptCount: integer('analysis_attempt_count').notNull().default(0),
+    lastAnalyzedAt: timestamp('last_analyzed_at', { withTimezone: true, mode: 'date' }),
+    resolutionSummary: text('resolution_summary'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('support_tasks_status_created_idx').on(table.status, table.createdAt)],
+);
+
 export type W3dsPlatformSessionRow = typeof w3dsPlatformSessions.$inferSelect;
 export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
 export type VideoRow = typeof videos.$inferSelect;
+export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
+export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
+export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;
 export type MediaAssetRow = typeof mediaAssets.$inferSelect;
 export type W3dsAuthorizationSyncRow = typeof w3dsAuthorizationSync.$inferSelect;
 export type W3dsAdapterMappingRow = typeof w3dsAdapterMappings.$inferSelect;
@@ -480,3 +527,5 @@ export type W3dsOfficialAdapterOutboxRow = typeof w3dsOfficialAdapterOutbox.$inf
 export type W3dsAwarenessReceiptRow = typeof w3dsAwarenessReceipts.$inferSelect;
 export type W3dsVideoPublicationSigningSessionRow =
   typeof w3dsVideoPublicationSigningSessions.$inferSelect;
+export type SupportReportRow = typeof supportReports.$inferSelect;
+export type SupportTaskRow = typeof supportTasks.$inferSelect;
