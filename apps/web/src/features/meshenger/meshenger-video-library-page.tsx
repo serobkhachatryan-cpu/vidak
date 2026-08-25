@@ -3,6 +3,7 @@
 import { Button, EmptyState, ErrorState, Page, Spinner } from '@w3ds/ui';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
+import { elapsedRecordingDuration, totalRecordingDuration } from './segmented-playback';
 
 type LibraryVideo = {
   id: string;
@@ -155,7 +156,7 @@ export function MeshengerVideoLibraryPage() {
                 key={video.id}
                 className="overflow-hidden rounded-xl border border-border bg-surface-raised"
               >
-                <SegmentedVideoPlayer video={video} />
+                <SegmentedVideoPlayer video={video} onRefresh={() => void load()} />
                 <div className="space-y-1 p-4">
                   <p className="text-xs font-semibold uppercase tracking-wide text-primary">
                     {label(video)}
@@ -172,14 +173,32 @@ export function MeshengerVideoLibraryPage() {
   );
 }
 
-function SegmentedVideoPlayer({ video }: { video: LibraryVideo }) {
+function SegmentedVideoPlayer({
+  video,
+  onRefresh,
+}: {
+  video: LibraryVideo;
+  onRefresh: () => void;
+}) {
   const [segmentIndex, setSegmentIndex] = useState(0);
+  const [currentSegmentSeconds, setCurrentSegmentSeconds] = useState(0);
+  const [segmentDurations, setSegmentDurations] = useState<Array<number | undefined>>([]);
+  const [playbackFailed, setPlaybackFailed] = useState(false);
   const continuePlayback = useRef(false);
   const player = useRef<HTMLVideoElement>(null);
   const streamId = video.streamIds[segmentIndex] ?? video.streamIds[0];
+  const totalDuration = totalRecordingDuration(video.durationSeconds, segmentDurations);
+  const elapsedDuration = elapsedRecordingDuration(
+    segmentIndex,
+    currentSegmentSeconds,
+    segmentDurations,
+  );
 
   useEffect(() => {
     setSegmentIndex(0);
+    setCurrentSegmentSeconds(0);
+    setSegmentDurations([]);
+    setPlaybackFailed(false);
     continuePlayback.current = false;
   }, [video.id]);
 
@@ -187,8 +206,27 @@ function SegmentedVideoPlayer({ video }: { video: LibraryVideo }) {
 
   const nextSegment = () => {
     if (segmentIndex >= video.streamIds.length - 1) return;
+    setCurrentSegmentSeconds(0);
     continuePlayback.current = true;
     setSegmentIndex((current) => current + 1);
+  };
+
+  const rememberSegmentDuration = () => {
+    const duration = player.current?.duration;
+    if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) return;
+    setSegmentDurations((current) => {
+      if (current[segmentIndex] === duration) return current;
+      const next = [...current];
+      next[segmentIndex] = duration;
+      return next;
+    });
+  };
+
+  const updatePlaybackPosition = () => {
+    const position = player.current?.currentTime;
+    if (typeof position === 'number' && Number.isFinite(position) && position >= 0) {
+      setCurrentSegmentSeconds(position);
+    }
   };
 
   const resumeWhenReady = () => {
@@ -211,12 +249,40 @@ function SegmentedVideoPlayer({ video }: { video: LibraryVideo }) {
         preload="metadata"
         src={`/api/meshenger/videos/${encodeURIComponent(streamId)}`}
         onCanPlay={resumeWhenReady}
+        onLoadedMetadata={rememberSegmentDuration}
+        onTimeUpdate={updatePlaybackPosition}
         onEnded={nextSegment}
+        onError={() => setPlaybackFailed(true)}
       />
       {video.streamIds.length > 1 ? (
-        <p className="px-4 pt-3 text-xs text-muted-foreground" aria-live="polite">
-          Recording part {segmentIndex + 1} of {video.streamIds.length} · continues automatically
-        </p>
+        <div className="space-y-1 px-4 pt-3 text-xs text-muted-foreground" aria-live="polite">
+          <p>
+            One call recording · part {segmentIndex + 1} of {video.streamIds.length} · continues
+            automatically
+          </p>
+          {totalDuration !== undefined ? (
+            <p>
+              Call progress {formatDuration(Math.min(elapsedDuration, totalDuration))} /{' '}
+              {formatDuration(totalDuration)}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {playbackFailed ? (
+        <div
+          className="m-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3"
+          role="alert"
+        >
+          <p className="text-sm font-medium text-foreground">
+            This recording part could not be loaded.
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Refresh the library to renew the private playback link, then try again.
+          </p>
+          <Button className="mt-3" variant="secondary" onClick={onRefresh}>
+            Refresh library
+          </Button>
+        </div>
       ) : null}
     </>
   );
