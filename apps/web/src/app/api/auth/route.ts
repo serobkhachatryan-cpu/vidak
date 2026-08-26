@@ -34,12 +34,18 @@ export function OPTIONS(): NextResponse {
 export async function POST(request: NextRequest) {
   try {
     const input = normalizeEidAuthPayload(await request.json());
-    await getW3dsAuthService().completeOffer(input);
+    const service = getW3dsAuthService();
+    const offerId = await service.completeOffer(input);
+    const session = await service.getOfferSessionForCookie(offerId);
+    const token = session.tokens.accessToken;
+    if (!token) {
+      throw new W3dsAuthError('Authentication session is unavailable.', 'invalid_session', 401);
+    }
 
-    // The current eID Wallet transport only requires a successful response.
-    // The browser that initiated the offer receives its cookies through the
-    // same-origin offer continuation route, never through this cross-origin call.
-    return walletJson({ ok: true });
+    // The eID Wallet authentication transport expects a platform token after
+    // it verifies the signed session. The browser still receives its own
+    // HttpOnly cookies through the same-origin offer continuation route.
+    return walletJson({ token });
   } catch (error) {
     if (error instanceof W3dsAuthError) {
       return walletJson(

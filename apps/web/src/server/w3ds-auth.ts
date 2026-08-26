@@ -857,13 +857,11 @@ async function importW3dsPublicKey(encodedKey: string): Promise<CryptoKey> {
 }
 
 function decodeSignature(signature: string): Uint8Array {
-  // Software wallet signatures are base64 and may legitimately begin with
-  // `z`. Prefer a valid base64 form before treating that prefix as multibase.
   let base64: Uint8Array | undefined;
   try {
     base64 = decodeBase64(signature);
   } catch {
-    // A base58 or explicitly prefixed encoding is handled below.
+    // A multibase or explicitly prefixed encoding is handled below.
   }
 
   let base58: Uint8Array | undefined;
@@ -878,14 +876,26 @@ function decodeSignature(signature: string): Uint8Array {
     }
   }
 
-  if (base58 && looksLikeDerEcdsaSignature(base58)) return base58;
-  if (base64 && looksLikeDerEcdsaSignature(base64)) return base64;
-  if (base64) return base64;
-  if (base58) return base58;
-
-  if (signature.startsWith('m')) return decodeBase64(signature.slice(1));
-  if (signature.startsWith('f')) return hexDecode(signature.slice(1));
+  // Hardware eID Wallets identify raw P-256 signatures with a z multibase
+  // prefix. Its base58 body also matches the base64 character class, so check
+  // the explicit multibase form first instead of silently decoding different
+  // bytes as base64.
+  if (base58 && isSupportedEcdsaSignature(base58)) return base58;
+  if (base64 && isSupportedEcdsaSignature(base64)) return base64;
+  if (signature.startsWith('m'))
+    return requireSupportedEcdsaSignature(decodeBase64(signature.slice(1)));
+  if (signature.startsWith('f'))
+    return requireSupportedEcdsaSignature(hexDecode(signature.slice(1)));
   throw new Error('Unsupported signature encoding.');
+}
+
+function isSupportedEcdsaSignature(bytes: Uint8Array): boolean {
+  return bytes.length === 64 || looksLikeDerEcdsaSignature(bytes);
+}
+
+function requireSupportedEcdsaSignature(bytes: Uint8Array): Uint8Array {
+  if (!isSupportedEcdsaSignature(bytes)) throw new Error('Unsupported signature encoding.');
+  return bytes;
 }
 
 function decodeMultibase(value: string): Uint8Array {

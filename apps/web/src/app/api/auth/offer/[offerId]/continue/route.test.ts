@@ -127,7 +127,7 @@ describe('W3DS auth offer continuation route', () => {
     );
     expect(walletApproval.status).toBe(200);
     expect(walletApproval.headers.getSetCookie()).toEqual([]);
-    await expect(walletApproval.json()).resolves.toEqual({ ok: true });
+    await expect(walletApproval.json()).resolves.toMatchObject({ token: expect.any(String) });
 
     const continueResponse = await continueOffer(
       new Request(`${proxyOrigin}/api/auth/offer/${offerId}/continue?returnTo=/settings`),

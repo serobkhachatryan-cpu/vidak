@@ -26,7 +26,10 @@ describe('eID authentication gateway route', () => {
 
   it('normalizes the wallet ename payload before completing a signed offer', async () => {
     const completeOffer = vi.fn().mockResolvedValue('offer-1');
-    mocks.getW3dsAuthService.mockReturnValue({ completeOffer });
+    const getOfferSessionForCookie = vi.fn().mockResolvedValue({
+      tokens: { accessToken: 'wallet-access-token' },
+    });
+    mocks.getW3dsAuthService.mockReturnValue({ completeOffer, getOfferSessionForCookie });
 
     const response = await POST(
       new NextRequest('https://vidak.example/api/auth', {
@@ -41,7 +44,7 @@ describe('eID authentication gateway route', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual({ ok: true });
+    await expect(response.json()).resolves.toEqual({ token: 'wallet-access-token' });
     expect(response.headers.get('Access-Control-Allow-Origin')).toBe('*');
     expect(completeOffer).toHaveBeenCalledWith({
       w3id: '@creator.w3id',
@@ -49,5 +52,6 @@ describe('eID authentication gateway route', () => {
       signature: 'signature-1',
       appVersion: '0.4.0',
     });
+    expect(getOfferSessionForCookie).toHaveBeenCalledWith('offer-1');
   });
 });
