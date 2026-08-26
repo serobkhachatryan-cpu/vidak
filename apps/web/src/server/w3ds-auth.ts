@@ -35,7 +35,7 @@ const encoder = new TextEncoder();
 const accessTokenLifetimeSeconds = 15 * 60;
 const refreshTokenLifetimeSeconds = 7 * 24 * 60 * 60;
 const defaultOfferLifetimeMs = 5 * 60 * 1000;
-const requestTimeoutMs = 5_000;
+const requestTimeoutMs = 10_000;
 
 export const w3dsAccessCookieName = 'w3ds_access';
 export const w3dsRefreshCookieName = 'w3ds_refresh';
@@ -584,10 +584,15 @@ export class RegistryW3dsIdentityVerifier implements W3dsIdentityVerifier {
     if (registry.eName !== input.eName) {
       throw new W3dsAuthError('Identity verification failed.', 'invalid_signature', 401);
     }
-    const certificates = parseWhoisResponse(
-      await getJson(new URL('/whois', registry.eVaultUri), { 'X-ENAME': input.eName }),
-    );
-    const jwks = parseJwks(await getJson(new URL('/.well-known/jwks.json', this.registryBaseUrl)));
+    // Once the Registry has resolved the eVault, these independent reads can
+    // run together. This shortens the wallet approval window without relaxing
+    // certificate or signature verification.
+    const [whoisResponse, jwksResponse] = await Promise.all([
+      getJson(new URL('/whois', registry.eVaultUri), { 'X-ENAME': input.eName }),
+      getJson(new URL('/.well-known/jwks.json', this.registryBaseUrl)),
+    ]);
+    const certificates = parseWhoisResponse(whoisResponse);
+    const jwks = parseJwks(jwksResponse);
     // eVaults retain historical key bindings. A stale or malformed record must
     // not prevent a current, Registry-attested key from verifying this login.
     const certificateResults = await Promise.allSettled(
