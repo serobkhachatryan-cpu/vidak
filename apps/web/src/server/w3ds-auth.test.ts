@@ -541,6 +541,13 @@ describe('W3dsAuthService', () => {
           signature: `z${base58Encode(new Uint8Array(signature))}`,
         }),
       ).resolves.toEqual(verifiedIdentity);
+      await expect(
+        verifier.verify({
+          eName: '@creator.w3id',
+          session,
+          signature: `z${base58Encode(rawEcdsaToDer(new Uint8Array(signature)))}`,
+        }),
+      ).resolves.toEqual(verifiedIdentity);
       useRawHexPublicKey = true;
       await expect(
         verifier.verify({
