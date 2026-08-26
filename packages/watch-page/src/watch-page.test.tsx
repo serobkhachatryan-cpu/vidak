@@ -113,8 +113,12 @@ describe('WatchPage', () => {
     expect(markup).toContain('/api/videos/public/pub_design-system/media');
     expect(markup).toContain('<video');
     expect(markup).toContain('controls');
-    expect(markup).toContain('data-testid="video-quality-select"');
+    expect(markup).toContain('data-testid="video-quality-menu-toggle"');
     expect(markup).toContain('Video quality');
+    expect(markup).toContain('Auto');
+    expect(markup).toContain('2160p');
+    expect(markup).toContain('4K');
+    expect(markup).toContain('Not available');
     expect(markup).toContain('Original · MP4');
     expect(markup).not.toContain('This video has no playable media.');
     expect(markup).not.toMatch(/storageKey|drafts\//);
@@ -150,8 +154,9 @@ describe('WatchPage', () => {
       />,
     );
 
-    expect(markup).toContain('720p · MP4');
-    expect(markup).toContain('480p · MP4');
+    expect(markup).toContain('720p');
+    expect(markup).toContain('480p');
+    expect(markup).toContain('HD');
     expect(markup).toContain('/api/videos/public/pub_design-system/media?quality=720p');
   });
 

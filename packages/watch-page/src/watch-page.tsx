@@ -30,7 +30,6 @@ import {
   ErrorState,
   Heading,
   Page,
-  Select,
   Skeleton,
   Tag,
   Text,
@@ -148,6 +147,141 @@ function formatQualityLabel(rendition: VideoMediaRendition): string {
   return [rendition.label, contentType].filter(Boolean).join(' · ');
 }
 
+const qualityTiers = [
+  { id: '2160p', label: '2160p', badge: '4K' },
+  { id: '1440p', label: '1440p', badge: '2K' },
+  { id: '1080p', label: '1080p', badge: 'HD' },
+  { id: '720p', label: '720p', badge: 'HD' },
+  { id: '480p', label: '480p' },
+  { id: '360p', label: '360p' },
+  { id: '240p', label: '240p' },
+  { id: '144p', label: '144p' },
+] as const;
+
+type QualityTierId = (typeof qualityTiers)[number]['id'];
+
+function qualityTierFor(rendition: VideoMediaRendition): QualityTierId | undefined {
+  if (rendition.height) {
+    const tier = qualityTiers.find(
+      (candidate) => Number.parseInt(candidate.id, 10) === rendition.height,
+    );
+    if (tier) return tier.id;
+  }
+
+  const match = `${rendition.id} ${rendition.label}`.match(
+    /\b(2160|1440|1080|720|480|360|240|144)p\b/i,
+  );
+  if (match?.[1]) return `${match[1]}p` as QualityTierId;
+  return /\b4k\b/i.test(`${rendition.id} ${rendition.label}`) ? '2160p' : undefined;
+}
+
+function VideoQualityMenu({
+  qualityOptions,
+  selectedQualityId,
+  onQualityChange,
+}: {
+  qualityOptions: readonly VideoMediaRendition[];
+  selectedQualityId: string;
+  onQualityChange: (qualityId: string) => void;
+}) {
+  const automaticQuality =
+    qualityOptions.find((rendition) => rendition.isDefault) ?? qualityOptions[0];
+  if (!automaticQuality) return null;
+
+  const selectedQuality =
+    selectedQualityId === 'auto'
+      ? automaticQuality
+      : (qualityOptions.find((rendition) => rendition.id === selectedQualityId) ??
+        automaticQuality);
+  const qualityByTier = new Map<QualityTierId, VideoMediaRendition>();
+  for (const rendition of qualityOptions) {
+    const tierId = qualityTierFor(rendition);
+    if (tierId && !qualityByTier.has(tierId)) qualityByTier.set(tierId, rendition);
+  }
+  const ungroupedOptions = qualityOptions.filter((rendition) => !qualityTierFor(rendition));
+  const chooseQuality = (qualityId: string, target: HTMLElement) => {
+    onQualityChange(qualityId);
+    target.closest('details')?.removeAttribute('open');
+  };
+
+  return (
+    <details className="absolute top-3 right-3 z-10">
+      <summary
+        aria-label="Video quality"
+        className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-md bg-black/80 px-3 font-sans text-xs font-semibold text-white shadow-sm backdrop-blur hover:bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white [&::-webkit-details-marker]:hidden"
+        data-testid="video-quality-menu-toggle"
+      >
+        <span>Quality</span>
+        <span className="text-white/70">
+          {selectedQualityId === 'auto' ? 'Auto' : formatQualityLabel(selectedQuality)}
+        </span>
+      </summary>
+      <div
+        role="menu"
+        className="absolute top-11 right-0 w-56 overflow-hidden rounded-lg bg-zinc-800 py-1 text-sm text-white shadow-xl ring-1 ring-white/15"
+        data-testid="video-quality-menu"
+      >
+        <p className="border-b border-white/15 px-4 py-3 font-sans text-sm font-semibold">
+          Quality
+        </p>
+        <button
+          type="button"
+          role="menuitemradio"
+          aria-checked={selectedQualityId === 'auto'}
+          onClick={(event) => chooseQuality('auto', event.currentTarget)}
+          className={cx(
+            'flex w-full items-center justify-between px-4 py-3 text-left font-sans hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white',
+            selectedQualityId === 'auto' && 'bg-white/15',
+          )}
+        >
+          <span>Auto</span>
+          <span className="text-xs text-white/60">Default</span>
+        </button>
+        <hr className="my-1 border-white/10" />
+        {qualityTiers.map((tier) => {
+          const rendition = qualityByTier.get(tier.id);
+          const isSelected = rendition?.id === selectedQuality.id && selectedQualityId !== 'auto';
+          return (
+            <button
+              key={tier.id}
+              type="button"
+              role="menuitemradio"
+              aria-checked={isSelected}
+              disabled={!rendition}
+              onClick={
+                rendition ? (event) => chooseQuality(rendition.id, event.currentTarget) : undefined
+              }
+              className={cx(
+                'flex w-full items-center justify-between px-4 py-3 text-left font-sans focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white',
+                rendition ? 'hover:bg-white/10' : 'cursor-not-allowed text-white/35',
+                isSelected && 'bg-white/15',
+              )}
+            >
+              <span>{tier.label}</span>
+              <span className="text-xs text-white/60">
+                {rendition ? ('badge' in tier ? tier.badge : 'Available') : 'Not available'}
+              </span>
+            </button>
+          );
+        })}
+        {ungroupedOptions.map((rendition) => (
+          <button
+            key={rendition.id}
+            type="button"
+            role="menuitemradio"
+            aria-checked={rendition.id === selectedQuality.id && selectedQualityId !== 'auto'}
+            onClick={(event) => chooseQuality(rendition.id, event.currentTarget)}
+            className="flex w-full items-center justify-between px-4 py-3 text-left font-sans hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white"
+          >
+            <span>{formatQualityLabel(rendition)}</span>
+            <span className="text-xs text-white/60">Original</span>
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function VideoPlayer({
   title,
   mediaSrc,
@@ -161,54 +295,69 @@ function VideoPlayer({
     () => buildQualityOptions(mediaSrc, mediaRenditions),
     [mediaSrc, mediaRenditions],
   );
-  const defaultQualityId =
-    qualityOptions.find((rendition) => rendition.isDefault)?.id ?? qualityOptions[0]?.id ?? '';
-  const [selectedQualityId, setSelectedQualityId] = useState(defaultQualityId);
+  const automaticQuality =
+    qualityOptions.find((rendition) => rendition.isDefault) ?? qualityOptions[0];
+  const [selectedQualityId, setSelectedQualityId] = useState('auto');
+  const [measuredQualityHeights, setMeasuredQualityHeights] = useState<Record<string, number>>({});
+  const qualityOptionsForMenu = useMemo(
+    () =>
+      qualityOptions.map((rendition) => {
+        const height = measuredQualityHeights[rendition.id];
+        return height ? { ...rendition, height } : rendition;
+      }),
+    [measuredQualityHeights, qualityOptions],
+  );
 
   useEffect(() => {
-    if (!qualityOptions.some((rendition) => rendition.id === selectedQualityId)) {
-      setSelectedQualityId(defaultQualityId);
+    if (
+      selectedQualityId !== 'auto' &&
+      !qualityOptions.some((rendition) => rendition.id === selectedQualityId)
+    ) {
+      setSelectedQualityId('auto');
     }
-  }, [defaultQualityId, qualityOptions, selectedQualityId]);
+  }, [qualityOptions, selectedQualityId]);
 
   const selectedQuality =
-    qualityOptions.find((rendition) => rendition.id === selectedQualityId) ?? qualityOptions[0];
+    selectedQualityId === 'auto'
+      ? automaticQuality
+      : (qualityOptions.find((rendition) => rendition.id === selectedQualityId) ??
+        automaticQuality);
   const selectedMediaSrc = selectedQuality?.mediaContentUrl ?? mediaSrc;
 
   if (selectedMediaSrc) {
     return (
       <section
         aria-label={`Video player for ${title}`}
-        className="relative aspect-video overflow-hidden rounded-xl bg-black text-white shadow-sm"
+        className="relative aspect-video rounded-xl bg-black text-white shadow-sm"
       >
-        <video
-          key={selectedMediaSrc}
-          className="h-full w-full"
-          controls
-          playsInline
-          preload="metadata"
-          src={selectedMediaSrc}
-          data-testid="public-video-player"
-        >
-          <track kind="captions" />
-        </video>
+        <div className="absolute inset-0 overflow-hidden rounded-xl">
+          <video
+            key={selectedMediaSrc}
+            className="h-full w-full"
+            controls
+            playsInline
+            preload="metadata"
+            src={selectedMediaSrc}
+            onLoadedMetadata={(event) => {
+              const height = event.currentTarget.videoHeight;
+              if (!height || !selectedQuality) return;
+              setMeasuredQualityHeights((current) =>
+                current[selectedQuality.id] === height
+                  ? current
+                  : { ...current, [selectedQuality.id]: height },
+              );
+            }}
+            data-testid="public-video-player"
+          >
+            <track kind="captions" />
+          </video>
+        </div>
         {qualityOptions.length > 0 && (
-          <div className="absolute top-3 right-3 flex items-center gap-2 rounded-md bg-black/75 p-2 shadow-sm backdrop-blur">
-            <span className="font-sans text-xs font-semibold text-white/80">Quality</span>
-            <Select
-              aria-label="Video quality"
-              value={selectedQuality?.id ?? ''}
-              onChange={(event) => setSelectedQualityId(event.currentTarget.value)}
-              className="h-8 w-auto border-white/20 bg-black/85 px-2 py-0 text-xs text-white hover:border-white/40"
-              data-testid="video-quality-select"
-            >
-              {qualityOptions.map((rendition) => (
-                <option key={rendition.id} value={rendition.id}>
-                  {formatQualityLabel(rendition)}
-                </option>
-              ))}
-            </Select>
-          </div>
+          <VideoQualityMenu
+            qualityOptions={qualityOptionsForMenu}
+            selectedQualityId={selectedQualityId}
+            onQualityChange={setSelectedQualityId}
+          />
         )}
       </section>
     );
