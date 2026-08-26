@@ -713,7 +713,7 @@ export default function CreateAnAppPage() {
                   The full W3DS reference shelf
                 </p>
                 <h2 className="mt-3 text-3xl font-bold tracking-[-0.03em] text-foreground sm:text-5xl">
-                  Every guide from the Vidak docs, sorted by the question you have.
+                  Every guide from the W3DS docs, sorted by the question you may have.
                 </h2>
                 <p className="mt-5 text-lg leading-8 text-muted-foreground">
                   Open the document your agent needs at the moment it needs it. Each link leads to
