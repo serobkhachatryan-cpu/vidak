@@ -15,14 +15,36 @@ export const metadata: Metadata = {
 const buildSteps = [
   {
     number: '01',
-    title: 'Ground your agent in W3DS',
-    body: 'Start by giving your coding agent the W3DS skill and making it the source of truth. This happens before you describe screens, schemas, or implementation choices.',
+    title: 'Install the official W3DS skill',
+    body: 'Start in the same project your coding agent will build. Add the W3DS knowledge skill before you discuss screens, schemas, or implementation decisions.',
     detail:
-      'The agent should know where to look for identity, eVaults, schemas, mappings, files, and signing before it makes its first technical recommendation.',
+      'This is the whole first move. The skill gives the agent its W3DS map and the reference files it needs for protocol decisions.',
     example: {
       title: 'Prompt 1 — send this first',
       prompt:
-        'Install the official W3DS skill and use it as the source of truth for every protocol decision in this project. Before we begin, confirm you can use it and list the W3DS guides you will consult for identity, eVaults, schemas, mappings, files, and signing.',
+        'Run this command in the project: npx skills add MetaState-Prototype-Project/prototype@w3ds. When it is complete, confirm that you can use the installed W3DS skill and its reference files.',
+    },
+    references: [
+      [
+        'AI Agent Skill',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
+      ],
+      [
+        'W3DS skill source',
+        'https://github.com/MetaState-Prototype-Project/prototype/tree/main/skills/w3ds',
+      ],
+    ],
+  },
+  {
+    number: '02',
+    title: 'Make the skill your source of truth',
+    body: 'Tell the agent how to use its new context: it must load the relevant W3DS reference before writing W3DS code or configuration, rather than relying on memory.',
+    detail:
+      'Ontology IDs, GraphQL fields, mapping directives, signature formats, and endpoint paths must be looked up. If a reference does not answer a question, the agent should search the W3DS docs before deciding.',
+    example: {
+      title: 'Prompt 2 — send after prompt 1',
+      prompt:
+        'The W3DS skill is installed. Use it as the source of truth for this project. Before you write W3DS code or configuration, load the relevant reference files. Do not invent ontology IDs, GraphQL fields, mapping directives, signatures, or endpoint paths. Confirm this working rule.',
     },
     references: [
       [
@@ -33,15 +55,15 @@ const buildSteps = [
     ],
   },
   {
-    number: '02',
-    title: 'Define the human outcome',
-    body: 'Now describe the person, the moment they arrive, and the one change they need. Keep the brief in human language; do not ask for a feature list or architecture yet.',
+    number: '03',
+    title: 'Describe one human outcome',
+    body: 'Give the agent one person, one moment, and one useful outcome for the first release. Keep this in product language so the W3DS work serves a real job.',
     detail:
-      'Make it specific enough to judge. “A filmmaker can save one finished film to a catalog they control” is a stronger starting outcome than “build a creator platform.”',
+      'Ask for a single finished loop, not a feature list. The first loop should make clear what a person does, what data or signed action it creates, and how they know it worked.',
     example: {
-      title: 'Prompt 2 — send after prompt 1',
+      title: 'Prompt 3 — send after prompt 2',
       prompt:
-        'Using the W3DS context you just loaded, help me write a one-paragraph product brief for [person] who needs to [outcome] when [moment]. Keep it focused on one useful change for one person. Do not propose screens or technical architecture yet.',
+        'I want to build [app] for [person], who needs to [outcome] when [moment]. Help me define one complete first loop: the starting action, the data or signed action it creates, and the confirmation that means the person is done. Do not choose APIs, schemas, or screens yet.',
     },
     references: [
       [
@@ -55,54 +77,37 @@ const buildSteps = [
     ],
   },
   {
-    number: '03',
-    title: 'Scope one complete user loop',
-    body: 'Turn the outcome into one journey from start to finish. State what the person does first, the record or action they create, and the confirmation that tells them they are done.',
+    number: '04',
+    title: 'Load the references for that loop',
+    body: 'Now have the agent translate the first loop into the W3DS questions it must answer: identity, eVault data, schemas, files, signing, or synchronization.',
     detail:
-      'Include only the screens, data, and actions needed for this path. If you cannot describe the moment of completion, the first loop is still too broad.',
+      'The skill routes each topic to the right source. For a platform build, load the two or three relevant references together before making technical recommendations.',
     example: {
-      title: 'Prompt 3 — send after prompt 2',
+      title: 'Prompt 4 — send after prompt 3',
       prompt:
-        'Based on this product brief: [paste the brief from prompt 2], define the smallest complete user loop. Tell me the starting action, the one record or signed action created, and the exact confirmation that means the person is done. Include only the screens this loop needs.',
+        'For this first loop: [paste the result from prompt 3], identify the W3DS topics involved and load the two or three relevant skill references before recommending an implementation. Explain which references cover identity, eVault data, platform mapping, files, signing, or webhooks for this loop. If you are unsure, search the W3DS docs instead of inferring.',
     },
     references: [
+      [
+        'AI Agent Skill',
+        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
+      ],
       [
         'Platform Development Guide',
         'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/getting-started',
       ],
-      ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
-    ],
-  },
-  {
-    number: '04',
-    title: 'Map identity and data ownership',
-    body: 'Decide who signs in and which eVault owns every record in the first loop before you create a schema or table. Make this a visible product decision, not a hidden implementation detail.',
-    detail:
-      'Treat the eVault as a person’s portable data home, not as an app account. A short ownership map for profiles, records, files, and shared data prevents accidental lock-in later.',
-    example: {
-      title: 'Prompt 4 — send after prompt 3',
-      prompt:
-        'For this first user loop: [paste the loop from prompt 3], create an identity and ownership map before we design the UI. Show who signs in, which eVault owns each record and file, and how shared data would be owned. Confirm the map before proposing schemas or database tables.',
-    },
-    references: [
-      [
-        'Authentication',
-        'https://docs.w3ds.metastate.foundation/docs/W3DS%20Protocol/Authentication',
-      ],
-      ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
-      ['W3ID', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Basics/W3ID'],
     ],
   },
   {
     number: '05',
-    title: 'Choose the smallest W3DS architecture',
-    body: 'Choose the data path that proves the first loop with the fewest moving parts. In many v1s, a person signs in and the app reads or writes directly to their eVault.',
+    title: 'Choose the smallest W3DS data path',
+    body: 'With the sources loaded, choose the simplest architecture that proves the first loop. Start with user-owned eVault data; add a local projection only when the product has a concrete need for one.',
     detail:
-      'Add a local database only when local queries, existing systems, or product logic truly require it. When you add one, define the mapping, Web3 Adapter, and webhook path that keep it aligned with user-owned data.',
+      'A local projection requires an explicit mapping, Web3 Adapter, and webhook path. The agent should also show who owns each record and how the app resolves the right eVault before it makes a request.',
     example: {
       title: 'Prompt 5 — send after prompt 4',
       prompt:
-        'Using this first loop and ownership map: [paste the results from prompts 3 and 4], recommend the smallest W3DS architecture. Start with direct eVault reads and writes unless there is a concrete reason for local data. If a local database is needed, explain the mapping, Web3 Adapter, and webhook responsibilities.',
+        'Using the loaded W3DS references and this first loop: [paste the results from prompts 3 and 4], recommend the smallest real data path. Show who signs in, which eVault owns each record or file, and whether direct eVault reads and writes are enough. If a local database is truly needed, define its mapping, Web3 Adapter, and webhook responsibilities. Cite the source reference for every protocol decision.',
     },
     references: [
       ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
@@ -115,14 +120,14 @@ const buildSteps = [
   },
   {
     number: '06',
-    title: 'Build and prove the first loop',
-    body: 'Build only the happy path, then exercise it with a real W3DS test identity in the Dev Sandbox. Sign in, create the record or action, approve the signed write, and read the result back.',
+    title: 'Build and verify the real loop',
+    body: 'Implement only the approved happy path, then test the W3DS protocol boundary with a real test identity in the Dev Sandbox—not only a mocked browser flow.',
     detail:
-      'This proves the protocol boundary—not just a mocked browser flow. If you use synchronization, replay the same webhook packet twice and confirm the local state remains correct.',
+      'Confirm the eVault path, authentication or signing, write, and read-back. If the app synchronizes data, prove that the webhook controller is idempotent by safely replaying the same change.',
     example: {
       title: 'Prompt 6 — send after prompt 5',
       prompt:
-        'Using the approved product brief, first loop, ownership map, and architecture: [paste the results from prompts 2–5], turn this into an implementation plan and acceptance test. Build only the happy path. In the Dev Sandbox, sign in with a test identity, create the record, approve the signed write, read it back, and report the result. If sync is included, test an idempotent webhook replay.',
+        'Implement the approved first loop from prompts 3–5. Before using any W3DS protocol value, load its source reference. In the Dev Sandbox, verify the real flow: authenticate the test identity, resolve the correct eVault, perform the write or signed action, and read the result back. If synchronization is included, replay the same webhook change and prove the local result stays correct. Report the references and test results.',
     },
     references: [
       [
@@ -453,20 +458,19 @@ export default function CreateAnAppPage() {
                   </p>
                 </div>
                 <div className="space-y-4 py-5 font-mono text-sm leading-6">
-                  <p className="text-muted-foreground">01 — Name the change you want to make.</p>
+                  <p className="text-muted-foreground">01 — Install the official W3DS skill.</p>
                   <p className="rounded-lg border border-primary/20 bg-primary/10 p-3 text-foreground">
-                    &gt; Help independent filmmakers publish work, keep their catalog portable, and
-                    find collaborators.
+                    &gt; npx skills add MetaState-Prototype-Project/prototype@w3ds
                   </p>
-                  <p className="text-muted-foreground">
-                    02 — Let the W3DS skill shape the foundation.
-                  </p>
+                  <p className="text-muted-foreground">02 — Make the skill your source of truth.</p>
                   <p className="rounded-lg border border-border bg-background p-3 text-foreground">
-                    ✓ identity &amp; eVault ownership
-                    <br />✓ shared ontology &amp; files
-                    <br />✓ sync only where it serves the product
+                    ✓ load the relevant W3DS references before code
+                    <br />✓ look up, never guess, protocol values
+                    <br />✓ define one human outcome and first loop
                   </p>
-                  <p className="text-primary">03 — Build the smallest real loop. Ship it. Learn.</p>
+                  <p className="text-primary">
+                    03 — Load the right references. Build and prove the loop.
+                  </p>
                 </div>
               </div>
             </div>
@@ -573,7 +577,7 @@ export default function CreateAnAppPage() {
                   </span>
                 </div>
                 <pre className="overflow-x-auto p-5 font-mono text-sm leading-7 text-foreground">
-                  <code>npx skills add MetaState-Prototype-Project/prototype@w3ds -a codex</code>
+                  <code>npx skills add MetaState-Prototype-Project/prototype@w3ds</code>
                 </pre>
               </div>
               <div className="overflow-hidden rounded-xl border border-border bg-surface">
