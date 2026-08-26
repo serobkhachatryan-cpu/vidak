@@ -2,151 +2,89 @@ import type { Metadata } from 'next';
 import { ApplicationShell } from '../../components/application-shell';
 
 export const metadata: Metadata = {
-  title: 'Vibe-code on W3DS',
-  description:
-    'A practical starting point for building your own W3DS post-platform with an AI coding agent.',
+  title: 'Build an app on W3DS',
+  description: 'A clear, step-by-step guide to building an app on W3DS with a coding agent.',
   openGraph: {
-    title: 'Vibe-code your own W3DS app',
-    description:
-      'Start with the W3DS AI agent skill, then turn a clear product brief into an interoperable post-platform.',
+    title: 'Build your own W3DS app',
+    description: 'Use six simple prompts to turn an idea into a working W3DS app.',
   },
 };
 
 const buildSteps = [
   {
     number: '01',
-    title: 'Install the official W3DS skill',
-    body: 'Start in the same project your coding agent will build. Add the W3DS knowledge skill before you discuss screens, schemas, or implementation decisions.',
-    detail:
-      'This is the whole first move. The skill gives the agent its W3DS map and the reference files it needs for protocol decisions.',
+    title: 'Install the W3DS skill',
+    body: 'Add the W3DS skill to the project before you plan the app.',
+    detail: 'It gives your coding agent the W3DS docs it needs to make informed decisions.',
     example: {
       title: 'Prompt 1 — send this first',
       prompt:
-        'Run this command in the project: npx skills add MetaState-Prototype-Project/prototype@w3ds. When it is complete, confirm that you can use the installed W3DS skill and its reference files.',
+        'Run this command in the project: npx skills add MetaState-Prototype-Project/prototype@w3ds. When it finishes, confirm that the W3DS skill is available.',
     },
-    references: [
-      [
-        'AI Agent Skill',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
-      ],
-      [
-        'W3DS skill source',
-        'https://github.com/MetaState-Prototype-Project/prototype/tree/main/skills/w3ds',
-      ],
-    ],
   },
   {
     number: '02',
-    title: 'Make the skill your source of truth',
-    body: 'Tell the agent how to use its new context: it must load the relevant W3DS reference before writing W3DS code or configuration, rather than relying on memory.',
-    detail:
-      'Ontology IDs, GraphQL fields, mapping directives, signature formats, and endpoint paths must be looked up. If a reference does not answer a question, the agent should search the W3DS docs before deciding.',
+    title: 'Use the skill before you code',
+    body: 'Tell the agent to check the W3DS skill before it writes W3DS code or configuration.',
+    detail: 'It should look up details in the docs instead of guessing values or endpoints.',
     example: {
       title: 'Prompt 2 — send after prompt 1',
       prompt:
-        'The W3DS skill is installed. Use it as the source of truth for this project. Before you write W3DS code or configuration, load the relevant reference files. Do not invent ontology IDs, GraphQL fields, mapping directives, signatures, or endpoint paths. Confirm this working rule.',
+        'Use the installed W3DS skill as the source of truth for this project. Before writing W3DS code or configuration, load the relevant references. Do not guess ontology IDs, GraphQL fields, mapping rules, signatures, or endpoints.',
     },
-    references: [
-      [
-        'AI Agent Skill',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
-      ],
-      ['W3DS Glossary', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Basics/glossary'],
-    ],
   },
   {
     number: '03',
-    title: 'Describe one human outcome',
-    body: 'Give the agent one person, one moment, and one useful outcome for the first release. Keep this in product language so the W3DS work serves a real job.',
-    detail:
-      'Ask for a single finished loop, not a feature list. The first loop should make clear what a person does, what data or signed action it creates, and how they know it worked.',
+    title: 'Name one user outcome',
+    body: 'Describe one person, one moment, and one useful result for the first version.',
+    detail: 'Keep it to one finished user journey, not a list of features.',
     example: {
       title: 'Prompt 3 — send after prompt 2',
       prompt:
-        'I want to build [app] for [person], who needs to [outcome] when [moment]. Help me define one complete first loop: the starting action, the data or signed action it creates, and the confirmation that means the person is done. Do not choose APIs, schemas, or screens yet.',
+        'I want to build [app] for [person], who needs to [outcome] when [moment]. Define one complete first journey: what they do first, what they create, and how they know it worked. Do not choose screens, APIs, or schemas yet.',
     },
-    references: [
-      [
-        'Getting Started with W3DS',
-        'https://docs.w3ds.metastate.foundation/docs/Getting%20Started/getting-started',
-      ],
-      [
-        'Platform Development Guide',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/getting-started',
-      ],
-    ],
   },
   {
     number: '04',
-    title: 'Load the references for that loop',
-    body: 'Now have the agent translate the first loop into the W3DS questions it must answer: identity, eVault data, schemas, files, signing, or synchronization.',
-    detail:
-      'The skill routes each topic to the right source. For a platform build, load the two or three relevant references together before making technical recommendations.',
+    title: 'Load the right references',
+    body: 'Ask the agent to load only the W3DS docs this first journey needs.',
+    detail: 'Start with the relevant identity, eVault, data, signing, or sync guides.',
     example: {
       title: 'Prompt 4 — send after prompt 3',
       prompt:
-        'For this first loop: [paste the result from prompt 3], identify the W3DS topics involved and load the two or three relevant skill references before recommending an implementation. Explain which references cover identity, eVault data, platform mapping, files, signing, or webhooks for this loop. If you are unsure, search the W3DS docs instead of inferring.',
+        'For this first journey: [paste prompt 3], identify the W3DS topics involved and load the relevant skill references before recommending an implementation. If the docs do not answer a question, say so instead of guessing.',
     },
-    references: [
-      [
-        'AI Agent Skill',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill',
-      ],
-      [
-        'Platform Development Guide',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/getting-started',
-      ],
-    ],
   },
   {
     number: '05',
-    title: 'Choose the smallest W3DS data path',
-    body: 'With the sources loaded, choose the simplest architecture that proves the first loop. Start with user-owned eVault data; add a local projection only when the product has a concrete need for one.',
+    title: 'Choose the smallest data path',
+    body: 'Pick the simplest data setup that makes the first journey work.',
     detail:
-      'A local projection requires an explicit mapping, Web3 Adapter, and webhook path. The agent should also show who owns each record and how the app resolves the right eVault before it makes a request.',
+      'Start with user-owned eVault data. Add a local database and sync only when there is a clear need.',
     example: {
       title: 'Prompt 5 — send after prompt 4',
       prompt:
-        'Using the loaded W3DS references and this first loop: [paste the results from prompts 3 and 4], recommend the smallest real data path. Show who signs in, which eVault owns each record or file, and whether direct eVault reads and writes are enough. If a local database is truly needed, define its mapping, Web3 Adapter, and webhook responsibilities. Cite the source reference for every protocol decision.',
+        'Using this journey and the loaded W3DS references, recommend the smallest data path. Show who signs in, who owns each record or file, and whether direct eVault reads and writes are enough. Add a local database only if it solves a specific need.',
     },
-    references: [
-      ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
-      ['Web3 Adapter', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/Web3-Adapter'],
-      [
-        'Mapping Rules',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/mapping-rules',
-      ],
-    ],
   },
   {
     number: '06',
-    title: 'Build and verify the real loop',
-    body: 'Implement only the approved happy path, then test the W3DS protocol boundary with a real test identity in the Dev Sandbox—not only a mocked browser flow.',
+    title: 'Build and test the first journey',
+    body: 'Build only the approved happy path, then test it with a real W3DS test identity.',
     detail:
-      'Confirm the eVault path, authentication or signing, write, and read-back. If the app synchronizes data, prove that the webhook controller is idempotent by safely replaying the same change.',
+      'Check sign-in, the write, and the read-back. If you use sync, test the same change twice.',
     example: {
       title: 'Prompt 6 — send after prompt 5',
       prompt:
-        'Implement the approved first loop from prompts 3–5. Before using any W3DS protocol value, load its source reference. In the Dev Sandbox, verify the real flow: authenticate the test identity, resolve the correct eVault, perform the write or signed action, and read the result back. If synchronization is included, replay the same webhook change and prove the local result stays correct. Report the references and test results.',
+        'Implement the approved first journey. Use the Dev Sandbox to sign in with a test identity, make the write or signed action, and read the result back. If the app synchronizes data, replay the same webhook change and confirm the result stays correct.',
     },
-    references: [
-      [
-        'Using the Dev Sandbox',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/dev-sandbox',
-      ],
-      ['Signing', 'https://docs.w3ds.metastate.foundation/docs/W3DS%20Protocol/Signing'],
-      [
-        'Webhook Controller Guide',
-        'https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/webhook-controller',
-      ],
-    ],
   },
 ] as const;
 
 const referenceGroups = [
   {
-    title: 'Start with the platform',
-    description: 'Orientation, agent context, platform setup, and a safe local feedback loop.',
+    title: 'Start here',
+    description: 'Skill setup, platform basics, and local testing.',
     docs: [
       [
         'AI Agent Skill',
@@ -177,9 +115,8 @@ const referenceGroups = [
     ],
   },
   {
-    title: 'Move and model data',
-    description:
-      'User-owned storage, schemas, mappings, files, and synchronization between platforms.',
+    title: 'Data and sync',
+    description: 'eVaults, schemas, files, mappings, and webhooks.',
     docs: [
       ['eVault', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/eVault'],
       ['Ontology', 'https://docs.w3ds.metastate.foundation/docs/Infrastructure/Ontology'],
@@ -205,9 +142,8 @@ const referenceGroups = [
     ],
   },
   {
-    title: 'Identity, wallets, and trusted actions',
-    description:
-      'Sign people in, work with their identities and keys, and verify important actions.',
+    title: 'Identity and signing',
+    description: 'Sign people in, work with identity, and approve important actions.',
     docs: [
       [
         'Authentication',
@@ -233,8 +169,8 @@ const referenceGroups = [
     ],
   },
   {
-    title: 'A concrete domain example',
-    description: 'Use this when your product needs accounts, ledgers, or currency-oriented data.',
+    title: 'Money and ledgers',
+    description: 'Use this for accounts, balances, or currency data.',
     docs: [
       [
         'eCurrency: Accounts and Ledger MetaEnvelopes',
@@ -244,152 +180,62 @@ const referenceGroups = [
   },
 ] as const;
 
-const sourceOfTruthPrompt = `The W3DS skill is installed. Use it as the source of truth for this project.
-
-Before you write W3DS code or configuration, load relevant reference files. Do not invent ontology IDs, GraphQL fields, mapping directives, signatures, or endpoint paths.
-
-If a reference does not answer a question, search the W3DS docs before deciding. Confirm this working rule before we continue.`;
-
 const whatIfs = [
   {
     number: '01',
-    category: 'Product and agent',
-    question: 'What if my agent starts inventing W3DS IDs, fields, or endpoints?',
+    category: 'Getting started',
+    question: 'What if my agent guesses a W3DS detail?',
     answer:
-      'Stop the implementation task. Tell the agent to use the W3DS skill as its source of truth and to cite the exact guide before it chooses a protocol value. Never accept a made-up UUID, GraphQL field, mapping, or endpoint just to keep moving.',
+      'Pause the task. Ask it to check the W3DS skill and name the guide it used before it chooses an ID, field, mapping rule, or endpoint.',
   },
   {
     number: '02',
-    category: 'Product and agent',
-    question: 'What if my app idea keeps turning into a list of features?',
+    category: 'Getting started',
+    question: 'What if my first version keeps getting bigger?',
     answer:
-      'Return to one person, one moment, and one outcome. Write the smallest complete loop that proves the value, then postpone every screen or capability that is not needed to finish that loop.',
+      'Return to one person, one moment, and one outcome. Keep only the work needed to finish that first journey.',
   },
   {
     number: '03',
-    category: 'Product and agent',
-    question: 'What if I do not know which eVault owns a record?',
+    category: 'Data',
+    question: 'What if I do not know who owns a record?',
     answer:
-      'Make an ownership map before creating a schema: who signs in, who owns each record and file, and how shared data is owned. Treat the eVault as the person’s portable data home, not as an app account.',
+      'Make a simple ownership map before you design a schema: who signs in, which eVault owns each record or file, and how shared data works.',
   },
   {
     number: '04',
-    category: 'Product and agent',
-    question: 'What if I cannot tell whether I need a local database?',
+    category: 'Data',
+    question: 'What if I am unsure about a local database?',
     answer:
-      'Start with direct eVault reads and writes when that proves the first loop. Add a local projection only for a concrete need such as fast local search, existing system integration, or product logic that cannot run from eVault data alone.',
+      'Start with direct eVault reads and writes. Add local data only for a clear need, such as local search, an existing system, or product logic.',
   },
   {
     number: '05',
-    category: 'Protocol and data',
-    question: 'What if I need an official W3DS write path before setup is ready?',
+    category: 'Testing',
+    question: 'What if sign-in or a write does not finish?',
     answer:
-      'Keep the path feature-gated and fail closed. Validate the required configuration, schema, and sandbox flow first; do not turn on official writes merely because a UI is ready to call them.',
+      'Test the full path in the Dev Sandbox: sign in, approve the action, and read the result back. Fix the first step that fails.',
   },
   {
     number: '06',
-    category: 'Protocol and data',
-    question: 'What if sign-in works locally but fails in production?',
+    category: 'Sync',
+    question: 'What if the same change arrives twice?',
     answer:
-      'Compare the effective non-secret auth configuration at build time and runtime. Public client settings are baked into the production bundle, so rebuild with the intended production configuration and verify the provider before restarting.',
+      'Use a stable record or event ID and update existing data instead of creating a duplicate. Replay the same change in a test.',
   },
   {
     number: '07',
-    category: 'Protocol and data',
-    question: 'What if a signed action never finishes publishing?',
+    category: 'Release',
+    question: 'What if the production build fails?',
     answer:
-      'Check the flow in order: action creation, user approval, callback or session completion, and the final read-back. Test the same path with a Dev Sandbox identity before changing production behavior.',
+      'Fix the first reported error, then rebuild. Do not publish until the build, service, and readiness check all pass.',
   },
   {
     number: '08',
-    category: 'Protocol and data',
-    question: 'What if a webhook arrives but the app does not update?',
+    category: 'Release',
+    question: 'What if the live site still shows the old version?',
     answer:
-      'Record the inbound outcome, then check schema admission, mapping, readiness, and the handler’s result. A successful HTTP delivery only proves the packet arrived; it does not prove the app accepted and applied it.',
-  },
-  {
-    number: '09',
-    category: 'Protocol and data',
-    question: 'What if the same webhook is delivered twice?',
-    answer:
-      'Make the handler idempotent. Store a receipt or use a stable event or record ID, upsert instead of blindly inserting, and replay the packet in a test until the local result stays exactly the same.',
-  },
-  {
-    number: '10',
-    category: 'Protocol and data',
-    question: 'What if data is in the eVault but the local view is stale?',
-    answer:
-      'A local database needs an explicit projection strategy: mapping rules, a change handler, and a webhook path that updates the local record by stable global ID. Do not assume a local copy will synchronize on its own.',
-  },
-  {
-    number: '11',
-    category: 'Protocol and data',
-    question: 'What if a file is linked but media cannot be shown or played?',
-    answer:
-      'Verify the File URI mapping, asset metadata, and content-retrieval path separately. Start with a small known file and confirm the app can write, read, and render it before adding larger media workflows.',
-  },
-  {
-    number: '12',
-    category: 'Protocol and data',
-    question: 'What if the original thumbnail or media bytes are gone?',
-    answer:
-      'Do not promise a technical recovery that does not exist. Preserve the record and metadata, then re-upload the asset from a known original and verify the new storage reference end to end.',
-  },
-  {
-    number: '13',
-    category: 'Release and recovery',
-    question: 'What if the app works locally but the production build fails?',
-    answer:
-      'Run the actual production build in a clean, production-like environment and fix the first reported failure. Treat route type errors, missing runtime files, and bundler differences as release blockers rather than browser-only problems.',
-  },
-  {
-    number: '14',
-    category: 'Release and recovery',
-    question: 'What if a migration fails or production starts with the wrong schema?',
-    answer:
-      'Stop the release, preserve the existing data, and run the safe migration procedure before restarting the app. A release is complete only when the migration, build, service status, and readiness check all succeed.',
-  },
-  {
-    number: '15',
-    category: 'Release and recovery',
-    question: 'What if Git cannot fast-forward the production checkout?',
-    answer:
-      'Stop instead of forcing the branch. Compare the deployed SHA with the intended SHA, confirm whether the history is safe to fast-forward, and resolve the divergence deliberately without rewriting the production checkout.',
-  },
-  {
-    number: '16',
-    category: 'Release and recovery',
-    question: 'What if a generated build file makes the checkout look dirty?',
-    answer:
-      'Identify the exact generated file before doing anything. Keep generated drift out of commits, preserve intentional server-only configuration, and clean or regenerate only the known artifact—not the whole working tree.',
-  },
-  {
-    number: '17',
-    category: 'Release and recovery',
-    question: 'What if a deployment succeeds but the custom domain shows the old app?',
-    answer:
-      'Verify which host actually serves the custom domain. A successful CI or platform deployment does not update a separate VPS or proxy automatically; check the deployed SHA and page response at the public hostname.',
-  },
-  {
-    number: '18',
-    category: 'Release and recovery',
-    question: 'What if the server has the new commit but my browser still shows old content?',
-    answer:
-      'Verify the rendered page with a revision query or response check, then hard-refresh the browser. Confirming the public HTML prevents a cache issue from being mistaken for a failed deployment.',
-  },
-  {
-    number: '19',
-    category: 'Release and recovery',
-    question: 'What if a small UI change accidentally creates a second header or flow?',
-    answer:
-      'Inspect the shared layout and existing components first. Make the smallest possible change in the real shell, then test the affected route so a new page-level component does not duplicate established navigation or behavior.',
-  },
-  {
-    number: '20',
-    category: 'Release and recovery',
-    question: 'What if my coding tool loses context or a long task stalls?',
-    answer:
-      'Start a bounded follow-up with the current commit SHA, the exact goal, constraints, and checks to run. Ask it to inspect first, change one concern at a time, and report the deployed revision and verification result.',
+      'Check which server the public domain uses, confirm the deployed revision, then refresh the page after the new version is ready.',
   },
 ] as const;
 
@@ -406,11 +252,11 @@ export default function CreateAnAppPage() {
           <div className="mx-auto max-w-6xl px-5 py-16 sm:px-8 sm:py-24">
             <div className="max-w-3xl">
               <h1 className="max-w-3xl text-4xl font-black tracking-[-0.045em] text-foreground sm:text-6xl lg:text-7xl">
-                Vibe-code your own app on W3DS.
+                Build your app on W3DS.
               </h1>
               <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground sm:text-xl">
-                Take a clear idea, give your AI coding agent the W3DS skill, and create an app where
-                people keep control of the data they make.
+                Start with a clear idea. Give your coding agent the W3DS skill, then build an app
+                where people keep control of their data.
               </p>
             </div>
           </div>
@@ -423,8 +269,8 @@ export default function CreateAnAppPage() {
                 Step-by-step instruction
               </h2>
               <p className="mt-5 text-lg leading-8 text-muted-foreground">
-                W3DS is most powerful when it stays connected to a human outcome. Use this sequence
-                to keep your build intentional, fast, and interoperable.
+                Follow these six prompts in order. They keep your first app clear, small, and
+                interoperable.
               </p>
             </div>
 
@@ -462,57 +308,6 @@ export default function CreateAnAppPage() {
           </div>
         </section>
 
-        <section className="border-y border-border bg-background px-5 py-16 sm:px-8 sm:py-24">
-          <div className="mx-auto grid max-w-6xl gap-10 xl:grid-cols-[0.8fr_1.2fr] xl:gap-16">
-            <div>
-              <p className="font-mono text-xs font-bold tracking-[0.16em] text-primary uppercase">
-                The first two prompts
-              </p>
-              <h2 className="mt-3 text-3xl font-bold tracking-[-0.03em] text-foreground sm:text-5xl">
-                Give your agent W3DS context before asking it to build.
-              </h2>
-              <p className="mt-5 text-lg leading-8 text-muted-foreground">
-                Install the official skill, then establish the source-of-truth rule. Continue with
-                prompts 3–6 above only after these two steps are complete.
-              </p>
-              <a
-                className="mt-7 inline-flex items-center gap-2 font-semibold text-primary underline decoration-primary/40 underline-offset-4 hover:decoration-primary"
-                href="https://docs.w3ds.metastate.foundation/docs/Post%20Platform%20Guide/ai-agent-skill"
-                target="_blank"
-                rel="noreferrer"
-              >
-                Read the AI Agent Skill guide <Arrow />
-              </a>
-            </div>
-
-            <div className="space-y-5">
-              <div className="overflow-hidden rounded-xl border border-border bg-surface">
-                <div className="flex items-center justify-between border-b border-border px-5 py-3">
-                  <p className="font-mono text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase">
-                    1. Add the W3DS skill
-                  </p>
-                  <span className="rounded bg-primary/10 px-2 py-1 font-mono text-xs font-bold text-primary">
-                    terminal
-                  </span>
-                </div>
-                <pre className="overflow-x-auto p-5 font-mono text-sm leading-7 text-foreground">
-                  <code>npx skills add MetaState-Prototype-Project/prototype@w3ds</code>
-                </pre>
-              </div>
-              <div className="overflow-hidden rounded-xl border border-border bg-surface">
-                <div className="border-b border-border px-5 py-3">
-                  <p className="font-mono text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase">
-                    2. Make the skill your source of truth
-                  </p>
-                </div>
-                <pre className="max-h-[29rem] overflow-auto whitespace-pre-wrap p-5 font-mono text-xs leading-6 text-foreground sm:text-sm">
-                  <code>{sourceOfTruthPrompt}</code>
-                </pre>
-              </div>
-            </div>
-          </div>
-        </section>
-
         <section
           id="what-if"
           className="scroll-mt-8 border-y border-border bg-background px-5 py-16 sm:px-8 sm:py-24"
@@ -520,15 +315,14 @@ export default function CreateAnAppPage() {
           <div className="mx-auto max-w-6xl">
             <div className="max-w-3xl">
               <p className="font-mono text-xs font-bold tracking-[0.16em] text-primary uppercase">
-                A practical recovery guide
+                Quick fixes
               </p>
               <h2 className="mt-3 text-3xl font-bold tracking-[-0.03em] text-foreground sm:text-5xl">
                 What if something went wrong?
               </h2>
               <p className="mt-5 text-lg leading-8 text-muted-foreground">
-                Twenty common moments in a W3DS build, with the next safe move. Open the one that
-                matches what you see, fix the observed problem, and keep the rest of the system
-                unchanged.
+                Eight common problems and the next simple move. Open the one that matches what you
+                see.
               </p>
             </div>
 
@@ -579,8 +373,8 @@ export default function CreateAnAppPage() {
                   Every guide from the W3DS docs, sorted by the question you may have.
                 </h2>
                 <p className="mt-5 text-lg leading-8 text-muted-foreground">
-                  Open the document your agent needs at the moment it needs it. Each link leads to
-                  the official W3DS documentation used to shape this page.
+                  Open only the guide your next step needs. Every link leads to the official W3DS
+                  docs.
                 </p>
               </div>
               <a
@@ -630,25 +424,14 @@ export default function CreateAnAppPage() {
           </div>
         </section>
 
-        <section className="bg-primary px-5 py-16 text-primary-foreground sm:px-8">
-          <div className="mx-auto flex max-w-6xl flex-col justify-between gap-8 md:flex-row md:items-center">
-            <div className="max-w-3xl">
-              <p className="font-mono text-xs font-bold tracking-[0.16em] text-primary-foreground/75 uppercase">
-                Your next move
-              </p>
-              <h2 className="mt-3 text-3xl font-bold tracking-[-0.03em] sm:text-5xl">
-                Start with one real problem worth solving.
-              </h2>
-              <p className="mt-4 text-lg leading-8 text-primary-foreground/85">
-                Give your agent the context, make data ownership part of the product idea, and build
-                the smallest app that lets someone feel the difference.
-              </p>
-            </div>
+        <section className="bg-primary px-5 py-8 text-primary-foreground sm:px-8">
+          <div className="mx-auto flex max-w-6xl flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+            <p className="text-2xl font-bold tracking-[-0.03em]">Ready to build?</p>
             <a
               href="#start"
               className="inline-flex min-h-11 shrink-0 items-center justify-center rounded-md bg-primary-foreground px-5 font-semibold text-primary transition hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-foreground focus-visible:ring-offset-2 focus-visible:ring-offset-primary"
             >
-              Build your first loop{' '}
+              Start at step 1
               <span className="ml-2" aria-hidden="true">
                 ↑
               </span>
