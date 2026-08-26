@@ -521,62 +521,6 @@ export default function CreateAnAppPage() {
           </div>
         </section>
 
-        <section className="bg-surface px-5 py-16 sm:px-8 sm:py-24">
-          <div className="mx-auto max-w-6xl">
-            <div className="grid gap-8 xl:grid-cols-[0.75fr_1.25fr] xl:items-end">
-              <div>
-                <p className="font-mono text-xs font-bold tracking-[0.16em] text-primary uppercase">
-                  A useful decision point
-                </p>
-                <h2 className="mt-3 text-3xl font-bold tracking-[-0.03em] text-foreground sm:text-5xl">
-                  Stateless first, sync when it earns its place.
-                </h2>
-              </div>
-              <p className="text-lg leading-8 text-muted-foreground">
-                A post-platform can be intentionally lightweight: write directly to user eVaults and
-                keep no app-owned copy of their data. If your product needs a local database, use
-                mappings, the Web3 Adapter, and an idempotent webhook controller to keep the two
-                worlds aligned.
-              </p>
-            </div>
-
-            <div className="mt-10 grid gap-4 md:grid-cols-2">
-              <article className="rounded-xl border border-success/30 bg-success/10 p-6">
-                <p className="font-mono text-xs font-bold tracking-[0.12em] text-success uppercase">
-                  Direct-to-eVault app
-                </p>
-                <h3 className="mt-4 text-2xl font-bold text-foreground">
-                  Keep the first version lean.
-                </h3>
-                <p className="mt-3 leading-7 text-foreground">
-                  A strong fit for personal tools, publishing experiences, and new ideas where
-                  portability and ownership are the main value.
-                </p>
-                <p className="mt-5 text-sm leading-6 text-muted-foreground">
-                  Focus on the user flow, authentication, the right ontology, eVault reads and
-                  writes, and any needed file or signing flow.
-                </p>
-              </article>
-              <article className="rounded-xl border border-primary/30 bg-primary/10 p-6">
-                <p className="font-mono text-xs font-bold tracking-[0.12em] text-primary uppercase">
-                  Local database + sync
-                </p>
-                <h3 className="mt-4 text-2xl font-bold text-foreground">
-                  Use it when local speed or logic matters.
-                </h3>
-                <p className="mt-3 leading-7 text-foreground">
-                  A strong fit for apps that need a local projection, complex queries, existing
-                  data, or domain-specific workflows that must stay in sync with eVault data.
-                </p>
-                <p className="mt-5 text-sm leading-6 text-muted-foreground">
-                  Add mappings, the Web3 Adapter, change handling, and webhook upserts keyed by a
-                  stable global ID.
-                </p>
-              </article>
-            </div>
-          </div>
-        </section>
-
         <section
           id="what-if"
           className="scroll-mt-8 border-y border-border bg-background px-5 py-16 sm:px-8 sm:py-24"
