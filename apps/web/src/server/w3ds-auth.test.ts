@@ -468,6 +468,18 @@ describe('W3dsAuthService', () => {
         exp: now + 60 * 60,
       },
     );
+    const rawHexCertificate = await signJsonWebToken(
+      registryKeyPair.privateKey,
+      { alg: 'ES256', kid: 'registry-key' },
+      {
+        ename: '@creator.w3id',
+        // The hardware eID Wallet may publish the same SPKI as raw 0x hex.
+        publicKey: `0x${Buffer.from(userSpki).toString('hex')}`,
+        iat: now,
+        exp: now + 60 * 60,
+      },
+    );
+    let useRawHexPublicKey = false;
     const session = 'c2d22408-daa6-4e54-a8ea-a90fc0c5a100';
     const signature = await crypto.subtle.sign(
       { name: 'ECDSA', hash: 'SHA-256' },
@@ -484,7 +496,9 @@ describe('W3dsAuthService', () => {
         });
       }
       if (url.hostname === 'evault.example' && url.pathname === '/whois') {
-        return Response.json({ keyBindingCertificates: [certificate] });
+        return Response.json({
+          keyBindingCertificates: [useRawHexPublicKey ? rawHexCertificate : certificate],
+        });
       }
       if (url.pathname === '/.well-known/jwks.json') return Response.json({ keys: [registryJwk] });
       return new Response(null, { status: 404 });
@@ -512,6 +526,14 @@ describe('W3dsAuthService', () => {
           eName: '@creator.w3id',
           session,
           signature: `z${base58Encode(new Uint8Array(signature))}`,
+        }),
+      ).resolves.toEqual(verifiedIdentity);
+      useRawHexPublicKey = true;
+      await expect(
+        verifier.verify({
+          eName: '@creator.w3id',
+          session,
+          signature: Buffer.from(signature).toString('base64'),
         }),
       ).resolves.toEqual(verifiedIdentity);
     } finally {

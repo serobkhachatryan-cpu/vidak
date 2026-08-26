@@ -899,6 +899,9 @@ function requireSupportedEcdsaSignature(bytes: Uint8Array): Uint8Array {
 }
 
 function decodeMultibase(value: string): Uint8Array {
+  // Hardware eID Wallets may publish the P-256 SPKI as raw `0x`-prefixed
+  // hexadecimal. This is an official wallet format, alongside multibase.
+  if (value.startsWith('0x') || value.startsWith('0X')) return hexDecode(value.slice(2));
   const prefix = value[0];
   const content = value.slice(1);
   // The reference eID software wallet writes public keys as `z` followed by
