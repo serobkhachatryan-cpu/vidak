@@ -244,18 +244,11 @@ const referenceGroups = [
   },
 ] as const;
 
-const starterPrompt = `Use the installed W3DS skill as the source of truth while we build this app.
+const sourceOfTruthPrompt = `The W3DS skill is installed. Use it as the source of truth for this project.
 
-Build a focused post-platform for [people] to [complete a valuable action].
-The first version should let a person [primary outcome] and should feel [three experience qualities].
+Before you write W3DS code or configuration, load relevant reference files. Do not invent ontology IDs, GraphQL fields, mapping directives, signatures, or endpoint paths.
 
-Before writing code, propose:
-1. the smallest user journey that proves the idea;
-2. the user-owned data this journey creates and which eVault owns it;
-3. whether the app can write directly to eVaults or needs a local database plus Web3 Adapter;
-4. the W3DS documents we must consult for auth, schemas, mapping, sync, files, or signing.
-
-Do not invent ontology UUIDs, GraphQL fields, mapping directives, or W3DS endpoints. Look them up in the installed skill and linked docs. Build the happy path first, include a test plan using the Dev Sandbox, then show the next three implementation steps.`;
+If a reference does not answer a question, search the W3DS docs before deciding. Confirm this working rule before we continue.`;
 
 const whatIfs = [
   {
@@ -473,15 +466,14 @@ export default function CreateAnAppPage() {
           <div className="mx-auto grid max-w-6xl gap-10 xl:grid-cols-[0.8fr_1.2fr] xl:gap-16">
             <div>
               <p className="font-mono text-xs font-bold tracking-[0.16em] text-primary uppercase">
-                One command, then one good brief
+                The first two prompts
               </p>
               <h2 className="mt-3 text-3xl font-bold tracking-[-0.03em] text-foreground sm:text-5xl">
-                Give your agent a map before asking it to build.
+                Give your agent W3DS context before asking it to build.
               </h2>
               <p className="mt-5 text-lg leading-8 text-muted-foreground">
-                The official W3DS skill is the shortcut from generic code generation to informed
-                collaboration. It tells your agent where to find the precise W3DS details when they
-                matter.
+                Install the official skill, then establish the source-of-truth rule. Continue with
+                prompts 3–6 above only after these two steps are complete.
               </p>
               <a
                 className="mt-7 inline-flex items-center gap-2 font-semibold text-primary underline decoration-primary/40 underline-offset-4 hover:decoration-primary"
@@ -510,11 +502,11 @@ export default function CreateAnAppPage() {
               <div className="overflow-hidden rounded-xl border border-border bg-surface">
                 <div className="border-b border-border px-5 py-3">
                   <p className="font-mono text-xs font-bold tracking-[0.12em] text-muted-foreground uppercase">
-                    2. Use this starter brief
+                    2. Make the skill your source of truth
                   </p>
                 </div>
                 <pre className="max-h-[29rem] overflow-auto whitespace-pre-wrap p-5 font-mono text-xs leading-6 text-foreground sm:text-sm">
-                  <code>{starterPrompt}</code>
+                  <code>{sourceOfTruthPrompt}</code>
                 </pre>
               </div>
             </div>
