@@ -244,6 +244,13 @@ const whatIfs = [
     answer:
       'Tell it to stop sending you away and find the answer in the installed W3DS skill and W3DS documentation. It should return with the guide it used and a clear next step.',
   },
+  {
+    number: '10',
+    category: 'Getting help',
+    question: 'What if my AI assistant asks me to log in or do manual work?',
+    answer:
+      'You give the goal; the assistant does the work. Tell it to use the access and tools it has, not send you routine tasks. If only you can approve or sign in, it should ask for the smallest exact action. Otherwise, ask it to recommend another AI assistant that can finish the job.',
+  },
 ] as const;
 
 function Arrow() {
@@ -328,7 +335,7 @@ export default function CreateAnAppPage() {
                 What if something went wrong?
               </h2>
               <p className="mt-5 text-lg leading-8 text-muted-foreground">
-                Nine common problems and the next simple move. Open the one that matches what you
+                Ten common problems and the next simple move. Open the one that matches what you
                 see.
               </p>
             </div>
