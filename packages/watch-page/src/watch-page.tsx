@@ -36,7 +36,7 @@ import {
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
-import { type ReactNode, useEffect, useMemo, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
 const cx = (...classes: Array<string | false | null | undefined>) =>
   classes.filter(Boolean).join(' ');
@@ -158,6 +158,12 @@ const qualityTiers = [
   { id: '144p', label: '144p' },
 ] as const;
 
+const playbackSpeeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3] as const;
+
+function formatPlaybackSpeed(speed: number): string {
+  return `${String(speed)}x`;
+}
+
 type QualityTierId = (typeof qualityTiers)[number]['id'];
 
 function qualityTierFor(rendition: VideoMediaRendition): QualityTierId | undefined {
@@ -205,7 +211,7 @@ function VideoQualityMenu({
   };
 
   return (
-    <details className="absolute top-3 right-3 z-10">
+    <details className="relative">
       <summary
         aria-label="Video quality"
         className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-md bg-black/80 px-3 font-sans text-xs font-semibold text-white shadow-sm backdrop-blur hover:bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white [&::-webkit-details-marker]:hidden"
@@ -282,6 +288,60 @@ function VideoQualityMenu({
   );
 }
 
+function VideoPlaybackSpeedMenu({
+  playbackSpeed,
+  onPlaybackSpeedChange,
+}: {
+  playbackSpeed: number;
+  onPlaybackSpeedChange: (speed: number) => void;
+}) {
+  const choosePlaybackSpeed = (speed: number, target: HTMLElement) => {
+    onPlaybackSpeedChange(speed);
+    target.closest('details')?.removeAttribute('open');
+  };
+
+  return (
+    <details className="relative">
+      <summary
+        aria-label="Playback speed"
+        className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-md bg-black/80 px-3 font-sans text-xs font-semibold text-white shadow-sm backdrop-blur hover:bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white [&::-webkit-details-marker]:hidden"
+        data-testid="video-playback-speed-menu-toggle"
+      >
+        <span>Speed</span>
+        <span className="text-white/70">{formatPlaybackSpeed(playbackSpeed)}</span>
+      </summary>
+      <div
+        role="menu"
+        className="absolute top-11 right-0 w-44 overflow-hidden rounded-lg bg-zinc-800 py-1 text-sm text-white shadow-xl ring-1 ring-white/15"
+        data-testid="video-playback-speed-menu"
+      >
+        <p className="border-b border-white/15 px-4 py-3 font-sans text-sm font-semibold">
+          Playback speed
+        </p>
+        {playbackSpeeds.map((speed) => {
+          const isSelected = speed === playbackSpeed;
+          return (
+            <button
+              key={speed}
+              type="button"
+              role="menuitemradio"
+              aria-checked={isSelected}
+              onClick={(event) => choosePlaybackSpeed(speed, event.currentTarget)}
+              className={cx(
+                'flex w-full items-center justify-between px-4 py-3 text-left font-sans hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white',
+                isSelected && 'bg-white/15',
+              )}
+            >
+              <span>{formatPlaybackSpeed(speed)}</span>
+              {speed === 1 && <span className="text-xs text-white/60">Normal</span>}
+            </button>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
 function VideoPlayer({
   title,
   mediaSrc,
@@ -298,7 +358,9 @@ function VideoPlayer({
   const automaticQuality =
     qualityOptions.find((rendition) => rendition.isDefault) ?? qualityOptions[0];
   const [selectedQualityId, setSelectedQualityId] = useState('auto');
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [measuredQualityHeights, setMeasuredQualityHeights] = useState<Record<string, number>>({});
+  const videoRef = useRef<HTMLVideoElement>(null);
   const qualityOptionsForMenu = useMemo(
     () =>
       qualityOptions.map((rendition) => {
@@ -323,6 +385,10 @@ function VideoPlayer({
       : (qualityOptions.find((rendition) => rendition.id === selectedQualityId) ??
         automaticQuality);
   const selectedMediaSrc = selectedQuality?.mediaContentUrl ?? mediaSrc;
+  const changePlaybackSpeed = (speed: number) => {
+    setPlaybackSpeed(speed);
+    if (videoRef.current) videoRef.current.playbackRate = speed;
+  };
 
   if (selectedMediaSrc) {
     return (
@@ -333,12 +399,14 @@ function VideoPlayer({
         <div className="absolute inset-0 overflow-hidden rounded-xl">
           <video
             key={selectedMediaSrc}
+            ref={videoRef}
             className="h-full w-full"
             controls
             playsInline
             preload="metadata"
             src={selectedMediaSrc}
             onLoadedMetadata={(event) => {
+              event.currentTarget.playbackRate = playbackSpeed;
               const height = event.currentTarget.videoHeight;
               if (!height || !selectedQuality) return;
               setMeasuredQualityHeights((current) =>
@@ -352,13 +420,19 @@ function VideoPlayer({
             <track kind="captions" />
           </video>
         </div>
-        {qualityOptions.length > 0 && (
-          <VideoQualityMenu
-            qualityOptions={qualityOptionsForMenu}
-            selectedQualityId={selectedQualityId}
-            onQualityChange={setSelectedQualityId}
+        <div className="absolute top-3 right-3 z-10 flex items-start gap-2">
+          <VideoPlaybackSpeedMenu
+            playbackSpeed={playbackSpeed}
+            onPlaybackSpeedChange={changePlaybackSpeed}
           />
-        )}
+          {qualityOptions.length > 0 && (
+            <VideoQualityMenu
+              qualityOptions={qualityOptionsForMenu}
+              selectedQualityId={selectedQualityId}
+              onQualityChange={setSelectedQualityId}
+            />
+          )}
+        </div>
       </section>
     );
   }

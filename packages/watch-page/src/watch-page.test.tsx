@@ -115,6 +115,11 @@ describe('WatchPage', () => {
     expect(markup).toContain('controls');
     expect(markup).toContain('data-testid="video-quality-menu-toggle"');
     expect(markup).toContain('Video quality');
+    expect(markup).toContain('data-testid="video-playback-speed-menu-toggle"');
+    expect(markup).toContain('Playback speed');
+    expect(markup).toContain('0.25x');
+    expect(markup).toContain('1x');
+    expect(markup).toContain('3x');
     expect(markup).toContain('Auto');
     expect(markup).toContain('2160p');
     expect(markup).toContain('4K');
