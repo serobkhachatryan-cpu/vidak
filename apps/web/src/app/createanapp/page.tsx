@@ -426,11 +426,8 @@ export default function CreateAnAppPage() {
         <section id="start" className="scroll-mt-8 bg-surface px-5 py-16 sm:px-8 sm:py-24">
           <div className="mx-auto max-w-6xl">
             <div className="max-w-2xl">
-              <p className="font-mono text-xs font-bold tracking-[0.16em] text-primary uppercase">
-                Your path from spark to app
-              </p>
-              <h2 className="mt-3 text-3xl font-bold tracking-[-0.03em] text-foreground sm:text-5xl">
-                Follow the product, then let the protocol support it.
+              <h2 className="text-3xl font-bold tracking-[-0.03em] text-foreground sm:text-5xl">
+                Step-by-step instruction
               </h2>
               <p className="mt-5 text-lg leading-8 text-muted-foreground">
                 W3DS is most powerful when it stays connected to a human outcome. Use this sequence
@@ -466,22 +463,6 @@ export default function CreateAnAppPage() {
                       </blockquote>
                     </div>
                   </details>
-                  <nav
-                    className="mt-4 flex flex-wrap gap-x-4 gap-y-2"
-                    aria-label="Related W3DS documentation"
-                  >
-                    {step.references.map(([title, href]) => (
-                      <a
-                        key={href}
-                        className="inline-flex items-center gap-1 text-sm font-semibold text-primary underline decoration-primary/40 underline-offset-4 hover:decoration-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-                        href={href}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Read: {title} <Arrow />
-                      </a>
-                    ))}
-                  </nav>
                 </li>
               ))}
             </ol>
