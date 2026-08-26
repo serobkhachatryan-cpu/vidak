@@ -191,6 +191,12 @@ export class MockVideoApiClient implements VideoApiClient {
     return this.userProfiles.find((profile) => profile.id === id);
   }
 
+  /** Creates the local product projection for a newly authenticated W3DS user. */
+  async ensureUserProfile(id: UserProfileId): Promise<UserProfile> {
+    await this.wait();
+    return this.requireProfile(id);
+  }
+
   async updateUserProfile(id: UserProfileId, input: UpdateProfileInput): Promise<UserProfile> {
     await this.wait();
     const profile = this.requireProfile(id);

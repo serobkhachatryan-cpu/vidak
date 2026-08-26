@@ -78,6 +78,21 @@ class FakeXMLHttpRequest {
 }
 
 describe('W3dsVideoApiClient', () => {
+  it('creates the local product profile before concurrent first-load settings queries', async () => {
+    const client = new W3dsVideoApiClient({ mock: { delayMs: 0 } });
+    const userId = 'w3ds_first-load-user';
+
+    const [profile, preferences, connectedAccounts] = await Promise.all([
+      client.getUserProfile(userId),
+      client.getUserPreferences(userId),
+      client.listConnectedAccounts(userId),
+    ]);
+
+    expect(profile).toMatchObject({ id: userId, displayName: 'Creator' });
+    expect(preferences).toBeDefined();
+    expect(connectedAccounts).toEqual(expect.any(Array));
+  });
+
   it('sends cookie credentials for draft create/list/read/update/delete', async () => {
     const draft = {
       id: 'draft-1',

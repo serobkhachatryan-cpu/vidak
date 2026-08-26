@@ -130,6 +130,10 @@ export class W3dsVideoApiClient implements VideoApiClient {
   }
 
   getUserProfile(id: UserProfileId): Promise<UserProfile | undefined> {
+    // A platform user is created by W3DS authentication before its local
+    // product projection exists. Ensure that projection during the first
+    // settings load so concurrent settings queries cannot observe `undefined`.
+    if (id.startsWith('w3ds_')) return this.mock.ensureUserProfile(id);
     return this.mock.getUserProfile(id);
   }
 
