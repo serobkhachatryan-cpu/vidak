@@ -468,6 +468,16 @@ describe('W3dsAuthService', () => {
         exp: now + 60 * 60,
       },
     );
+    const staleCertificate = await signJsonWebToken(
+      registryKeyPair.privateKey,
+      { alg: 'ES256', kid: 'registry-key' },
+      {
+        ename: '@creator.w3id',
+        publicKey: `z${Buffer.from(userSpki).toString('hex')}`,
+        iat: now - 2 * 60 * 60,
+        exp: now - 60,
+      },
+    );
     const rawHexCertificate = await signJsonWebToken(
       registryKeyPair.privateKey,
       { alg: 'ES256', kid: 'registry-key' },
@@ -497,7 +507,10 @@ describe('W3dsAuthService', () => {
       }
       if (url.hostname === 'evault.example' && url.pathname === '/whois') {
         return Response.json({
-          keyBindingCertificates: [useRawHexPublicKey ? rawHexCertificate : certificate],
+          keyBindingCertificates: [
+            staleCertificate,
+            useRawHexPublicKey ? rawHexCertificate : certificate,
+          ],
         });
       }
       if (url.pathname === '/.well-known/jwks.json') return Response.json({ keys: [registryJwk] });

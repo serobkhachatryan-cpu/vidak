@@ -588,11 +588,19 @@ export class RegistryW3dsIdentityVerifier implements W3dsIdentityVerifier {
       await getJson(new URL('/whois', registry.eVaultUri), { 'X-ENAME': input.eName }),
     );
     const jwks = parseJwks(await getJson(new URL('/.well-known/jwks.json', this.registryBaseUrl)));
-    const certificatesForIdentity = await Promise.all(
+    // eVaults retain historical key bindings. A stale or malformed record must
+    // not prevent a current, Registry-attested key from verifying this login.
+    const certificateResults = await Promise.allSettled(
       certificates.map((certificate) =>
         verifyKeyBindingCertificate(certificate, jwks, input.eName),
       ),
     );
+    const certificatesForIdentity = certificateResults.flatMap((result) =>
+      result.status === 'fulfilled' ? [result.value] : [],
+    );
+    if (certificatesForIdentity.length === 0) {
+      throw new W3dsAuthError('Identity verification failed.', 'verification_failed', 401);
+    }
     const payload = toArrayBuffer(encoder.encode(input.session));
     const signature = normalizeEcdsaSignature(decodeSignature(input.signature));
     const verified = await Promise.any(
