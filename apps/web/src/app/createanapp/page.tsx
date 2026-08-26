@@ -237,6 +237,13 @@ const whatIfs = [
     answer:
       'Check which server the public domain uses, confirm the deployed revision, then refresh the page after the new version is ready.',
   },
+  {
+    number: '09',
+    category: 'Getting help',
+    question: 'What if my AI assistant asks me to get an answer from MetaState or W3DS?',
+    answer:
+      'Tell it to stop sending you away and find the answer in the installed W3DS skill and W3DS documentation. It should return with the guide it used and a clear next step.',
+  },
 ] as const;
 
 function Arrow() {
@@ -321,7 +328,7 @@ export default function CreateAnAppPage() {
                 What if something went wrong?
               </h2>
               <p className="mt-5 text-lg leading-8 text-muted-foreground">
-                Eight common problems and the next simple move. Open the one that matches what you
+                Nine common problems and the next simple move. Open the one that matches what you
                 see.
               </p>
             </div>
