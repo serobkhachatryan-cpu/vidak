@@ -411,68 +411,14 @@ export default function CreateAnAppPage() {
         <section className="relative isolate border-b border-border bg-background">
           <div className="absolute inset-x-0 top-0 -z-10 h-[30rem] bg-[radial-gradient(ellipse_at_top,_var(--w3ds-color-primary)_0%,_transparent_62%)] opacity-15" />
           <div className="mx-auto max-w-6xl px-5 py-16 sm:px-8 sm:py-24">
-            <div className="grid items-center gap-12 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
-              <div className="min-w-0">
-                <p className="mb-5 inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-3 py-1 font-mono text-xs font-semibold tracking-[0.14em] text-primary uppercase">
-                  Build in the open. Own the data.
-                </p>
-                <h1 className="max-w-3xl text-4xl font-black tracking-[-0.045em] text-foreground sm:text-6xl lg:text-7xl">
-                  Vibe-code your own app on W3DS.
-                </h1>
-                <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground sm:text-xl">
-                  Take a clear idea, give your AI coding agent the W3DS skill, and create an app
-                  where people keep control of the data they make.
-                </p>
-                <div className="mt-8 flex flex-wrap gap-3">
-                  <a
-                    href="#start"
-                    className="inline-flex min-h-11 items-center justify-center rounded-md bg-primary px-5 font-semibold text-primary-foreground shadow-sm transition hover:brightness-110 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-                  >
-                    Start building{' '}
-                    <span className="ml-2" aria-hidden="true">
-                      ↓
-                    </span>
-                  </a>
-                  <a
-                    href="#reference"
-                    className="inline-flex min-h-11 items-center justify-center rounded-md border border-border bg-surface px-5 font-semibold text-foreground transition hover:bg-surface-raised focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
-                  >
-                    Explore all W3DS docs
-                  </a>
-                </div>
-                <p className="mt-5 text-sm text-muted-foreground">
-                  Start small. You can ship a useful W3DS-native experience before you need every
-                  protocol in the ecosystem.
-                </p>
-              </div>
-
-              <div className="relative mx-auto min-w-0 w-full max-w-xl rounded-2xl border border-border bg-surface p-4 shadow-2xl shadow-primary/10 sm:p-6">
-                <div className="flex items-center justify-between border-b border-border pb-4">
-                  <div className="flex gap-1.5" aria-hidden="true">
-                    <span className="size-2.5 rounded-full bg-danger" />
-                    <span className="size-2.5 rounded-full bg-warning" />
-                    <span className="size-2.5 rounded-full bg-success" />
-                  </div>
-                  <p className="font-mono text-[0.7rem] font-semibold tracking-[0.12em] text-muted-foreground uppercase">
-                    your next build
-                  </p>
-                </div>
-                <div className="space-y-4 py-5 font-mono text-sm leading-6">
-                  <p className="text-muted-foreground">01 — Install the official W3DS skill.</p>
-                  <p className="rounded-lg border border-primary/20 bg-primary/10 p-3 text-foreground">
-                    &gt; npx skills add MetaState-Prototype-Project/prototype@w3ds
-                  </p>
-                  <p className="text-muted-foreground">02 — Make the skill your source of truth.</p>
-                  <p className="rounded-lg border border-border bg-background p-3 text-foreground">
-                    ✓ load the relevant W3DS references before code
-                    <br />✓ look up, never guess, protocol values
-                    <br />✓ define one human outcome and first loop
-                  </p>
-                  <p className="text-primary">
-                    03 — Load the right references. Build and prove the loop.
-                  </p>
-                </div>
-              </div>
+            <div className="max-w-3xl">
+              <h1 className="max-w-3xl text-4xl font-black tracking-[-0.045em] text-foreground sm:text-6xl lg:text-7xl">
+                Vibe-code your own app on W3DS.
+              </h1>
+              <p className="mt-6 max-w-2xl text-lg leading-8 text-muted-foreground sm:text-xl">
+                Take a clear idea, give your AI coding agent the W3DS skill, and create an app where
+                people keep control of the data they make.
+              </p>
             </div>
           </div>
         </section>
