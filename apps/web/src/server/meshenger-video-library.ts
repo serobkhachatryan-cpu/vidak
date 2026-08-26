@@ -244,6 +244,22 @@ export class MeshengerVideoLibrary {
     return mediaUrl;
   }
 
+  /**
+   * Drops a cached signed source after the upstream reports an expired or denied
+   * media URL. The next request resolves the File envelope again.
+   */
+  invalidateMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): void {
+    const grant = verifyMeshengerVideoStreamId(streamId, this.config.signingSecret);
+    if (grant.eName !== requireEName(user.eName)) {
+      throw new MeshengerVideoLibraryError(
+        'This video is not available to this account.',
+        'invalid_stream',
+        403,
+      );
+    }
+    cachedMediaUrls.delete(`${grant.eName}\u0000${grant.fileUri}`);
+  }
+
   private async resolveCall(
     sourceEName: string,
     sourceEVaultUri: string,

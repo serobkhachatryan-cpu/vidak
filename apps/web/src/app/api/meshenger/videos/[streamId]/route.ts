@@ -23,15 +23,13 @@ export async function GET(
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const session = await getW3dsAuthService().getSession(accessToken);
     const { streamId } = await context.params;
-    const mediaUrl = await createMeshengerVideoLibrary().resolveMediaUrl(session.user, streamId);
-    const range = request.headers.get('range');
-    const upstream = await fetch(mediaUrl, {
-      cache: 'no-store',
-      redirect: 'error',
-      ...(range ? { headers: { Range: range } } : {}),
-      signal: AbortSignal.timeout(30_000),
-    });
+    const library = createMeshengerVideoLibrary();
+    const mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+    const upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
     if (!upstream.ok && upstream.status !== 206) {
+      if ([401, 403, 404].includes(upstream.status)) {
+        library.invalidateMediaUrl(session.user, streamId);
+      }
       throw new MeshengerVideoLibraryError(
         'The video file is unavailable.',
         'remote_rejected',
@@ -49,6 +47,22 @@ export async function GET(
     return new NextResponse(upstream.body, { status: upstream.status, headers });
   } catch (error) {
     return errorResponse(error);
+  }
+}
+
+/** Limit time to the upstream response headers, never the viewer's media stream. */
+async function fetchUpstreamMedia(mediaUrl: string, range: string | null): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  try {
+    return await fetch(mediaUrl, {
+      cache: 'no-store',
+      redirect: 'error',
+      ...(range ? { headers: { Range: range } } : {}),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
