@@ -5,7 +5,10 @@ import type {
   AppLanguage,
   AuthDeviceSession,
   ConnectedAccount,
+  ChannelImportProvider,
+  ChannelImportProviderStatus,
   ConnectedAccountProvider,
+  ImportedChannel,
   NotificationPreferences,
   PrivacySettings,
 } from '@w3ds/types';
@@ -20,6 +23,7 @@ import {
 } from '@w3ds/ui';
 import { type ReactNode, useId, useState } from 'react';
 import { AppearanceSection } from './sections/appearance-section';
+import { ChannelImportsSection } from './sections/channel-imports-section';
 import { ConnectedAccountsSection } from './sections/connected-accounts-section';
 import { DeleteAccountSection } from './sections/delete-account-section';
 import { EmailSection } from './sections/email-section';
@@ -105,6 +109,13 @@ export type SettingsPageDataOwnedProp =
   | 'connectedAccountsError'
   | 'onConnectAccount'
   | 'onDisconnectAccount'
+  | 'channelImportProviders'
+  | 'channelImportChannels'
+  | 'channelImportsLoading'
+  | 'channelImportsPendingProvider'
+  | 'channelImportsError'
+  | 'channelImportsSuccess'
+  | 'onConnectChannelImport'
   | 'sessions'
   | 'sessionsLoading'
   | 'sessionsPendingId'
@@ -173,6 +184,13 @@ export interface SettingsPageProps {
   connectedAccountsError?: string;
   onConnectAccount?: (provider: ConnectedAccountProvider) => void;
   onDisconnectAccount?: (provider: ConnectedAccountProvider) => void;
+  channelImportProviders?: readonly ChannelImportProviderStatus[];
+  channelImportChannels?: readonly ImportedChannel[];
+  channelImportsLoading?: boolean;
+  channelImportsPendingProvider?: ChannelImportProvider;
+  channelImportsError?: string;
+  channelImportsSuccess?: string;
+  onConnectChannelImport?: (provider: ChannelImportProvider) => void;
   sessions?: readonly AuthDeviceSession[];
   sessionsLoading?: boolean;
   sessionsPendingId?: string;
@@ -287,6 +305,13 @@ export function SettingsPage({
   connectedAccountsError,
   onConnectAccount,
   onDisconnectAccount,
+  channelImportProviders = [],
+  channelImportChannels = [],
+  channelImportsLoading,
+  channelImportsPendingProvider,
+  channelImportsError,
+  channelImportsSuccess,
+  onConnectChannelImport,
   sessions = [],
   sessionsLoading,
   sessionsPendingId,
@@ -428,6 +453,19 @@ export function SettingsPage({
                 {...(connectedAccountsError ? { error: connectedAccountsError } : {})}
                 onConnect={(provider) => onConnectAccount?.(provider)}
                 onDisconnect={(provider) => onDisconnectAccount?.(provider)}
+              />
+            )}
+            {currentSection === 'imports' && (
+              <ChannelImportsSection
+                providers={channelImportProviders}
+                channels={channelImportChannels}
+                isLoading={channelImportsLoading ?? false}
+                {...(channelImportsPendingProvider
+                  ? { pendingProvider: channelImportsPendingProvider }
+                  : {})}
+                {...(channelImportsError ? { error: channelImportsError } : {})}
+                {...(channelImportsSuccess ? { success: channelImportsSuccess } : {})}
+                onConnect={(provider) => onConnectChannelImport?.(provider)}
               />
             )}
             {currentSection === 'sessions' && sections.includes('sessions') && (

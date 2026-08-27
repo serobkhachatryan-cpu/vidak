@@ -124,6 +124,36 @@ describe('SettingsPage', () => {
     expect(loadingConnected).toContain('aria-label="Loading connected accounts"');
   });
 
+  it('renders channel import controls without claiming provider media is hosted by Vidak', () => {
+    const markup = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@vidak.video"
+        profile={profile}
+        activeSection="imports"
+        channelImportProviders={[
+          { provider: 'youtube', label: 'YouTube', available: true },
+          { provider: 'vimeo', label: 'Vimeo', available: false },
+        ]}
+        channelImportChannels={[
+          {
+            id: 'import-1',
+            provider: 'youtube',
+            sourceChannelId: 'channel-1',
+            title: 'Creator channel',
+            sourceUrl: 'https://www.youtube.com/channel/channel-1',
+            status: 'ready',
+            importedVideoCount: 12,
+          },
+        ]}
+      />,
+    );
+    expect(markup).toContain('Connect YouTube');
+    expect(markup).toContain('Not configured yet');
+    expect(markup).toContain('Creator channel');
+    expect(markup).toContain('Videos continue to play from YouTube or Vimeo');
+    expect(markup).toContain('12 videos in Vidak');
+  });
+
   it('renders email, password, privacy, and language sections', () => {
     const email = renderToStaticMarkup(
       <SettingsPage email="demo@vidak.video" profile={profile} activeSection="email" />,

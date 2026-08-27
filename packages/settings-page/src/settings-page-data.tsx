@@ -17,8 +17,11 @@ import {
 import type {
   AppearancePreference,
   AppLanguage,
+  ChannelImportProvider,
+  ChannelImportProviderStatus,
   AuthDeviceSession,
   ConnectedAccountProvider,
+  ImportedChannel,
   NotificationPreferences,
   PrivacySettings,
   UpdateUserPreferencesInput,
@@ -82,6 +85,44 @@ function isAuthProfileUnavailable(error: unknown): boolean {
   );
 }
 
+interface ChannelImportsResponse {
+  items: readonly ImportedChannel[];
+  providers: readonly ChannelImportProviderStatus[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+async function readChannelImports(): Promise<ChannelImportsResponse> {
+  const response = await fetch('/api/channel-imports', { credentials: 'same-origin' });
+  const body = (await response.json().catch(() => undefined)) as unknown;
+  if (!response.ok || !isRecord(body) || !Array.isArray(body.items) || !Array.isArray(body.providers)) {
+    throw new Error('Could not load channel imports.');
+  }
+  return body as unknown as ChannelImportsResponse;
+}
+
+function readApiError(body: unknown, fallback: string): string {
+  if (isRecord(body) && isRecord(body.error) && typeof body.error.message === 'string') {
+    return body.error.message;
+  }
+  return fallback;
+}
+
+function isProviderAuthorizationUrl(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  try {
+    const url = new URL(value);
+    return (
+      url.protocol === 'https:' &&
+      (url.hostname === 'accounts.google.com' || url.hostname === 'api.vimeo.com')
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function SettingsPageData({
   authClient,
   videoClient,
@@ -102,6 +143,12 @@ export function SettingsPageData({
   const profileQuery = useUserProfile(videoClient, userId);
   const preferencesQuery = useUserPreferences(videoClient, userId);
   const connectedQuery = useConnectedAccounts(videoClient, userId);
+  const channelImportsQuery = useQuery({
+    queryKey: ['channel-imports', userId],
+    queryFn: readChannelImports,
+    retry: false,
+  });
+  const refetchChannelImports = channelImportsQuery.refetch;
   const sessionsQuery = useQuery({
     queryKey: settingsQueryKeys.sessions(userId),
     queryFn: (): Promise<readonly AuthDeviceSession[]> => authClient.listSessions(accessToken),
@@ -152,6 +199,14 @@ export function SettingsPageData({
   const [sessionsError, setSessionsError] = useState<string | undefined>();
   const [pendingSessionId, setPendingSessionId] = useState<string | undefined>();
   const [pendingProvider, setPendingProvider] = useState<ConnectedAccountProvider | undefined>();
+  const [pendingChannelImportProvider, setPendingChannelImportProvider] = useState<
+    ChannelImportProvider | undefined
+  >();
+  const [channelImportsError, setChannelImportsError] = useState<string | undefined>();
+  const [channelImportsSuccess, setChannelImportsSuccess] = useState<string | undefined>();
+  const [activeSettingsSection, setActiveSettingsSection] = useState<
+    SettingsPageProps['activeSection']
+  >();
 
   useEffect(() => {
     const profile = profileQuery.data;
@@ -167,6 +222,23 @@ export function SettingsPageData({
     syncedAppearanceRef.current = appearance;
     onAppearancePreferenceChange?.(appearance);
   }, [onAppearancePreferenceChange, preferencesQuery.data?.appearance]);
+
+  useEffect(() => {
+    const result = new URLSearchParams(window.location.search).get('channelImport');
+    if (!result) return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('channelImport');
+    window.history.replaceState({}, '', url);
+    setActiveSettingsSection('imports');
+    if (result === 'connected') {
+      setChannelImportsSuccess('Channel connected. Vidak will show only the channels you approved.');
+      void refetchChannelImports();
+    } else if (result === 'cancelled') {
+      setChannelImportsError('Channel connection was cancelled.');
+    } else {
+      setChannelImportsError('Could not connect that channel. Please try again.');
+    }
+  }, [refetchChannelImports]);
 
   useEffect(() => {
     return () => {
@@ -338,6 +410,31 @@ export function SettingsPageData({
     changePasswordMutation.mutate();
   };
 
+  const startChannelImport = async (provider: ChannelImportProvider) => {
+    setChannelImportsError(undefined);
+    setChannelImportsSuccess(undefined);
+    setPendingChannelImportProvider(provider);
+    try {
+      const response = await fetch('/api/channel-imports/authorize', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ provider }),
+      });
+      const body = (await response.json().catch(() => undefined)) as unknown;
+      if (!response.ok || !isRecord(body) || !isProviderAuthorizationUrl(body.authorizationUrl)) {
+        throw new Error(readApiError(body, 'Could not start channel import.'));
+      }
+      window.location.assign(body.authorizationUrl);
+    } catch (error) {
+      setChannelImportsError(errorMessage(error, 'Could not start channel import.'));
+      setPendingChannelImportProvider(undefined);
+    }
+  };
+
   const deleteAccount = () => {
     if (!capabilities.deleteAccount) return;
     const errors = validateDeleteAccount(deleteForm);
@@ -365,9 +462,18 @@ export function SettingsPageData({
   const resolvedAvatar = avatarPreviewUrl ?? profile?.avatarUrl ?? authAvatarUrl;
   const preferencesPending = updatePreferences.isPending;
 
+  const resolvedActiveSettingsSection = activeSettingsSection ?? pageProps.activeSection;
+
   return (
     <SettingsPage
       {...pageProps}
+      {...(resolvedActiveSettingsSection
+        ? { activeSection: resolvedActiveSettingsSection }
+        : {})}
+      onSectionChange={(section) => {
+        setActiveSettingsSection(section);
+        pageProps.onSectionChange?.(section);
+      }}
       sections={sections}
       state={resolveSettingsPageState({
         isPending: profileQuery.isPending || preferencesQuery.isPending,
@@ -449,6 +555,21 @@ export function SettingsPageData({
           setLanguageSuccess('Language updated.'),
         );
       }}
+      channelImportProviders={channelImportsQuery.data?.providers ?? []}
+      channelImportChannels={channelImportsQuery.data?.items ?? []}
+      channelImportsLoading={channelImportsQuery.isPending}
+      {...(pendingChannelImportProvider
+        ? { channelImportsPendingProvider: pendingChannelImportProvider }
+        : {})}
+      {...(channelImportsError
+        ? { channelImportsError }
+        : channelImportsQuery.error
+          ? { channelImportsError: errorMessage(channelImportsQuery.error, 'Could not load channel imports.') }
+          : {})}
+      {...(channelImportsSuccess ? { channelImportsSuccess } : {})}
+      onConnectChannelImport={(provider) => {
+        void startChannelImport(provider);
+      }}
       connectedAccounts={connectedQuery.data ?? []}
       connectedAccountsLoading={connectedQuery.isPending}
       {...(pendingProvider ? { connectedAccountsPendingProvider: pendingProvider } : {})}
@@ -487,6 +608,7 @@ export function SettingsPageData({
         void profileQuery.refetch();
         void preferencesQuery.refetch();
         void connectedQuery.refetch();
+        void refetchChannelImports();
         if (capabilities.manageSessions) void sessionsQuery.refetch();
       }}
     />

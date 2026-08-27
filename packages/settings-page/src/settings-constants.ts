@@ -17,6 +17,7 @@ export const settingsSectionOrder = [
   'appearance',
   'language',
   'connected',
+  'imports',
   'sessions',
   'danger',
 ] as const;
@@ -32,6 +33,7 @@ export const settingsSectionLabels: Record<SettingsSectionId, string> = {
   appearance: 'Appearance',
   language: 'Language',
   connected: 'Connected accounts',
+  imports: 'Channel imports',
   sessions: 'Sessions',
   danger: 'Delete account',
 };
@@ -45,6 +47,7 @@ export const settingsSectionDescriptions: Record<SettingsSectionId, string> = {
   appearance: 'Choose light, dark, or match your system.',
   language: 'Select the language used across the product.',
   connected: 'Link or unlink third-party sign-in providers.',
+  imports: 'Bring an authorised YouTube or Vimeo channel into Vidak without copying its media.',
   sessions: 'Review devices that are currently signed in.',
   danger: 'Permanently delete your account and creator data.',
 };
