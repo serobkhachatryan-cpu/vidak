@@ -1,9 +1,10 @@
 /// <reference path="./server-only-module.d.ts" />
 import { createAuthUser } from '@w3ds/auth';
 import { describe, expect, it, vi } from 'vitest';
+
 vi.mock('server-only', () => ({}));
 
-import { ChannelImportError, createInMemoryChannelImportService } from './channel-import-service';
+import { createInMemoryChannelImportService } from './channel-import-service';
 
 const user = createAuthUser({
   id: 'user-1',
@@ -33,7 +34,9 @@ const enabledEnv = {
 
 describe('channel imports', () => {
   it('does not advertise providers before their full server-only configuration exists', () => {
-    const { service } = createInMemoryChannelImportService({ env: { APP_ORIGIN: 'https://vidak.test' } });
+    const { service } = createInMemoryChannelImportService({
+      env: { APP_ORIGIN: 'https://vidak.test' },
+    });
     expect(service.providerStatuses()).toEqual([
       { provider: 'youtube', label: 'YouTube', available: false },
       { provider: 'vimeo', label: 'Vimeo', available: false },
@@ -56,6 +59,7 @@ describe('channel imports', () => {
           items: [
             {
               id: 'UC_source',
+              contentDetails: { relatedPlaylists: { uploads: 'uploads-playlist' } },
               snippet: {
                 title: 'Creator source channel',
                 thumbnails: { high: { url: 'https://img.youtube.test/channel.jpg' } },
@@ -70,7 +74,7 @@ describe('channel imports', () => {
       fetch,
       createId: (() => {
         let index = 0;
-        return () => 'id-' + ++index;
+        return () => `id-${++index}`;
       })(),
       createState: () => 'a'.repeat(43),
       now: () => new Date('2026-08-27T10:00:00.000Z'),
@@ -100,7 +104,7 @@ describe('channel imports', () => {
         title: 'Creator source channel',
         sourceUrl: 'https://www.youtube.com/channel/UC_source',
         thumbnailUrl: 'https://img.youtube.test/channel.jpg',
-        status: 'connected',
+        status: 'syncing',
         importedVideoCount: 0,
       },
     ]);
@@ -121,6 +125,9 @@ describe('channel imports', () => {
       env: { APP_ORIGIN: 'https://vidak.test' },
       resolveUser: async () => user,
     });
-    await expect(service.beginAuthorization('session', 'vimeo')).rejects.toMatchObject({ code: 'provider_unavailable', status: 503 });
+    await expect(service.beginAuthorization('session', 'vimeo')).rejects.toMatchObject({
+      code: 'provider_unavailable',
+      status: 503,
+    });
   });
 });

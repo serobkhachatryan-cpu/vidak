@@ -1,5 +1,12 @@
 export type { Channel, ChannelId } from './channel';
 export type {
+  ChannelImportProvider,
+  ChannelImportProviderStatus,
+  ImportedChannel,
+  ImportedChannelVideo,
+} from './channel-import';
+export { channelImportProviders } from './channel-import';
+export type {
   Comment,
   CommentId,
   CommentListFilters,
@@ -17,12 +24,6 @@ export {
   normalizePersistedThumbnailUrl,
 } from './thumbnail-url';
 export type { UserProfile, UserProfileId } from './user-profile';
-export type {
-  ChannelImportProvider,
-  ChannelImportProviderStatus,
-  ImportedChannel,
-} from './channel-import';
-export { channelImportProviders } from './channel-import';
 export type {
   AppearancePreference,
   AppLanguage,

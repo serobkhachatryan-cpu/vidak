@@ -24,3 +24,21 @@ export interface ImportedChannel {
   importedVideoCount: number;
   lastSyncedAt?: string;
 }
+
+/** A provider-hosted video listed from an authorised source channel. */
+export interface ImportedChannelVideo {
+  id: string;
+  importedChannelId: string;
+  provider: ChannelImportProvider;
+  sourceVideoId: string;
+  title: string;
+  description?: string;
+  sourceUrl: string;
+  /** Provider embed URL when the provider permits browser playback. */
+  embedUrl?: string;
+  thumbnailUrl?: string;
+  durationSeconds?: number;
+  sourceVisibility: 'public' | 'unlisted' | 'private' | 'unknown';
+  playbackStatus: 'embedded' | 'source_only';
+  publishedAt?: string;
+}

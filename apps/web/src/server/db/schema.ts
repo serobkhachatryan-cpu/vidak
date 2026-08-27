@@ -1,5 +1,11 @@
 import type { AuthUserPermissions, Role } from '@w3ds/auth';
-import type { VideoCategory, VideoLanguage, VideoStatus, VideoVisibility } from '@w3ds/types';
+import type {
+  ChannelImportProvider,
+  VideoCategory,
+  VideoLanguage,
+  VideoStatus,
+  VideoVisibility,
+} from '@w3ds/types';
 import {
   boolean,
   index,
@@ -10,7 +16,6 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
-import type { ChannelImportProvider } from '@w3ds/types';
 import type { W3dsAdapterEntityType } from '../w3ds-adapter-types';
 
 export type { W3dsAdapterEntityType };
@@ -532,7 +537,10 @@ export const channelImportConnections = pgTable(
     encryptedAccessToken: text('encrypted_access_token').notNull(),
     encryptedRefreshToken: text('encrypted_refresh_token'),
     grantedScopes: jsonb('granted_scopes').$type<string[]>().notNull(),
-    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true, mode: 'date' }),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
     revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
@@ -561,6 +569,8 @@ export const importedChannels = pgTable(
       .notNull()
       .references(() => channelImportConnections.id, { onDelete: 'cascade' }),
     sourceChannelId: text('source_channel_id').notNull(),
+    /** Provider collection identity used to continue paginated catalogue scans. */
+    sourceCatalogueId: text('source_catalogue_id'),
     title: text('title').notNull(),
     sourceUrl: text('source_url').notNull(),
     thumbnailUrl: text('thumbnail_url'),
@@ -586,6 +596,68 @@ export const importedChannels = pgTable(
  * One-time OAuth callback state. Only an HMAC of the random browser value is
  * stored, protecting the callback even if a database read is exposed.
  */
+/** Metadata-only provider catalogue entries. Source media is never stored as a Vidak media asset. */
+export type ImportedChannelVideoPlaybackStatus = 'embedded' | 'source_only';
+export type ImportedChannelVideoVisibility = 'public' | 'unlisted' | 'private' | 'unknown';
+
+export const importedChannelVideos = pgTable(
+  'imported_channel_videos',
+  {
+    id: text('id').primaryKey(),
+    importedChannelId: text('imported_channel_id')
+      .notNull()
+      .references(() => importedChannels.id, { onDelete: 'cascade' }),
+    sourceVideoId: text('source_video_id').notNull(),
+    title: text('title').notNull(),
+    description: text('description'),
+    sourceUrl: text('source_url').notNull(),
+    /** Never a media-storage location; only a provider-controlled player URL. */
+    embedUrl: text('embed_url'),
+    thumbnailUrl: text('thumbnail_url'),
+    durationSeconds: integer('duration_seconds'),
+    sourceVisibility: text('source_visibility').$type<ImportedChannelVideoVisibility>().notNull(),
+    playbackStatus: text('playback_status').$type<ImportedChannelVideoPlaybackStatus>().notNull(),
+    publishedAt: timestamp('published_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('imported_channel_videos_channel_source_video_uidx').on(
+      table.importedChannelId,
+      table.sourceVideoId,
+    ),
+    index('imported_channel_videos_channel_published_idx').on(
+      table.importedChannelId,
+      table.publishedAt,
+    ),
+  ],
+);
+
+/** A leased cursor job keeps provider scans durable and bounded. */
+export type ChannelImportSyncJobStatus = 'queued' | 'processing' | 'completed' | 'failed';
+
+export const channelImportSyncJobs = pgTable(
+  'channel_import_sync_jobs',
+  {
+    id: text('id').primaryKey(),
+    importedChannelId: text('imported_channel_id')
+      .notNull()
+      .references(() => importedChannels.id, { onDelete: 'cascade' }),
+    status: text('status').$type<ChannelImportSyncJobStatus>().notNull(),
+    nextCursor: text('next_cursor'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    lockedUntil: timestamp('locked_until', { withTimezone: true, mode: 'date' }),
+    /** Safe status only, never provider response or credentials. */
+    failureReason: text('failure_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('channel_import_sync_jobs_channel_uidx').on(table.importedChannelId),
+    index('channel_import_sync_jobs_status_locked_idx').on(table.status, table.lockedUntil),
+  ],
+);
+
 export const channelImportOAuthStates = pgTable(
   'channel_import_oauth_states',
   {

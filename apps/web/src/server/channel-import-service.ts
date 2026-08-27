@@ -8,20 +8,20 @@ import type {
 import 'server-only';
 import {
   buildProviderAuthorizationUrl,
+  type ChannelImportProviderConfig,
   createOAuthState,
   hashOAuthState,
   listChannelImportProviderStatuses,
   readChannelImportProviderConfig,
   readChannelImportSecurityConfig,
-  type ChannelImportProviderConfig,
 } from './channel-import-config';
 import { encryptChannelImportCredential } from './channel-import-crypto';
-import { getW3dsDatabase } from './db/client';
 import {
+  type ChannelImportStore,
   InMemoryChannelImportStore,
   PostgresChannelImportStore,
-  type ChannelImportStore,
 } from './channel-import-store';
+import { getW3dsDatabase } from './db/client';
 import { getW3dsAuthService } from './w3ds-auth';
 
 const stateLifetimeMs = 10 * 60 * 1000;
@@ -62,6 +62,7 @@ interface ProviderToken {
 
 interface SourceChannel {
   id: string;
+  sourceCatalogueId?: string;
   title: string;
   sourceUrl: string;
   thumbnailUrl?: string;
@@ -112,7 +113,7 @@ export class ChannelImportService {
     const security = readChannelImportSecurityConfig(this.env);
     if (!config || !security) {
       throw new ChannelImportError(
-        providerLabel(provider) + ' import is not available yet.',
+        `${providerLabel(provider)} import is not available yet.`,
         'provider_unavailable',
         503,
       );
@@ -146,13 +147,17 @@ export class ChannelImportService {
     const security = readChannelImportSecurityConfig(this.env);
     if (!config || !security) {
       throw new ChannelImportError(
-        providerLabel(provider) + ' import is not available yet.',
+        `${providerLabel(provider)} import is not available yet.`,
         'provider_unavailable',
         503,
       );
     }
     if (!isValidState(input.state) || !input.code.trim()) {
-      throw new ChannelImportError('This channel-import approval is invalid.', 'invalid_state', 400);
+      throw new ChannelImportError(
+        'This channel-import approval is invalid.',
+        'invalid_state',
+        400,
+      );
     }
 
     const now = this.now();
@@ -162,14 +167,18 @@ export class ChannelImportService {
       now,
     });
     if (!claimed || claimed.ownerId !== user.id) {
-      throw new ChannelImportError('This channel-import approval has expired.', 'invalid_state', 400);
+      throw new ChannelImportError(
+        'This channel-import approval has expired.',
+        'invalid_state',
+        400,
+      );
     }
 
     const token = await this.exchangeAuthorizationCode(config, input.code.trim());
     const sourceChannels = await this.readSourceChannels(config, token.accessToken);
     if (sourceChannels.length === 0) {
       throw new ChannelImportError(
-        'No ' + providerLabel(provider) + ' channel was found for the approved account.',
+        `No ${providerLabel(provider)} channel was found for the approved account.`,
         'authorization_failed',
         400,
       );
@@ -178,26 +187,42 @@ export class ChannelImportService {
     // Provider APIs do not expose a durable universal account id with these
     // minimal scopes. The first returned owned channel is a stable source key;
     // all selected channels share this encrypted authorisation connection.
-    const providerAccountId = sourceChannels[0]!.id;
+    const primaryChannel = sourceChannels[0];
+    if (!primaryChannel) {
+      throw new ChannelImportError(
+        'Could not read the approved channel.',
+        'authorization_failed',
+        400,
+      );
+    }
     const connection = await this.store.upsertConnection({
       id: this.createId(),
       ownerId: user.id,
       provider,
-      providerAccountId,
-      accountLabel: sourceChannels[0]!.title,
-      encryptedAccessToken: encryptChannelImportCredential(token.accessToken, security.encryptionKey),
+      providerAccountId: primaryChannel.id,
+      accountLabel: primaryChannel.title,
+      encryptedAccessToken: encryptChannelImportCredential(
+        token.accessToken,
+        security.encryptionKey,
+      ),
       ...(token.refreshToken
-        ? { encryptedRefreshToken: encryptChannelImportCredential(token.refreshToken, security.encryptionKey) }
+        ? {
+            encryptedRefreshToken: encryptChannelImportCredential(
+              token.refreshToken,
+              security.encryptionKey,
+            ),
+          }
         : {}),
       grantedScopes: token.scopes,
       ...(token.expiresAt ? { accessTokenExpiresAt: token.expiresAt } : {}),
       now,
     });
-    await this.store.upsertImportedChannels(
+    const importedChannels = await this.store.upsertImportedChannels(
       sourceChannels.map((channel) => ({
         id: this.createId(),
         connectionId: connection.id,
         sourceChannelId: channel.id,
+        ...(channel.sourceCatalogueId ? { sourceCatalogueId: channel.sourceCatalogueId } : {}),
         title: channel.title,
         sourceUrl: channel.sourceUrl,
         ...(channel.thumbnailUrl ? { thumbnailUrl: channel.thumbnailUrl } : {}),
@@ -205,6 +230,11 @@ export class ChannelImportService {
         now,
       })),
     );
+    await this.store.enqueueSyncJobs({
+      id: this.createId(),
+      importedChannelIds: importedChannels.map((channel) => channel.id),
+      now,
+    });
 
     return { importedChannels: sourceChannels.length };
   }
@@ -225,7 +255,8 @@ export class ChannelImportService {
     } else {
       headers.set(
         'Authorization',
-        'Basic ' + Buffer.from(config.clientId + ':' + config.clientSecret, 'utf8').toString('base64'),
+        'Basic ' +
+          Buffer.from(`${config.clientId}:${config.clientSecret}`, 'utf8').toString('base64'),
       );
     }
 
@@ -237,7 +268,7 @@ export class ChannelImportService {
     const accessToken = readString(payload.access_token);
     if (!accessToken) {
       throw new ChannelImportError(
-        'Could not connect ' + config.label + '. Please try again.',
+        `Could not connect ${config.label}. Please try again.`,
         'authorization_failed',
         400,
       );
@@ -266,13 +297,18 @@ export class ChannelImportService {
     url.searchParams.set('mine', 'true');
     url.searchParams.set('maxResults', '50');
     const payload = await this.fetchJson(url, {
-      headers: { Authorization: 'Bearer ' + accessToken },
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
     const items = Array.isArray(payload.items) ? payload.items : [];
     return items.flatMap((item) => {
       if (!isRecord(item)) return [];
       const id = readString(item.id);
       const snippet = isRecord(item.snippet) ? item.snippet : {};
+      const contentDetails = isRecord(item.contentDetails) ? item.contentDetails : {};
+      const relatedPlaylists = isRecord(contentDetails.relatedPlaylists)
+        ? contentDetails.relatedPlaylists
+        : {};
+      const sourceCatalogueId = readString(relatedPlaylists.uploads);
       const title = readString(snippet.title);
       if (!id || !title) return [];
       const thumbnails = isRecord(snippet.thumbnails) ? snippet.thumbnails : {};
@@ -282,8 +318,9 @@ export class ChannelImportService {
       return [
         {
           id,
+          ...(sourceCatalogueId ? { sourceCatalogueId } : {}),
           title,
-          sourceUrl: 'https://www.youtube.com/channel/' + encodeURIComponent(id),
+          sourceUrl: `https://www.youtube.com/channel/${encodeURIComponent(id)}`,
           ...(thumbnailUrl ? { thumbnailUrl } : {}),
         },
       ];
@@ -292,13 +329,13 @@ export class ChannelImportService {
 
   private async readVimeoChannel(accessToken: string): Promise<SourceChannel[]> {
     const payload = await this.fetchJson('https://api.vimeo.com/me', {
-      headers: { Authorization: 'Bearer ' + accessToken },
+      headers: { Authorization: `Bearer ${accessToken}` },
     });
     const uri = readString(payload.uri);
     const id = uri?.match(/^\/users\/([^/]+)$/)?.[1];
     const title = readString(payload.name);
     if (!id || !title) return [];
-    const sourceUrl = readHttpsUrl(payload.link) ?? 'https://vimeo.com/' + encodeURIComponent(id);
+    const sourceUrl = readHttpsUrl(payload.link) ?? `https://vimeo.com/${encodeURIComponent(id)}`;
     const pictures = isRecord(payload.pictures) ? payload.pictures : {};
     const sizes = Array.isArray(pictures.sizes) ? pictures.sizes : [];
     const thumbnailUrl = sizes
@@ -306,10 +343,21 @@ export class ChannelImportService {
       .reverse()
       .map((item) => (isRecord(item) ? readHttpsUrl(item.link) : undefined))
       .find((value): value is string => Boolean(value));
-    return [{ id, title, sourceUrl, ...(thumbnailUrl ? { thumbnailUrl } : {}) }];
+    return [
+      {
+        id,
+        sourceCatalogueId: id,
+        title,
+        sourceUrl,
+        ...(thumbnailUrl ? { thumbnailUrl } : {}),
+      },
+    ];
   }
 
-  private async fetchJson(input: RequestInfo | URL, init?: RequestInit): Promise<Record<string, unknown>> {
+  private async fetchJson(
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ): Promise<Record<string, unknown>> {
     let response: Response;
     try {
       response = await this.fetchImpl(input, {
@@ -412,7 +460,10 @@ function readHttpsUrl(value: unknown): string | undefined {
 }
 
 function normalizeScopes(value: unknown, fallback: readonly string[]): string[] {
-  const scopes = typeof value === 'string' ? value.split(/[ ,]+/) : Array.isArray(value) ? value : [];
-  const normalized = scopes.filter((scope): scope is string => typeof scope === 'string' && Boolean(scope));
+  const scopes =
+    typeof value === 'string' ? value.split(/[ ,]+/) : Array.isArray(value) ? value : [];
+  const normalized = scopes.filter(
+    (scope): scope is string => typeof scope === 'string' && Boolean(scope),
+  );
   return normalized.length > 0 ? [...new Set(normalized)] : [...fallback];
 }

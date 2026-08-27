@@ -27,6 +27,8 @@ const requiredTables = [
   'channel_import_connections',
   'imported_channels',
   'channel_import_oauth_states',
+  'imported_channel_videos',
+  'channel_import_sync_jobs',
 ] as const;
 
 const requiredIndexes = [
@@ -86,6 +88,10 @@ const requiredIndexes = [
   'imported_channels_status_idx',
   'channel_import_oauth_states_provider_expires_idx',
   'channel_import_oauth_states_owner_id_idx',
+  'imported_channel_videos_channel_source_video_uidx',
+  'imported_channel_videos_channel_published_idx',
+  'channel_import_sync_jobs_channel_uidx',
+  'channel_import_sync_jobs_status_locked_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -127,7 +133,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(14);
+    expect(applied.rows).toHaveLength(15);
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -350,6 +356,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(14);
+    expect(Number(applied.rows[0]?.count)).toBe(15);
   });
 });

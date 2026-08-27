@@ -655,6 +655,10 @@ command.
 | `CHANNEL_IMPORT_STATE_SECRET` / `CHANNEL_IMPORT_TOKEN_ENCRYPTION_KEY` | optional pair | Server-only OAuth state + credential encryption; no partial activation |
 | `YOUTUBE_OAUTH_*` / `VIMEO_OAUTH_*` | optional pair | Provider-specific client credentials; each source stays unavailable until its full pair and the import secrets are present |
 
+### Authorised channel imports
+
+Vidak imports only provider catalogue metadata and uses the provider’s own player; it never downloads, proxies, or relabels YouTube/Vimeo media as Vidak-hosted. Install and enable the checked-in systemd timer at `ops/systemd/vidak-channel-import-sync.timer` so queued catalogues are processed in small durable batches. The timer is safe while provider credentials are absent: it exits without scanning anything.
+
 Do not place secrets, database URLs, registry URLs, or JWT material in
 `NEXT_PUBLIC_*` variables.
 

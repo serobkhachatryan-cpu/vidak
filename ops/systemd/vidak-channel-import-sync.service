@@ -1,0 +1,12 @@
+[Unit]
+Description=Vidak authorised channel import synchronisation
+After=network-online.target vidak.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=vidak
+WorkingDirectory=/srv/vidak/app
+EnvironmentFile=/etc/vidak.env
+EnvironmentFile=-/srv/vidak/.env
+ExecStart=/usr/bin/env bash -lc 'corepack pnpm --filter @w3ds/web channel-import:sync'

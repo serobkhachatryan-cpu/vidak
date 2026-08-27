@@ -2,10 +2,11 @@ import type { ChannelImportProvider, ImportedChannel } from '@w3ds/types';
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import type { W3dsDatabase } from './db/client';
 import {
+  type ChannelImportStatus,
   channelImportConnections,
   channelImportOAuthStates,
+  channelImportSyncJobs,
   importedChannels,
-  type ChannelImportStatus,
 } from './db/schema';
 
 export interface CreateChannelImportOAuthStateInput {
@@ -34,6 +35,7 @@ export interface UpsertImportedChannelInput {
   id: string;
   connectionId: string;
   sourceChannelId: string;
+  sourceCatalogueId?: string;
   title: string;
   sourceUrl: string;
   thumbnailUrl?: string;
@@ -50,7 +52,14 @@ export interface ChannelImportStore {
     now: Date;
   }): Promise<{ ownerId: string } | undefined>;
   upsertConnection(input: UpsertChannelImportConnectionInput): Promise<{ id: string }>;
-  upsertImportedChannels(input: readonly UpsertImportedChannelInput[]): Promise<void>;
+  upsertImportedChannels(
+    input: readonly UpsertImportedChannelInput[],
+  ): Promise<readonly { id: string; sourceChannelId: string }[]>;
+  enqueueSyncJobs(input: {
+    id: string;
+    importedChannelIds: readonly string[];
+    now: Date;
+  }): Promise<void>;
   listImportedChannelsByOwnerId(ownerId: string): Promise<ImportedChannel[]>;
 }
 
@@ -80,7 +89,10 @@ function importedChannelFromRow(row: {
 
 /** In-memory implementation for provider/service tests only. */
 export class InMemoryChannelImportStore implements ChannelImportStore {
-  private readonly states = new Map<string, CreateChannelImportOAuthStateInput & { consumedAt?: Date }>();
+  private readonly states = new Map<
+    string,
+    CreateChannelImportOAuthStateInput & { consumedAt?: Date }
+  >();
   private readonly connections = new Map<
     string,
     UpsertChannelImportConnectionInput & { id: string; revokedAt?: Date }
@@ -100,7 +112,12 @@ export class InMemoryChannelImportStore implements ChannelImportStore {
     now: Date;
   }): Promise<{ ownerId: string } | undefined> {
     const state = this.states.get(input.stateHash);
-    if (!state || state.provider !== input.provider || state.consumedAt || state.expiresAt <= input.now) {
+    if (
+      !state ||
+      state.provider !== input.provider ||
+      state.consumedAt ||
+      state.expiresAt <= input.now
+    ) {
       return undefined;
     }
     state.consumedAt = input.now;
@@ -115,16 +132,31 @@ export class InMemoryChannelImportStore implements ChannelImportStore {
     return { id: connection.id };
   }
 
-  async upsertImportedChannels(input: readonly UpsertImportedChannelInput[]): Promise<void> {
-    for (const item of input) {
+  async upsertImportedChannels(
+    input: readonly UpsertImportedChannelInput[],
+  ): Promise<readonly { id: string; sourceChannelId: string }[]> {
+    return input.map((item) => {
       const key = [item.connectionId, item.sourceChannelId].join(':');
       const existing = this.imports.get(key);
-      this.imports.set(key, {
+      const imported = {
         ...item,
         id: existing?.id ?? item.id,
         importedVideoCount: existing?.importedVideoCount ?? 0,
         ...(existing?.lastSyncedAt ? { lastSyncedAt: existing.lastSyncedAt } : {}),
-      });
+      };
+      this.imports.set(key, imported);
+      return { id: imported.id, sourceChannelId: imported.sourceChannelId };
+    });
+  }
+
+  async enqueueSyncJobs(input: {
+    id: string;
+    importedChannelIds: readonly string[];
+    now: Date;
+  }): Promise<void> {
+    const importedIds = new Set(input.importedChannelIds);
+    for (const imported of this.imports.values()) {
+      if (importedIds.has(imported.id)) imported.status = 'syncing';
     }
   }
 
@@ -140,17 +172,23 @@ export class InMemoryChannelImportStore implements ChannelImportStore {
     return [...this.imports.values()]
       .filter((channel) => ownerConnectionIds.has(channel.connectionId))
       .sort((left, right) => right.now.getTime() - left.now.getTime())
-      .map((channel) => ({
-        id: channel.id,
-        provider: providersByConnectionId.get(channel.connectionId)!,
-        sourceChannelId: channel.sourceChannelId,
-        title: channel.title,
-        sourceUrl: channel.sourceUrl,
-        ...(channel.thumbnailUrl ? { thumbnailUrl: channel.thumbnailUrl } : {}),
-        status: channel.status,
-        importedVideoCount: channel.importedVideoCount,
-        ...(channel.lastSyncedAt ? { lastSyncedAt: channel.lastSyncedAt.toISOString() } : {}),
-      }));
+      .flatMap((channel) => {
+        const provider = providersByConnectionId.get(channel.connectionId);
+        if (!provider) return [];
+        return [
+          {
+            id: channel.id,
+            provider,
+            sourceChannelId: channel.sourceChannelId,
+            title: channel.title,
+            sourceUrl: channel.sourceUrl,
+            ...(channel.thumbnailUrl ? { thumbnailUrl: channel.thumbnailUrl } : {}),
+            status: channel.status,
+            importedVideoCount: channel.importedVideoCount,
+            ...(channel.lastSyncedAt ? { lastSyncedAt: channel.lastSyncedAt.toISOString() } : {}),
+          },
+        ];
+      });
   }
 }
 
@@ -200,7 +238,9 @@ export class PostgresChannelImportStore implements ChannelImportStore {
         providerAccountId: input.providerAccountId,
         accountLabel: input.accountLabel,
         encryptedAccessToken: input.encryptedAccessToken,
-        ...(input.encryptedRefreshToken ? { encryptedRefreshToken: input.encryptedRefreshToken } : {}),
+        ...(input.encryptedRefreshToken
+          ? { encryptedRefreshToken: input.encryptedRefreshToken }
+          : {}),
         grantedScopes: [...input.grantedScopes],
         ...(input.accessTokenExpiresAt ? { accessTokenExpiresAt: input.accessTokenExpiresAt } : {}),
         revokedAt: null,
@@ -220,7 +260,9 @@ export class PostgresChannelImportStore implements ChannelImportStore {
             ? { encryptedRefreshToken: input.encryptedRefreshToken }
             : {}),
           grantedScopes: [...input.grantedScopes],
-          ...(input.accessTokenExpiresAt ? { accessTokenExpiresAt: input.accessTokenExpiresAt } : {}),
+          ...(input.accessTokenExpiresAt
+            ? { accessTokenExpiresAt: input.accessTokenExpiresAt }
+            : {}),
           revokedAt: null,
           updatedAt: input.now,
         },
@@ -230,14 +272,18 @@ export class PostgresChannelImportStore implements ChannelImportStore {
     return connection;
   }
 
-  async upsertImportedChannels(input: readonly UpsertImportedChannelInput[]): Promise<void> {
+  async upsertImportedChannels(
+    input: readonly UpsertImportedChannelInput[],
+  ): Promise<readonly { id: string; sourceChannelId: string }[]> {
+    const result: { id: string; sourceChannelId: string }[] = [];
     for (const item of input) {
-      await this.db
+      const [channel] = await this.db
         .insert(importedChannels)
         .values({
           id: item.id,
           connectionId: item.connectionId,
           sourceChannelId: item.sourceChannelId,
+          ...(item.sourceCatalogueId ? { sourceCatalogueId: item.sourceCatalogueId } : {}),
           title: item.title,
           sourceUrl: item.sourceUrl,
           ...(item.thumbnailUrl ? { thumbnailUrl: item.thumbnailUrl } : {}),
@@ -248,6 +294,7 @@ export class PostgresChannelImportStore implements ChannelImportStore {
         .onConflictDoUpdate({
           target: [importedChannels.connectionId, importedChannels.sourceChannelId],
           set: {
+            ...(item.sourceCatalogueId ? { sourceCatalogueId: item.sourceCatalogueId } : {}),
             title: item.title,
             sourceUrl: item.sourceUrl,
             ...(item.thumbnailUrl ? { thumbnailUrl: item.thumbnailUrl } : {}),
@@ -255,7 +302,48 @@ export class PostgresChannelImportStore implements ChannelImportStore {
             failureReason: null,
             updatedAt: item.now,
           },
+        })
+        .returning({ id: importedChannels.id, sourceChannelId: importedChannels.sourceChannelId });
+      if (!channel) throw new Error('Unable to persist imported channel.');
+      result.push(channel);
+    }
+    return result;
+  }
+
+  async enqueueSyncJobs(input: {
+    id: string;
+    importedChannelIds: readonly string[];
+    now: Date;
+  }): Promise<void> {
+    for (const importedChannelId of input.importedChannelIds) {
+      await this.db
+        .insert(channelImportSyncJobs)
+        .values({
+          id: `${input.id}:${importedChannelId}`,
+          importedChannelId,
+          status: 'queued',
+          nextCursor: null,
+          attemptCount: 0,
+          lockedUntil: null,
+          failureReason: null,
+          createdAt: input.now,
+          updatedAt: input.now,
+        })
+        .onConflictDoUpdate({
+          target: [channelImportSyncJobs.importedChannelId],
+          set: {
+            status: 'queued',
+            nextCursor: null,
+            attemptCount: 0,
+            lockedUntil: null,
+            failureReason: null,
+            updatedAt: input.now,
+          },
         });
+      await this.db
+        .update(importedChannels)
+        .set({ status: 'syncing', failureReason: null, updatedAt: input.now })
+        .where(eq(importedChannels.id, importedChannelId));
     }
   }
 
@@ -278,7 +366,10 @@ export class PostgresChannelImportStore implements ChannelImportStore {
         eq(importedChannels.connectionId, channelImportConnections.id),
       )
       .where(
-        and(eq(channelImportConnections.ownerId, ownerId), isNull(channelImportConnections.revokedAt)),
+        and(
+          eq(channelImportConnections.ownerId, ownerId),
+          isNull(channelImportConnections.revokedAt),
+        ),
       )
       .orderBy(desc(importedChannels.updatedAt));
     return rows.map(importedChannelFromRow);
