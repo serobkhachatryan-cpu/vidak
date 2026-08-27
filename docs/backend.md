@@ -89,6 +89,10 @@ Configure the flow with the root `.env.example` values:
 - `W3DS_AUTH_JWT_SECRET` (32+ secret characters; server-only — never `NEXT_PUBLIC_*`)
 - `W3DS_AUTH_PLATFORM_NAME` (optional; defaults to `vidak`)
 - `W3DS_AUTH_MIN_WALLET_VERSION` (optional temporary compatibility gate)
+- `CHANNEL_IMPORT_STATE_SECRET` (optional, 32+ characters; enables one-time OAuth callback state only with the rest of the import configuration)
+- `CHANNEL_IMPORT_TOKEN_ENCRYPTION_KEY` (optional, base64-encoded 32-byte key; encrypts provider credentials at rest)
+- `YOUTUBE_OAUTH_CLIENT_ID` / `YOUTUBE_OAUTH_CLIENT_SECRET` (optional pair; enables the YouTube source-channel connection)
+- `VIMEO_OAUTH_CLIENT_ID` / `VIMEO_OAUTH_CLIENT_SECRET` (optional pair; enables the Vimeo source-channel connection)
 - `MEDIA_STORAGE_ROOT` (optional; local-disk MediaStorage root, defaults to `.data/media`)
 - `MEDIA_MAX_UPLOAD_BYTES` (optional; raw upload body limit, defaults to `104857600` / 100 MiB)
 - `MEDIA_ALLOWED_CONTENT_TYPES` (optional; comma-separated MIME allowlist, defaults to `video/mp4,video/webm,video/quicktime`)
@@ -648,6 +652,8 @@ command.
 | `TRUSTED_ORIGINS` | optional | Extra browser origins |
 | `MEDIA_STORAGE_ROOT` | recommended | Private blob root for LocalDiskMediaStorage |
 | `MEDIA_MAX_UPLOAD_BYTES` / `MEDIA_ALLOWED_CONTENT_TYPES` | optional | Upload limits |
+| `CHANNEL_IMPORT_STATE_SECRET` / `CHANNEL_IMPORT_TOKEN_ENCRYPTION_KEY` | optional pair | Server-only OAuth state + credential encryption; no partial activation |
+| `YOUTUBE_OAUTH_*` / `VIMEO_OAUTH_*` | optional pair | Provider-specific client credentials; each source stays unavailable until its full pair and the import secrets are present |
 
 Do not place secrets, database URLs, registry URLs, or JWT material in
 `NEXT_PUBLIC_*` variables.

@@ -10,6 +10,7 @@ import {
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
+import type { ChannelImportProvider } from '@w3ds/types';
 import type { W3dsAdapterEntityType } from '../w3ds-adapter-types';
 
 export type { W3dsAdapterEntityType };
@@ -512,6 +513,99 @@ export const supportTasks = pgTable(
   (table) => [index('support_tasks_status_created_idx').on(table.status, table.createdAt)],
 );
 
+/**
+ * Server-only OAuth grants for external video channels. Access and refresh
+ * tokens are encrypted before persistence and are never serialised to a
+ * browser, W3DS projection, log, or support record.
+ */
+export const channelImportConnections = pgTable(
+  'channel_import_connections',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => w3dsPlatformUsers.id, { onDelete: 'cascade' }),
+    provider: text('provider').$type<ChannelImportProvider>().notNull(),
+    /** Provider-owned stable account/channel identity, never an email address. */
+    providerAccountId: text('provider_account_id').notNull(),
+    accountLabel: text('account_label').notNull(),
+    encryptedAccessToken: text('encrypted_access_token').notNull(),
+    encryptedRefreshToken: text('encrypted_refresh_token'),
+    grantedScopes: jsonb('granted_scopes').$type<string[]>().notNull(),
+    accessTokenExpiresAt: timestamp('access_token_expires_at', { withTimezone: true, mode: 'date' }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('channel_import_connections_owner_provider_account_uidx').on(
+      table.ownerId,
+      table.provider,
+      table.providerAccountId,
+    ),
+    index('channel_import_connections_owner_id_idx').on(table.ownerId),
+  ],
+);
+
+/**
+ * A selected source channel. It is intentionally separate from creator_channels:
+ * imported source items do not falsely claim Vidak-hosted media ownership.
+ */
+export type ChannelImportStatus = 'connected' | 'syncing' | 'ready' | 'needs_reconnect' | 'failed';
+
+export const importedChannels = pgTable(
+  'imported_channels',
+  {
+    id: text('id').primaryKey(),
+    connectionId: text('connection_id')
+      .notNull()
+      .references(() => channelImportConnections.id, { onDelete: 'cascade' }),
+    sourceChannelId: text('source_channel_id').notNull(),
+    title: text('title').notNull(),
+    sourceUrl: text('source_url').notNull(),
+    thumbnailUrl: text('thumbnail_url'),
+    status: text('status').$type<ChannelImportStatus>().notNull(),
+    importedVideoCount: integer('imported_video_count').notNull().default(0),
+    lastSyncedAt: timestamp('last_synced_at', { withTimezone: true, mode: 'date' }),
+    /** Safe, provider-agnostic status only; never raw response content. */
+    failureReason: text('failure_reason'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('imported_channels_connection_source_channel_uidx').on(
+      table.connectionId,
+      table.sourceChannelId,
+    ),
+    index('imported_channels_connection_id_idx').on(table.connectionId),
+    index('imported_channels_status_idx').on(table.status),
+  ],
+);
+
+/**
+ * One-time OAuth callback state. Only an HMAC of the random browser value is
+ * stored, protecting the callback even if a database read is exposed.
+ */
+export const channelImportOAuthStates = pgTable(
+  'channel_import_oauth_states',
+  {
+    id: text('id').primaryKey(),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => w3dsPlatformUsers.id, { onDelete: 'cascade' }),
+    provider: text('provider').$type<ChannelImportProvider>().notNull(),
+    stateHash: text('state_hash').notNull().unique(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    consumedAt: timestamp('consumed_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    index('channel_import_oauth_states_provider_expires_idx').on(table.provider, table.expiresAt),
+    index('channel_import_oauth_states_owner_id_idx').on(table.ownerId),
+  ],
+);
+
 export type W3dsPlatformSessionRow = typeof w3dsPlatformSessions.$inferSelect;
 export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
 export type VideoRow = typeof videos.$inferSelect;
@@ -529,3 +623,6 @@ export type W3dsVideoPublicationSigningSessionRow =
   typeof w3dsVideoPublicationSigningSessions.$inferSelect;
 export type SupportReportRow = typeof supportReports.$inferSelect;
 export type SupportTaskRow = typeof supportTasks.$inferSelect;
+export type ChannelImportConnectionRow = typeof channelImportConnections.$inferSelect;
+export type ImportedChannelRow = typeof importedChannels.$inferSelect;
+export type ChannelImportOAuthStateRow = typeof channelImportOAuthStates.$inferSelect;

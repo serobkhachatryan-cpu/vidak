@@ -18,6 +18,12 @@ export {
 } from './thumbnail-url';
 export type { UserProfile, UserProfileId } from './user-profile';
 export type {
+  ChannelImportProvider,
+  ChannelImportProviderStatus,
+  ImportedChannel,
+} from './channel-import';
+export { channelImportProviders } from './channel-import';
+export type {
   AppearancePreference,
   AppLanguage,
   AuthDeviceSession,

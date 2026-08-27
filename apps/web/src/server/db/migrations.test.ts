@@ -24,6 +24,9 @@ const requiredTables = [
   'support_reports',
   'support_tasks',
   'w3ds_video_publication_signing_sessions',
+  'channel_import_connections',
+  'imported_channels',
+  'channel_import_oauth_states',
 ] as const;
 
 const requiredIndexes = [
@@ -75,6 +78,14 @@ const requiredIndexes = [
   // W3DS signed video publication
   'w3ds_video_publication_signing_status_expires_idx',
   'w3ds_video_publication_signing_owner_video_idx',
+  // External channel imports
+  'channel_import_connections_owner_provider_account_uidx',
+  'channel_import_connections_owner_id_idx',
+  'imported_channels_connection_source_channel_uidx',
+  'imported_channels_connection_id_idx',
+  'imported_channels_status_idx',
+  'channel_import_oauth_states_provider_expires_idx',
+  'channel_import_oauth_states_owner_id_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -116,7 +127,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(13);
+    expect(applied.rows).toHaveLength(14);
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -297,6 +308,37 @@ describe('database migrations (empty database → current set)', () => {
         'resolution_summary',
       ]),
     );
+
+    const importConnectionColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'channel_import_connections'
+       order by 1`,
+    );
+    expect(importConnectionColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'owner_id',
+        'provider',
+        'provider_account_id',
+        'encrypted_access_token',
+        'encrypted_refresh_token',
+        'granted_scopes',
+      ]),
+    );
+
+    const importedChannelColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'imported_channels'
+       order by 1`,
+    );
+    expect(importedChannelColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'connection_id',
+        'source_channel_id',
+        'status',
+        'imported_video_count',
+        'last_synced_at',
+      ]),
+    );
   });
 
   it('is idempotent when migrate is invoked twice on the same empty-started database', async () => {
@@ -308,6 +350,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(13);
+    expect(Number(applied.rows[0]?.count)).toBe(14);
   });
 });
