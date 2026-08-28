@@ -18,7 +18,7 @@ export const metadata: Metadata = {
   twitter: {
     card: 'summary_large_image',
     title: platformName,
-    description: 'A decentralized home for videos, channels, and playlists.',
+    description: 'Find video you can access through your eVaults and choose its visibility.',
   },
 };
 
