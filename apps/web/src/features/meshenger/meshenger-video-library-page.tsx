@@ -71,6 +71,11 @@ export function EVaultVideoLibraryPage() {
   }, [load]);
 
   const filteredItems = state.status === 'ready' ? filterVideos(state.items, filter) : [];
+  const isFirstVisit =
+    state.status === 'ready' &&
+    state.items.length === 0 &&
+    ownedVideosState.status === 'ready' &&
+    ownedVideosState.items.length === 0;
 
   return (
     <ApplicationShell currentHref="/your-videos">
@@ -87,6 +92,8 @@ export function EVaultVideoLibraryPage() {
         }
       >
         <div className="space-y-10">
+          {isFirstVisit ? <FirstVideoSteps onUpload={() => router.push('/upload')} /> : null}
+
           <OwnedVidakVideos
             state={ownedVideosState}
             {...(editingVideoId ? { editingVideoId } : {})}
@@ -191,6 +198,53 @@ export function EVaultVideoLibraryPage() {
         </div>
       </Page>
     </ApplicationShell>
+  );
+}
+
+function FirstVideoSteps({ onUpload }: { onUpload: () => void }) {
+  return (
+    <section
+      aria-labelledby="first-video-steps-heading"
+      className="rounded-xl border border-primary/20 bg-primary/5 p-5 sm:p-6"
+    >
+      <div className="max-w-3xl space-y-4">
+        <div className="space-y-1">
+          <h2 id="first-video-steps-heading" className="text-xl font-semibold text-foreground">
+            Start with one video
+          </h2>
+          <Text size="sm" tone="muted">
+            Vidak helps you find video you can already access and gives you a clear publishing flow
+            for video you upload here.
+          </Text>
+        </div>
+        <ol className="grid gap-3 text-sm sm:grid-cols-3">
+          <li className="rounded-lg border border-border bg-surface p-3">
+            <p className="font-medium text-foreground">1. Look for available video</p>
+            <p className="mt-1 text-muted-foreground">
+              Vidak checks only eVaults you already have permission to read. It never copies or
+              changes those source videos.
+            </p>
+          </li>
+          <li className="rounded-lg border border-border bg-surface p-3">
+            <p className="font-medium text-foreground">2. Upload something new</p>
+            <p className="mt-1 text-muted-foreground">
+              Upload a video to Vidak when you want to prepare it, save a draft, and choose its
+              audience.
+            </p>
+          </li>
+          <li className="rounded-lg border border-border bg-surface p-3">
+            <p className="font-medium text-foreground">3. Choose before you publish</p>
+            <p className="mt-1 text-muted-foreground">
+              Vidak shows the exact effect before you sign. You can keep a video private, share a
+              link, or publish it.
+            </p>
+          </li>
+        </ol>
+        <div>
+          <Button onClick={onUpload}>Upload a video</Button>
+        </div>
+      </div>
+    </section>
   );
 }
 
