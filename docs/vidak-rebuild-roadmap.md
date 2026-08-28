@@ -151,4 +151,4 @@ External links enhance a person’s library without disguising what is supported
 
 ## Status
 
-Release 0 is in progress. The eVault-first entry point, legacy-route redirect, actionable home empty state, clearer settings language, and social metadata are deployed and verified. The signing and eVault discovery contracts remain the next engineering work.
+Release 1 is in progress. The eVault-first entry point, legacy-route redirect, actionable home empty state, clearer settings language, social metadata, and a source-neutral eVault library endpoint are deployed and verified. The library now includes standard W3DS upload records from personal and authorised group eVaults, alongside recognised call and video-message metadata. Visibility controls, signing repair, and upload automation remain next.

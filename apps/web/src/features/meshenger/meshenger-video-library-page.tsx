@@ -13,6 +13,7 @@ type LibraryVideo = {
   durationSeconds?: number;
   shape?: string;
   createdAt?: string;
+  accessScope: 'personal' | 'shared';
   streamIds: string[];
 };
 
@@ -21,13 +22,24 @@ type LibraryState =
   | { status: 'ready'; items: LibraryVideo[] }
   | { status: 'error' };
 
-export function MeshengerVideoLibraryPage() {
+type VideoFilter = 'all' | 'calls' | 'messages' | 'files' | 'shared';
+
+const videoFilters: Array<{ id: VideoFilter; label: string }> = [
+  { id: 'all', label: 'All videos' },
+  { id: 'calls', label: 'Call recordings' },
+  { id: 'messages', label: 'Video messages' },
+  { id: 'files', label: 'Uploaded files' },
+  { id: 'shared', label: 'Shared with me' },
+];
+
+export function EVaultVideoLibraryPage() {
   const router = useRouter();
   const [state, setState] = useState<LibraryState>({ status: 'loading' });
+  const [filter, setFilter] = useState<VideoFilter>('all');
   const load = useCallback(async () => {
     setState({ status: 'loading' });
     try {
-      const response = await fetch('/api/meshenger/videos', { cache: 'no-store' });
+      const response = await fetch('/api/evault/videos', { cache: 'no-store' });
       const body = (await response.json()) as { items?: LibraryVideo[] };
       if (!response.ok || !Array.isArray(body.items)) throw new Error();
       setState({ status: 'ready', items: body.items });
@@ -39,6 +51,8 @@ export function MeshengerVideoLibraryPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const filteredItems = state.status === 'ready' ? filterVideos(state.items, filter) : [];
 
   return (
     <ApplicationShell currentHref="/your-videos">
@@ -72,22 +86,49 @@ export function MeshengerVideoLibraryPage() {
             action={<Button onClick={() => router.push('/upload')}>Upload a video</Button>}
           />
         ) : (
-          <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
-            {state.items.map((video) => (
-              <article
-                key={video.id}
-                className="overflow-hidden rounded-xl border border-border bg-surface-raised"
-              >
-                <SegmentedVideoPlayer video={video} onRefresh={() => void load()} />
-                <div className="space-y-1 p-4">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-primary">
-                    {label(video)}
-                  </p>
-                  <h2 className="font-semibold text-foreground">{video.title}</h2>
-                  <p className="text-sm text-muted-foreground">{details(video)}</p>
-                </div>
-              </article>
-            ))}
+          <div className="space-y-5">
+            <fieldset className="flex flex-wrap gap-2">
+              <legend className="sr-only">Filter your videos</legend>
+              {videoFilters.map((option) => (
+                <Button
+                  key={option.id}
+                  size="sm"
+                  variant={filter === option.id ? 'primary' : 'secondary'}
+                  onClick={() => setFilter(option.id)}
+                >
+                  {option.label}
+                </Button>
+              ))}
+            </fieldset>
+            {filteredItems.length === 0 ? (
+              <EmptyState
+                title="No videos match this filter"
+                description="Try another view to see the video available through your eVaults."
+                action={
+                  <Button variant="secondary" onClick={() => setFilter('all')}>
+                    Show all videos
+                  </Button>
+                }
+              />
+            ) : (
+              <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+                {filteredItems.map((video) => (
+                  <article
+                    key={video.id}
+                    className="overflow-hidden rounded-xl border border-border bg-surface-raised"
+                  >
+                    <SegmentedVideoPlayer video={video} onRefresh={() => void load()} />
+                    <div className="space-y-1 p-4">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+                        {label(video)}
+                      </p>
+                      <h2 className="font-semibold text-foreground">{video.title}</h2>
+                      <p className="text-sm text-muted-foreground">{details(video)}</p>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </Page>
@@ -169,7 +210,7 @@ function SegmentedVideoPlayer({
         className="aspect-video w-full bg-black"
         controls
         preload="metadata"
-        src={`/api/meshenger/videos/${encodeURIComponent(streamId)}`}
+        src={`/api/evault/videos/${encodeURIComponent(streamId)}`}
         onCanPlay={resumeWhenReady}
         onLoadedMetadata={rememberSegmentDuration}
         onTimeUpdate={updatePlaybackPosition}
@@ -215,12 +256,21 @@ function label(video: LibraryVideo): string {
   return 'Video file';
 }
 
+function filterVideos(items: LibraryVideo[], filter: VideoFilter): LibraryVideo[] {
+  if (filter === 'calls') return items.filter((item) => item.kind === 'call-recording');
+  if (filter === 'messages') return items.filter((item) => item.kind === 'video-message');
+  if (filter === 'files') return items.filter((item) => item.kind === 'file');
+  if (filter === 'shared') return items.filter((item) => item.accessScope === 'shared');
+  return items;
+}
+
 function details(video: LibraryVideo): string {
   const values = [
     video.durationSeconds !== undefined ? formatDuration(video.durationSeconds) : undefined,
     video.createdAt ? new Date(video.createdAt).toLocaleDateString() : undefined,
   ].filter(Boolean);
-  return values.join(' · ') || 'Available through your eVault';
+  const location = video.accessScope === 'shared' ? 'Shared with you' : 'In your eVault';
+  return [...values, location].join(' · ');
 }
 
 function formatDuration(seconds: number): string {

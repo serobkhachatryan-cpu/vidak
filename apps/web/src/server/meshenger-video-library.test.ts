@@ -58,7 +58,7 @@ describe('Meshenger video library', () => {
     ).toThrow(expect.objectContaining({ code: 'not_configured' }));
   });
 
-  it('discovers video messages and loose video files without exposing their media URLs', async () => {
+  it('discovers video messages, application files, and native eVault video blobs without exposing media URLs', async () => {
     const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
       if (url.pathname === '/platforms/certification')
         return json({ token: 'registry-platform-token' });
@@ -110,6 +110,28 @@ describe('Meshenger video library', () => {
           },
         });
       }
+      if (body.variables.ontologyId === 'w3ds-file-v1') {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'native-video',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      contentType: 'video/webm',
+                      filename: 'Video from another app.webm',
+                      uploadedAt: '2026-08-21T10:00:00.000Z',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
       return json({
         data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
       });
@@ -129,7 +151,16 @@ describe('Meshenger video library', () => {
             shape: 'circle',
             durationSeconds: 12,
           }),
-          expect.objectContaining({ kind: 'file', title: 'A shared clip.mp4' }),
+          expect.objectContaining({
+            kind: 'file',
+            title: 'A shared clip.mp4',
+            accessScope: 'personal',
+          }),
+          expect.objectContaining({
+            kind: 'file',
+            title: 'Video from another app.webm',
+            accessScope: 'personal',
+          }),
         ]),
       );
       expect(JSON.stringify(videos)).not.toContain('https://');
@@ -149,7 +180,7 @@ describe('Meshenger video library', () => {
         const init = call[1] as RequestInit | undefined;
         return new Headers(init?.headers).get('Authorization') === 'Bearer registry-platform-token';
       });
-      expect(authenticatedRequests).toHaveLength(4);
+      expect(authenticatedRequests).toHaveLength(5);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -328,6 +359,28 @@ describe('Meshenger video library', () => {
           },
         });
       }
+      if (url.hostname === 'group-vault.example' && body.variables.ontologyId === 'w3ds-file-v1') {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'group-native-video',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      contentType: 'video/mp4',
+                      filename: 'Shared raw eVault clip.mp4',
+                      uploadedAt: '2026-08-24T12:30:00.000Z',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
       return json({
         data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
       });
@@ -340,7 +393,7 @@ describe('Meshenger video library', () => {
         eVaultUri: 'https://person-vault.example',
       });
       const videos = workspace.items;
-      expect(videos).toHaveLength(4);
+      expect(videos).toHaveLength(5);
       const call = videos.find((video) => video.kind === 'call-recording');
       expect(call).toEqual(
         expect.objectContaining({
@@ -362,7 +415,16 @@ describe('Meshenger video library', () => {
             shape: 'circle',
             title: 'Team update',
           }),
-          expect.objectContaining({ kind: 'file', title: 'Planning demo.mp4' }),
+          expect.objectContaining({
+            kind: 'file',
+            title: 'Planning demo.mp4',
+            accessScope: 'shared',
+          }),
+          expect.objectContaining({
+            kind: 'file',
+            title: 'Shared raw eVault clip.mp4',
+            accessScope: 'shared',
+          }),
         ]),
       );
       expect(workspace.conversations).toEqual(

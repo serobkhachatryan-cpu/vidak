@@ -9,6 +9,8 @@ const groupManifestOntology = 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e';
 const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
 const messageOntology = '550e8400-e29b-41d4-a716-446655440004';
 const fileOntology = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+// Storage records created by uploadFile are listed alongside application File records.
+const w3dsFileOntology = 'w3ds-file-v1';
 const pageSize = 100;
 const maxPages = 30;
 const retryBudgetMs = 8_000;
@@ -20,6 +22,7 @@ const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
 
 export type MeshengerVideoKind = 'call-recording' | 'video-message' | 'file';
+export type EVaultVideoAccessScope = 'personal' | 'shared';
 
 export interface MeshengerVideo {
   id: string;
@@ -28,6 +31,8 @@ export interface MeshengerVideo {
   durationSeconds?: number;
   shape?: string;
   createdAt?: string;
+  /** Whether the video is in the person's vault or an authorised shared vault. */
+  accessScope: EVaultVideoAccessScope;
   /** Ordered, opaque, signed, account-bound references. Never CDN URLs. */
   streamIds: string[];
 }
@@ -110,6 +115,7 @@ interface DiscoveredVideo {
   durationSeconds?: number | undefined;
   shape?: string | undefined;
   createdAt?: string | undefined;
+  accessScope: EVaultVideoAccessScope;
 }
 interface ChatReference {
   groupEName: string;
@@ -165,6 +171,7 @@ export class MeshengerVideoLibrary {
     const chatReferences = chatReferencesFromEnvelopes(chatEnvelopes);
     const messages = await this.listEnvelopes(eName, eVaultUri, messageOntology);
     const files = await this.listEnvelopes(eName, eVaultUri, fileOntology);
+    const rawFiles = await this.listEnvelopes(eName, eVaultUri, w3dsFileOntology);
     const referenced = new Set<string>();
     const found = await this.discoverCallVideos({
       viewerEName: eName,
@@ -173,8 +180,9 @@ export class MeshengerVideoLibrary {
       calls,
       referenced,
     });
-    found.push(...this.discoverMessageVideos(messages, referenced));
-    found.push(...this.discoverFileVideos(eName, files, referenced));
+    found.push(...this.discoverMessageVideos(messages, referenced, 'personal'));
+    found.push(...this.discoverFileVideos(eName, files, referenced, 'personal'));
+    found.push(...this.discoverRawFileVideos(eName, rawFiles, referenced, 'personal'));
     const group = await this.discoverGroupVideos(eName, chatReferences, referenced);
     found.push(...group.videos);
     const direct = await this.discoverDirectChatMedia(eName, chatReferences, referenced);
@@ -190,6 +198,7 @@ export class MeshengerVideoLibrary {
         ...(item.durationSeconds !== undefined ? { durationSeconds: item.durationSeconds } : {}),
         ...(item.shape ? { shape: item.shape } : {}),
         ...(item.createdAt ? { createdAt: item.createdAt } : {}),
+        accessScope: item.accessScope,
         streamIds: item.fileUris.map((fileUri) =>
           createMeshengerVideoStreamId(
             { eName, fileUri, expiresAt: Date.now() + streamLifetimeMs },
@@ -346,7 +355,7 @@ export class MeshengerVideoLibrary {
                 authorEVaultUri,
                 chatId,
               );
-              videos.push(...this.discoverMessageVideos(authorMessages, referenced));
+              videos.push(...this.discoverMessageVideos(authorMessages, referenced, 'shared'));
               messageRecords.push(
                 ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
               );
@@ -357,7 +366,9 @@ export class MeshengerVideoLibrary {
           }
         }
         const files = await this.listEnvelopes(groupEName, groupEVaultUri, fileOntology);
-        videos.push(...this.discoverFileVideos(groupEName, files, referenced));
+        videos.push(...this.discoverFileVideos(groupEName, files, referenced, 'shared'));
+        const rawFiles = await this.listEnvelopes(groupEName, groupEVaultUri, w3dsFileOntology);
+        videos.push(...this.discoverRawFileVideos(groupEName, rawFiles, referenced, 'shared'));
       } catch {
         // A stale chat reference or a group that no longer grants access must
         // not hide the rest of a person's Meshenger library.
@@ -419,7 +430,7 @@ export class MeshengerVideoLibrary {
 
         for (const chatId of canonicalChats.keys()) {
           const authorMessages = await this.listMessagesForChat(ownerEName, eVaultUri, chatId);
-          videos.push(...this.discoverMessageVideos(authorMessages, referenced));
+          videos.push(...this.discoverMessageVideos(authorMessages, referenced, 'shared'));
           messages.push(
             ...authorMessages.map((message) => toMeshengerMessage(ownerEName, message)),
           );
@@ -482,12 +493,17 @@ export class MeshengerVideoLibrary {
         title: startedAt ? `Call recording · ${startedAt.slice(0, 10)}` : 'Call recording',
         ...(durationSeconds !== undefined ? { durationSeconds } : {}),
         ...(startedAt ? { createdAt: startedAt } : {}),
+        accessScope: sourceEName === viewerEName ? 'personal' : 'shared',
       });
     }
     return discovered;
   }
 
-  private discoverMessageVideos(messages: Envelope[], referenced: Set<string>): DiscoveredVideo[] {
+  private discoverMessageVideos(
+    messages: Envelope[],
+    referenced: Set<string>,
+    accessScope: EVaultVideoAccessScope,
+  ): DiscoveredVideo[] {
     const discovered: DiscoveredVideo[] = [];
     for (const message of messages) {
       const fileUris = messageVideoFileUris(message.parsed);
@@ -511,6 +527,7 @@ export class MeshengerVideoLibrary {
         ...(optionalString(message.parsed.createdAt)
           ? { createdAt: optionalString(message.parsed.createdAt) }
           : {}),
+        accessScope,
       });
     }
     return discovered;
@@ -520,6 +537,7 @@ export class MeshengerVideoLibrary {
     ownerEName: string,
     files: Envelope[],
     referenced: Set<string>,
+    accessScope: EVaultVideoAccessScope,
   ): DiscoveredVideo[] {
     const discovered: DiscoveredVideo[] = [];
     for (const file of files) {
@@ -537,7 +555,36 @@ export class MeshengerVideoLibrary {
         ...(optionalString(file.parsed.createdAt)
           ? { createdAt: optionalString(file.parsed.createdAt) }
           : {}),
+        accessScope,
       });
+    }
+    return discovered;
+  }
+
+  /** Discovers authorised video directly from the W3DS uploadFile record. */
+  private discoverRawFileVideos(
+    ownerEName: string,
+    files: Envelope[],
+    referenced: Set<string>,
+    accessScope: EVaultVideoAccessScope,
+  ): DiscoveredVideo[] {
+    const discovered: DiscoveredVideo[] = [];
+    for (const file of files) {
+      const contentType = optionalString(file.parsed.contentType);
+      if (!contentType?.toLowerCase().startsWith('video/')) continue;
+      const fileUri = `w3ds://file?id=${ownerEName}/${file.id}`;
+      if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
+      discovered.push({
+        key: `w3ds-file:${ownerEName}:${file.id}`,
+        fileUris: [fileUri],
+        kind: 'file',
+        title: optionalString(file.parsed.filename) ?? 'Video file',
+        ...(optionalString(file.parsed.uploadedAt)
+          ? { createdAt: optionalString(file.parsed.uploadedAt) }
+          : {}),
+        accessScope,
+      });
+      referenced.add(fileUri);
     }
     return discovered;
   }
