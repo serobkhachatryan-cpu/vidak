@@ -7,13 +7,13 @@ import { Providers } from './providers';
 export const metadata: Metadata = {
   metadataBase: new URL('https://vidak.postplatforms.com'),
   title: { default: platformName, template: `%s · ${platformName}` },
-  description: 'A decentralized home for videos, channels, and playlists.',
+  description: 'Find video you can access through your eVaults and choose its visibility.',
   applicationName: platformName,
   openGraph: {
     type: 'website',
     siteName: platformName,
     title: platformName,
-    description: 'A decentralized home for videos, channels, and playlists.',
+    description: 'Find video you can access through your eVaults and choose its visibility.',
   },
   twitter: {
     card: 'summary_large_image',

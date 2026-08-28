@@ -171,7 +171,7 @@ export function ChannelImportsSection({
 
       <div className="space-y-3">
         <div>
-          <Text className="font-semibold">Your imported channels</Text>
+          <Text className="font-semibold">Your linked channels</Text>
           <Text size="sm" tone="muted" className="mt-1">
             Public channels you add and owner channels you approve appear here.
           </Text>
@@ -179,7 +179,7 @@ export function ChannelImportsSection({
         {channels.length === 0 ? (
           <EmptyState
             icon="◌"
-            title="No imported channels yet"
+            title="No linked channels yet"
             description="Add a public YouTube channel above, or connect an owner-authorized channel when available."
           />
         ) : (

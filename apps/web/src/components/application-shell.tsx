@@ -17,8 +17,8 @@ const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
   { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
   { label: 'Support', href: '/support', icon: '⚑' },
-  { label: 'Library', href: '/library', icon: '▣' },
-  { label: 'Meshenger', href: '/meshenger', icon: '◌' },
+  { label: 'Linked channels', href: '/library', icon: '▣' },
+  { label: 'Your videos', href: '/your-videos', icon: '◌' },
   { label: 'Upload', href: '/upload', icon: '⇪' },
   { label: 'Settings', href: '/settings', icon: '⚙' },
 ];

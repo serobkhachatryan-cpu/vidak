@@ -3,6 +3,7 @@
 import { useChannel, useInfinitePublicVideos } from '@w3ds/hooks';
 import type { Video } from '@w3ds/types';
 import {
+  Button,
   EmptyState,
   ErrorState,
   Grid,
@@ -12,6 +13,7 @@ import {
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
+import { useRouter } from 'next/navigation';
 import { useEffect, useRef } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { videoApiClient } from '../../lib/video-api-client';
@@ -32,6 +34,7 @@ function FeedGridSkeleton() {
 }
 
 export function HomeFeed() {
+  const router = useRouter();
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, isPending, refetch } =
     useInfinitePublicVideos(videoApiClient, 1);
@@ -54,7 +57,11 @@ export function HomeFeed() {
 
   return (
     <ApplicationShell currentHref="/">
-      <Page title="Home" description="Fresh videos from the Vidak community." containerSize="full">
+      <Page
+        title="Home"
+        description="Public videos people have chosen to share."
+        containerSize="full"
+      >
         {isPending ? (
           <FeedGridSkeleton />
         ) : error ? (
@@ -66,8 +73,16 @@ export function HomeFeed() {
         ) : videos.length === 0 ? (
           <EmptyState
             icon={<VidakLogo title="" aria-hidden="true" className="h-12 w-auto text-foreground" />}
-            title="No videos to show"
-            description="New public videos will appear here."
+            title="Start with your videos"
+            description="Find video you can access through your eVaults, or upload a video you want to keep private or publish."
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                <Button onClick={() => router.push('/your-videos')}>Find my videos</Button>
+                <Button variant="secondary" onClick={() => router.push('/upload')}>
+                  Upload a video
+                </Button>
+              </div>
+            }
           />
         ) : (
           <>

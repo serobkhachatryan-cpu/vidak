@@ -151,4 +151,4 @@ External links enhance a person’s library without disguising what is supported
 
 ## Status
 
-Roadmap approved for implementation planning on 2026-08-28. Release 0 audit is the active next step.
+Release 0 is in progress. The eVault-first entry point, legacy-route redirect, actionable home empty state, and clearer settings language are implemented locally and pending deployment verification. The signing and eVault discovery contracts remain the next engineering work.

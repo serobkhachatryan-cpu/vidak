@@ -1,5 +1,5 @@
-import { MeshengerVideoLibraryPage } from '../../features/meshenger/meshenger-video-library-page';
+import { redirect } from 'next/navigation';
 
-export default function MeshengerPage() {
-  return <MeshengerVideoLibraryPage />;
+export default function LegacyMeshengerPage() {
+  redirect('/your-videos');
 }

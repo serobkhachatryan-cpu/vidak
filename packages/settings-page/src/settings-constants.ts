@@ -32,8 +32,8 @@ export const settingsSectionLabels: Record<SettingsSectionId, string> = {
   privacy: 'Privacy',
   appearance: 'Appearance',
   language: 'Language',
-  connected: 'Connected accounts',
-  imports: 'Channel imports',
+  connected: 'Sign-in accounts',
+  imports: 'External video channels',
   sessions: 'Sessions',
   danger: 'Delete account',
 };
@@ -46,9 +46,9 @@ export const settingsSectionDescriptions: Record<SettingsSectionId, string> = {
   privacy: 'Control what others can see about your activity.',
   appearance: 'Choose light, dark, or match your system.',
   language: 'Select the language used across the product.',
-  connected: 'Link or unlink third-party sign-in providers.',
+  connected: 'Optional ways to sign in with Google, GitHub, or Apple. These do not import video.',
   imports:
-    'Add a public YouTube channel or connect an owner-authorized YouTube or Vimeo channel without copying its media.',
+    'Optional links to public YouTube or owner-authorized YouTube and Vimeo channels. Vidak does not copy their media.',
   sessions: 'Review devices that are currently signed in.',
   danger: 'Permanently delete your account and creator data.',
 };

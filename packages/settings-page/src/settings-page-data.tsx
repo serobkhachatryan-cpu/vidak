@@ -258,9 +258,7 @@ export function SettingsPageData({
     window.history.replaceState({}, '', url);
     setActiveSettingsSection('imports');
     if (result === 'connected') {
-      setChannelImportsSuccess(
-        'Channel connected. Vidak will show only the channels you approved.',
-      );
+      setChannelImportsSuccess('Channel linked. Vidak will show only the channels you approved.');
       void refetchChannelImports();
     } else if (result === 'cancelled') {
       setChannelImportsError('Channel connection was cancelled.');

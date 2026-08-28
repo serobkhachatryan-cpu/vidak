@@ -10,8 +10,8 @@ function LibraryContent() {
   return (
     <ApplicationShell currentHref="/library">
       <Page
-        title="Your library"
-        description="Videos from channels you have authorised Vidak to access."
+        title="Linked channel videos"
+        description="Public videos from channels you chose to link to Vidak."
       >
         <ImportedVideosLibrary />
       </Page>

@@ -55,8 +55,8 @@ export function ImportedVideosLibrary() {
     return (
       <EmptyState
         icon="◌"
-        title="No imported videos yet"
-        description="Connect a YouTube or Vimeo channel in Settings. Vidak will add the authorised video catalogue here as it is scanned."
+        title="No linked-channel videos yet"
+        description="Go to Settings → External video channels to add a public YouTube channel or link a channel you own."
       />
     );
   }

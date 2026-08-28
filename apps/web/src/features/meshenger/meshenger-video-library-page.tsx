@@ -1,6 +1,7 @@
 'use client';
 
 import { Button, EmptyState, ErrorState, Page, Spinner } from '@w3ds/ui';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { elapsedRecordingDuration, totalRecordingDuration } from './segmented-playback';
@@ -15,60 +16,23 @@ type LibraryVideo = {
   streamIds: string[];
 };
 
-type LibraryConversation = {
-  id: string;
-  kind: 'personal' | 'group';
-  title: string;
-  participantCount?: number;
-  role?: 'admin' | 'participant';
-  updatedAt?: string;
-};
-
-type LibraryMessage = {
-  id: string;
-  type: string;
-  content?: string;
-  replyToId?: string;
-  createdAt?: string;
-  edited: boolean;
-};
-
 type LibraryState =
   | { status: 'loading' }
-  | {
-      status: 'ready';
-      items: LibraryVideo[];
-      conversations: LibraryConversation[];
-      messages: LibraryMessage[];
-    }
-  | { status: 'error'; message: string };
+  | { status: 'ready'; items: LibraryVideo[] }
+  | { status: 'error' };
 
 export function MeshengerVideoLibraryPage() {
+  const router = useRouter();
   const [state, setState] = useState<LibraryState>({ status: 'loading' });
   const load = useCallback(async () => {
     setState({ status: 'loading' });
     try {
       const response = await fetch('/api/meshenger/videos', { cache: 'no-store' });
-      const body = (await response.json()) as {
-        items?: LibraryVideo[];
-        conversations?: LibraryConversation[];
-        messages?: LibraryMessage[];
-        error?: { message?: string };
-      };
-      if (!response.ok || !Array.isArray(body.items)) {
-        throw new Error(body.error?.message ?? 'Meshenger videos are unavailable.');
-      }
-      setState({
-        status: 'ready',
-        items: body.items,
-        conversations: Array.isArray(body.conversations) ? body.conversations : [],
-        messages: Array.isArray(body.messages) ? body.messages : [],
-      });
-    } catch (error) {
-      setState({
-        status: 'error',
-        message: error instanceof Error ? error.message : 'Meshenger videos are unavailable.',
-      });
+      const body = (await response.json()) as { items?: LibraryVideo[] };
+      if (!response.ok || !Array.isArray(body.items)) throw new Error();
+      setState({ status: 'ready', items: body.items });
+    } catch {
+      setState({ status: 'error' });
     }
   }, []);
 
@@ -77,77 +41,35 @@ export function MeshengerVideoLibraryPage() {
   }, [load]);
 
   return (
-    <ApplicationShell currentHref="/meshenger">
+    <ApplicationShell currentHref="/your-videos">
       <Page
-        title="Meshenger"
-        description="Your authorized Meshenger conversations, messages, call recordings, circles, and video files—read privately through W3DS."
+        title="Your eVault videos"
+        description="Video you can access through your eVaults. Nothing is shared or published automatically."
         actions={
-          <Button variant="secondary" onClick={() => void load()}>
-            Refresh library
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => void load()}>
+              Refresh videos
+            </Button>
+            <Button onClick={() => router.push('/upload')}>Upload a video</Button>
+          </div>
         }
       >
-        {state.status === 'ready' ? (
-          <div className="mb-10 grid gap-6 lg:grid-cols-2">
-            <section aria-labelledby="meshenger-conversations" className="space-y-3">
-              <div>
-                <h2 id="meshenger-conversations" className="text-lg font-semibold text-foreground">
-                  Conversations
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  Personal chats and groups available through your current eVault access.
-                </p>
-              </div>
-              {state.conversations.length ? (
-                <div className="grid gap-3 sm:grid-cols-2">
-                  {state.conversations.map((conversation) => (
-                    <article
-                      key={conversation.id}
-                      className="rounded-xl border border-border bg-surface-raised p-4"
-                    >
-                      <p className="text-xs font-semibold uppercase tracking-wide text-primary">
-                        {conversation.kind === 'group' ? 'Group' : 'Personal chat'}
-                      </p>
-                      <h3 className="mt-1 font-semibold text-foreground">{conversation.title}</h3>
-                      <p className="mt-1 text-sm text-muted-foreground">
-                        {conversationDetails(conversation)}
-                      </p>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-                  No Meshenger conversations are available through your current eVault access.
-                </p>
-              )}
-            </section>
-            <section aria-labelledby="meshenger-messages" className="space-y-3">
-              <div>
-                <h2 id="meshenger-messages" className="text-lg font-semibold text-foreground">
-                  Latest messages
-                </h2>
-                <p className="text-sm text-muted-foreground">
-                  Your 12 most recent authorized Meshenger messages.
-                </p>
-              </div>
-              <MessageList messages={state.messages} />
-            </section>
-          </div>
-        ) : null}
         {state.status === 'loading' ? (
           <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Spinner size="sm" /> Reading your Meshenger workspace…
+            <Spinner size="sm" /> Finding video you can access…
           </div>
         ) : state.status === 'error' ? (
           <ErrorState
-            title="Could not load Meshenger"
-            description={state.message}
+            title="Could not load your eVault videos"
+            description="Your video list is private. Refresh to try the request again."
             retry={() => void load()}
+            retryLabel="Refresh videos"
           />
         ) : state.items.length === 0 ? (
           <EmptyState
-            title="No Meshenger videos found"
-            description="When videos are available in your W3DS vault, they will appear here."
+            title="No videos are available yet"
+            description="When you can access video through an eVault, it will appear here. You can also upload a new video."
+            action={<Button onClick={() => router.push('/upload')}>Upload a video</Button>}
           />
         ) : (
           <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
@@ -273,14 +195,12 @@ function SegmentedVideoPlayer({
           className="m-4 rounded-lg border border-destructive/30 bg-destructive/5 p-3"
           role="alert"
         >
-          <p className="text-sm font-medium text-foreground">
-            This recording part could not be loaded.
-          </p>
+          <p className="text-sm font-medium text-foreground">This recording could not be loaded.</p>
           <p className="mt-1 text-sm text-muted-foreground">
             Refresh the library to renew the private playback link, then try again.
           </p>
           <Button className="mt-3" variant="secondary" onClick={onRefresh}>
-            Refresh library
+            Refresh videos
           </Button>
         </div>
       ) : null}
@@ -300,58 +220,9 @@ function details(video: LibraryVideo): string {
     video.durationSeconds !== undefined ? formatDuration(video.durationSeconds) : undefined,
     video.createdAt ? new Date(video.createdAt).toLocaleDateString() : undefined,
   ].filter(Boolean);
-  return values.join(' · ') || 'Meshenger';
-}
-
-function MessageList({ messages }: { messages: LibraryMessage[] }) {
-  if (!messages.length) {
-    return (
-      <p className="rounded-xl border border-dashed border-border p-4 text-sm text-muted-foreground">
-        No messages are available through your current eVault access.
-      </p>
-    );
-  }
-  return (
-    <ol className="divide-y divide-border overflow-hidden rounded-xl border border-border bg-surface-raised">
-      {messages.slice(0, 12).map((message) => (
-        <li key={message.id} className="space-y-1 p-4">
-          <div className="flex flex-wrap gap-2 text-xs font-semibold uppercase tracking-wide text-primary">
-            <span>{messageLabel(message)}</span>
-            {message.edited ? <span className="text-muted-foreground">Edited</span> : null}
-          </div>
-          <p className="text-sm text-foreground">{message.content ?? 'Media or system message'}</p>
-          <p className="text-xs text-muted-foreground">{messageDetails(message)}</p>
-        </li>
-      ))}
-    </ol>
-  );
-}
-
-function conversationDetails(conversation: LibraryConversation): string {
-  const values = [
-    conversation.participantCount ? `${conversation.participantCount} people` : undefined,
-    conversation.role,
-    conversation.updatedAt
-      ? `Updated ${new Date(conversation.updatedAt).toLocaleDateString()}`
-      : undefined,
-  ].filter(Boolean);
-  return values.join(' · ') || 'Meshenger';
-}
-
-function messageLabel(message: LibraryMessage): string {
-  if (message.type === 'circle') return 'Video circle';
-  if (message.type === 'video') return 'Video message';
-  return message.type;
-}
-
-function messageDetails(message: LibraryMessage): string {
-  const values = [
-    message.replyToId ? 'Reply' : undefined,
-    message.createdAt ? new Date(message.createdAt).toLocaleString() : undefined,
-  ].filter(Boolean);
-  return values.join(' · ') || 'Meshenger';
+  return values.join(' · ') || 'Available through your eVault';
 }
 
 function formatDuration(seconds: number): string {
-  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
+  return `${String(Math.floor(seconds / 60))}:${String(Math.floor(seconds % 60)).padStart(2, '0')}`;
 }

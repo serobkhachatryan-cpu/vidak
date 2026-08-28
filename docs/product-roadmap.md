@@ -1,9 +1,10 @@
 # Product Roadmap
 
-This is the product-level source of truth for W3DS Video. It records the
-implemented product surface, the intended release sequence, and the work that
-is still required. Statuses are evidence-based and must be updated when the
-repository's capabilities change.
+> **Current product sequencing:** See [the eVault-first Vidak rebuild roadmap](./vidak-rebuild-roadmap.md). This document is retained as historical planning context.
+
+This historical document records an earlier product plan for W3DS Video. The
+current product source of truth is the eVault-first rebuild roadmap linked
+above.
 
 ## Vision
 
