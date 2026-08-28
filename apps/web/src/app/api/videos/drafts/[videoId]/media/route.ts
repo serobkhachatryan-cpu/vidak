@@ -1,4 +1,5 @@
 import { type NextRequest, NextResponse } from 'next/server';
+import { CreatorVideoError, getCreatorVideoService } from '../../../../../../server/creator-video';
 import { getMediaAssetService, MediaAssetError } from '../../../../../../server/media-asset';
 import { assertTrustedMutationOrigin } from '../../../../../../server/request-security';
 import {
@@ -16,7 +17,11 @@ function accessTokenFrom(request: NextRequest): string | undefined {
 }
 
 function errorResponse(error: unknown): NextResponse {
-  if (error instanceof W3dsAuthError || error instanceof MediaAssetError) {
+  if (
+    error instanceof W3dsAuthError ||
+    error instanceof MediaAssetError ||
+    error instanceof CreatorVideoError
+  ) {
     return NextResponse.json(
       { error: { code: error.code, message: error.message } },
       { status: error.status },
@@ -26,6 +31,26 @@ function errorResponse(error: unknown): NextResponse {
     { error: { code: 'internal_error', message: 'Media transfer is unavailable.' } },
     { status: 500 },
   );
+}
+
+/**
+ * GET /api/videos/drafts/:videoId/media
+ * Lists the signed-in owner's video assets for resuming a saved draft.
+ */
+export async function GET(request: NextRequest, context: RouteContext) {
+  try {
+    const accessToken = accessTokenFrom(request);
+    if (!accessToken) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+    const { videoId } = await context.params;
+    // A media row alone is never enough: this route only resumes an editable, owned draft.
+    await getCreatorVideoService().getDraft(accessToken, videoId);
+    const items = await getMediaAssetService().listOwnedVideoAssets(accessToken, videoId);
+    return NextResponse.json({ items });
+  } catch (error) {
+    return errorResponse(error);
+  }
 }
 
 /**

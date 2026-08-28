@@ -81,6 +81,8 @@ export interface VideoApiClient {
   /** Persist editable draft metadata for the authenticated creator. */
   createDraft(input: CreateVideoDraftInput): Promise<Video>;
   listDrafts(): Promise<readonly Video[]>;
+  /** Every local Vidak video owned by the signed-in creator. */
+  listOwnedVideos(): Promise<readonly Video[]>;
   getDraft(id: VideoId): Promise<Video>;
   updateDraft(id: VideoId, input: UpdateVideoDraftInput): Promise<Video>;
   deleteDraft(id: VideoId): Promise<void>;
@@ -103,6 +105,8 @@ export interface VideoApiClient {
     file: UploadDraftMediaFile,
     options?: UploadDraftMediaOptions,
   ): Promise<Video>;
+  /** List owned video media attached to an editable draft (no storage key / public URL). */
+  listDraftMedia(videoId: VideoId): Promise<readonly DraftMediaAsset[]>;
   /** Read owned draft media metadata (no storage key / public URL). */
   getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset>;
   /** Delete an owned draft media asset through the protected delete route. */

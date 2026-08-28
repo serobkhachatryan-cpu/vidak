@@ -234,6 +234,11 @@ export class W3dsVideoApiClient implements VideoApiClient {
     return response.items;
   }
 
+  async listOwnedVideos(): Promise<readonly Video[]> {
+    const response = await this.requestJson<{ items: Video[] }>('/api/videos/mine');
+    return response.items;
+  }
+
   async getDraft(id: VideoId): Promise<Video> {
     return this.requestJson<Video>(`/api/videos/drafts/${encodeURIComponent(id)}`);
   }
@@ -280,6 +285,16 @@ export class W3dsVideoApiClient implements VideoApiClient {
       onProgress: options.onProgress,
       createXHR: this.createXHR,
     });
+  }
+
+  async listDraftMedia(videoId: VideoId): Promise<readonly DraftMediaAsset[]> {
+    const response = await this.requestJson<{ items: DraftMediaAsset[] }>(
+      `/api/videos/drafts/${encodeURIComponent(videoId)}/media`,
+    );
+    for (const asset of response.items) {
+      if (asset.uploadState === 'ready') this.readyAssetByVideoId.set(videoId, asset.id);
+    }
+    return response.items;
   }
 
   async getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset> {

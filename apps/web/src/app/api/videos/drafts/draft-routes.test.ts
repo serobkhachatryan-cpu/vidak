@@ -16,6 +16,7 @@ import {
   type W3dsAuthStore,
   type W3dsIdentityVerifier,
 } from '../../../../server/w3ds-auth';
+import { GET as listOwnedVideos } from '../mine/route';
 import { DELETE as deleteDraft, GET as getDraft, PATCH as updateDraft } from './[videoId]/route';
 import { POST as createDraft, GET as listDrafts } from './route';
 
@@ -46,6 +47,9 @@ describe('video draft API routes', () => {
       getDraft(new NextRequest('https://vidak.example/api/videos/drafts/draft-1'), {
         params: Promise.resolve({ videoId: 'draft-1' }),
       }),
+    ).resolves.toMatchObject({ status: 401 });
+    await expect(
+      listOwnedVideos(new NextRequest('https://vidak.example/api/videos/mine')),
     ).resolves.toMatchObject({ status: 401 });
   });
 
@@ -87,6 +91,16 @@ describe('video draft API routes', () => {
     expect(listed.status).toBe(200);
     await expect(listed.json()).resolves.toMatchObject({
       items: [{ id: createdBody.id, title: 'Route draft' }],
+    });
+
+    const owned = await listOwnedVideos(
+      new NextRequest('https://vidak.example/api/videos/mine', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      }),
+    );
+    expect(owned.status).toBe(200);
+    await expect(owned.json()).resolves.toMatchObject({
+      items: [{ id: createdBody.id, title: 'Route draft', status: 'draft' }],
     });
 
     const read = await getDraft(

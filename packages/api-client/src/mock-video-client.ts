@@ -568,6 +568,11 @@ export class MockVideoApiClient implements VideoApiClient {
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
   }
 
+  async listOwnedVideos(): Promise<readonly Video[]> {
+    await this.wait();
+    return this.videos.slice().sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
+  }
+
   async getDraft(id: VideoId): Promise<Video> {
     await this.wait();
     const video = this.videos.find((item) => item.id === id && item.status === 'draft');
@@ -726,6 +731,13 @@ export class MockVideoApiClient implements VideoApiClient {
     };
     this.videos = this.videos.map((item) => (item.id === videoId ? next : item));
     return next;
+  }
+
+  async listDraftMedia(videoId: VideoId): Promise<readonly DraftMediaAsset[]> {
+    await this.wait();
+    return [...this.draftMediaById.values()]
+      .filter((asset) => asset.videoId === videoId)
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   async getDraftMedia(videoId: VideoId, assetId: string): Promise<DraftMediaAsset> {

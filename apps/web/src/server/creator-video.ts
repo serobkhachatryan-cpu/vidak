@@ -95,6 +95,12 @@ export class CreatorVideoService {
     return this.store.listDraftsByOwnerId(user.id);
   }
 
+  /** Every local Vidak video the caller owns, including published videos and drafts. */
+  async listOwnedVideos(accessToken: string): Promise<Video[]> {
+    const user = await this.requireUser(accessToken);
+    return this.store.listOwnedVideosByOwnerId(user.id);
+  }
+
   async getDraft(accessToken: string, videoId: string): Promise<Video> {
     const user = await this.requireUser(accessToken);
     const draft = await this.requireOwnedDraft(videoId, user.id);

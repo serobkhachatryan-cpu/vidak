@@ -74,6 +74,8 @@ export interface UploadPageProps {
   onRemoveMedia?: () => void;
   draft?: UploadDraft;
   onDraftChange?: (patch: Partial<UploadDraft>) => void;
+  /** Shown when a deep-linked saved draft cannot be restored. */
+  restoreDraftError?: string;
   detailsErrors?: UploadDetailsErrors;
   thumbnailError?: string;
   visibilityError?: string;
@@ -141,6 +143,7 @@ export function UploadPage({
   onRemoveMedia,
   draft: draftProp,
   onDraftChange,
+  restoreDraftError,
   detailsErrors,
   thumbnailError,
   visibilityError,
@@ -335,6 +338,11 @@ export function UploadPage({
               <Heading id={stepHeadingId} as="h2" size="sm" className="mb-5">
                 {uploadStepLabels[step]}
               </Heading>
+            )}
+            {restoreDraftError && (
+              <Text size="sm" tone="danger" role="alert" className="mb-5">
+                {restoreDraftError}
+              </Text>
             )}
             {body}
           </section>

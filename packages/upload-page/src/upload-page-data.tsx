@@ -79,6 +79,7 @@ export interface UploadPageDataProps
     | 'onRemoveMedia'
     | 'draft'
     | 'onDraftChange'
+    | 'restoreDraftError'
     | 'detailsErrors'
     | 'thumbnailError'
     | 'visibilityError'
@@ -149,6 +150,7 @@ export function UploadPageData({
   const [autoThumbnails, setAutoThumbnails] = useState<readonly string[]>([]);
   const [customThumbnailUrl, setCustomThumbnailUrl] = useState<string | undefined>();
   const [draft, setDraft] = useState<UploadDraft>(emptyUploadDraft);
+  const [restoreDraftError, setRestoreDraftError] = useState<string | undefined>();
   const [detailsErrors, setDetailsErrors] = useState<UploadDetailsErrors | undefined>();
   const [thumbnailError, setThumbnailError] = useState<string | undefined>();
   const [visibilityError, setVisibilityError] = useState<string | undefined>();
@@ -184,6 +186,46 @@ export function UploadPageData({
   useEffect(() => {
     mediaAssetRef.current = mediaAsset;
   }, [mediaAsset]);
+
+  useEffect(() => {
+    const videoId = initialDraftId?.trim();
+    if (!videoId) return;
+    let active = true;
+
+    void Promise.all([client.getDraft(videoId), client.listDraftMedia(videoId)])
+      .then(([savedDraft, assets]) => {
+        if (!active) return;
+        const primaryAsset = assets
+          .filter((asset) => asset.uploadState === 'ready')
+          .sort((left, right) => left.createdAt.localeCompare(right.createdAt))[0];
+        draftVideoIdRef.current = savedDraft.id;
+        setDraftVideoId(savedDraft.id);
+        setDraft({
+          title: savedDraft.title,
+          description: savedDraft.description,
+          tags: savedDraft.tags,
+          category: savedDraft.category ?? '',
+          language: savedDraft.language ?? '',
+          visibility: savedDraft.visibility,
+          thumbnailUrl: normalizePersistedThumbnailUrl(savedDraft.thumbnailUrl),
+        });
+        setMediaAsset(primaryAsset);
+        setAutoThumbnails(savedDraft.thumbnailUrl ? [savedDraft.thumbnailUrl] : []);
+        setUploadStatus(primaryAsset ? 'complete' : 'idle');
+        setCompletedSteps(primaryAsset ? ['select', 'progress'] : []);
+        setRestoreDraftError(undefined);
+        setStep('details');
+      })
+      .catch(() => {
+        if (active) {
+          setRestoreDraftError('Could not open this saved video. Refresh and try again.');
+        }
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [client, initialDraftId]);
 
   useEffect(() => {
     return () => {
@@ -234,14 +276,15 @@ export function UploadPageData({
     setUploadStatus('idle');
     setProgress(undefined);
     clearUploadFailure();
-    draftVideoIdRef.current = initialDraftId;
-    setDraftVideoId(initialDraftId);
+    draftVideoIdRef.current = undefined;
+    setDraftVideoId(undefined);
     setMediaAsset(undefined);
     setIsRemovingMedia(false);
     setRemoveMediaError(undefined);
     setAutoThumbnails([]);
     setCustomThumbnailUrl(undefined);
     setDraft(emptyUploadDraft());
+    setRestoreDraftError(undefined);
     setDetailsErrors(undefined);
     setThumbnailError(undefined);
     setVisibilityError(undefined);
@@ -779,6 +822,9 @@ export function UploadPageData({
       ? client.draftMediaContentPath(draftVideoId, mediaAsset.id)
       : undefined;
   const shareUrl = publishedVideo ? buildShareUrl(publishedVideo) : undefined;
+  // A restored draft has no browser File object, but it still needs its durable media name and size.
+  const displayFileName = file?.name ?? mediaAsset?.originalFilename;
+  const displayFileSize = file?.size ?? mediaAsset?.byteSize;
 
   return (
     <UploadPage
@@ -786,7 +832,8 @@ export function UploadPageData({
       step={step}
       onStepChange={setStep}
       completedSteps={completedSteps}
-      {...(file ? { fileName: file.name, fileSize: file.size } : {})}
+      {...(displayFileName ? { fileName: displayFileName } : {})}
+      {...(displayFileSize !== undefined ? { fileSize: displayFileSize } : {})}
       {...(fileError !== undefined ? { fileError } : {})}
       onFileSelect={onFileSelect}
       uploadStatus={uploadStatus}
@@ -805,6 +852,7 @@ export function UploadPageData({
       }}
       draft={draft}
       onDraftChange={patchDraft}
+      {...(restoreDraftError !== undefined ? { restoreDraftError } : {})}
       {...(detailsErrors !== undefined ? { detailsErrors } : {})}
       {...(thumbnailError !== undefined ? { thumbnailError } : {})}
       {...(visibilityError !== undefined ? { visibilityError } : {})}

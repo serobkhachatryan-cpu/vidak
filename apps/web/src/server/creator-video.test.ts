@@ -178,6 +178,7 @@ describe('CreatorVideoService', () => {
       status: 404,
     });
     await expect(otherService.listDrafts('other-token')).resolves.toEqual([]);
+    await expect(otherService.listOwnedVideos('other-token')).resolves.toEqual([]);
     await expect(ownerService.getDraft('owner-token', draft.id)).resolves.toMatchObject({
       id: draft.id,
     });
@@ -209,6 +210,10 @@ describe('CreatorVideoService', () => {
 
     const again = await service.publishVideo('token', draft.id);
     expect(again).toEqual(published);
+
+    await expect(service.listOwnedVideos('token')).resolves.toEqual([
+      expect.objectContaining({ id: draft.id, status: 'published' }),
+    ]);
 
     const unpublished = await service.unpublishVideo('token', draft.id);
     expect(unpublished).toMatchObject({

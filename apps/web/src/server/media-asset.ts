@@ -14,6 +14,7 @@ import {
 } from './media-byte-range';
 import {
   isThumbnailMediaContentType,
+  isVideoMediaContentType,
   type MediaUploadLimits,
   normalizeContentType,
   resolveMediaUploadLimits,
@@ -397,6 +398,19 @@ export class MediaAssetService {
       });
       throw error;
     }
+  }
+
+  /** Lists a draft owner's video assets without exposing storage keys or byte URLs. */
+  async listOwnedVideoAssets(accessToken: string, videoId: string): Promise<PublicMediaAsset[]> {
+    const user = await this.requireUser(accessToken);
+    const normalizedVideoId = videoId.trim();
+    if (!normalizedVideoId) {
+      throw new MediaAssetError('Video draft was not found.', 'not_found', 404);
+    }
+    const assets = await this.store.listOwnedAssetsByVideoId(normalizedVideoId, user.id);
+    return assets
+      .filter((asset) => isVideoMediaContentType(asset.contentType))
+      .map(toPublicMediaAsset);
   }
 
   async getOwnedAsset(

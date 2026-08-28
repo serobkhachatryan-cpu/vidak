@@ -146,6 +146,39 @@ describe('W3dsVideoApiClient', () => {
     expect(fetchMock).toHaveBeenCalled();
   });
 
+  it('lists the signed-in creator’s videos and draft media through protected routes', async () => {
+    const draft = {
+      id: 'draft-1',
+      channelId: 'channel-1',
+      title: 'Owned draft',
+      description: '',
+      thumbnailUrl: '',
+      durationSeconds: 0,
+      status: 'draft' as const,
+      visibility: 'private' as const,
+      createdAt: '2026-08-04T10:00:00.000Z',
+      updatedAt: '2026-08-04T10:00:00.000Z',
+      viewCount: 0,
+      likeCount: 0,
+      commentCount: 0,
+      tags: [] as string[],
+    };
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.credentials).toBe('include');
+      const url = String(input);
+      if (url.endsWith('/api/videos/mine')) return jsonResponse({ items: [draft] });
+      if (url.endsWith('/api/videos/drafts/draft-1/media')) {
+        return jsonResponse({ items: [publicAsset] });
+      }
+      return jsonResponse({ error: { code: 'not_found', message: 'missing' } }, 404);
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+
+    await expect(client.listOwnedVideos()).resolves.toEqual([draft]);
+    await expect(client.listDraftMedia('draft-1')).resolves.toEqual([publicAsset]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('binds globalThis.fetch so unbound window.fetch does not block draft create', async () => {
     const draft = {
       id: 'draft-bound',

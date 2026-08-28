@@ -30,7 +30,7 @@ import {
 import { POST as createDraft } from '../../route';
 import { GET as getContent } from './[assetId]/content/route';
 import { DELETE as deleteAsset, GET as getAsset } from './[assetId]/route';
-import { POST as uploadMedia } from './route';
+import { GET as listMedia, POST as uploadMedia } from './route';
 
 let rootDir = '';
 
@@ -65,6 +65,12 @@ describe('protected media transfer routes', () => {
     await expect(
       getAsset(new NextRequest('https://vidak.example/api/videos/drafts/draft-1/media/a1'), {
         params: Promise.resolve({ videoId: 'draft-1', assetId: 'a1' }),
+      }),
+    ).resolves.toMatchObject({ status: 401 });
+
+    await expect(
+      listMedia(new NextRequest('https://vidak.example/api/videos/drafts/draft-1/media'), {
+        params: Promise.resolve({ videoId: 'draft-1' }),
       }),
     ).resolves.toMatchObject({ status: 401 });
 
@@ -150,6 +156,25 @@ describe('protected media transfer routes', () => {
     });
     expect(metadataBody).not.toHaveProperty('storageKey');
 
+    const listed = await listMedia(
+      new NextRequest(`https://vidak.example/api/videos/drafts/${ctx.draftId}/media`, {
+        headers: { Authorization: `Bearer ${ctx.ownerToken}` },
+      }),
+      { params: Promise.resolve({ videoId: ctx.draftId }) },
+    );
+    expect(listed.status).toBe(200);
+    const listedBody = (await listed.json()) as { items: Array<Record<string, unknown>> };
+    expect(listedBody.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: bearerAsset.id,
+          contentType: 'video/webm',
+          uploadState: 'ready',
+        }),
+      ]),
+    );
+    expect(JSON.stringify(listedBody)).not.toContain(rootDir);
+
     const download = await getContent(
       new NextRequest(
         `https://vidak.example/api/videos/drafts/${ctx.draftId}/media/${bearerAsset.id}/content`,
@@ -230,6 +255,15 @@ describe('protected media transfer routes', () => {
       eVaultId: 'evault-viewer',
       eVaultUri: 'https://evault.example/viewer',
     });
+
+    await expect(
+      listMedia(
+        new NextRequest(`https://vidak.example/api/videos/drafts/${ctx.draftId}/media`, {
+          headers: { Authorization: `Bearer ${viewerToken}` },
+        }),
+        { params: Promise.resolve({ videoId: ctx.draftId }) },
+      ),
+    ).resolves.toMatchObject({ status: 404 });
 
     await expect(
       getAsset(

@@ -45,6 +45,8 @@ export interface CreatorVideoStore {
   findChannelByOwnerId(ownerId: string): Promise<Channel | undefined>;
   createDraft(input: CreateDraftRecordInput): Promise<Video>;
   listDraftsByOwnerId(ownerId: string): Promise<Video[]>;
+  /** Every local Vidak video the owner can manage, regardless of lifecycle state. */
+  listOwnedVideosByOwnerId(ownerId: string): Promise<Video[]>;
   /** Returns the draft only when it exists, is a draft, and is owned by `ownerId`. */
   getOwnedDraft(videoId: string, ownerId: string): Promise<Video | undefined>;
   /** Returns an owned video in any lifecycle state. */
@@ -237,6 +239,13 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
   async listDraftsByOwnerId(ownerId: string): Promise<Video[]> {
     return [...this.videosById.values()]
       .filter((draft) => draft.ownerId === ownerId && draft.status === 'draft')
+      .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+      .map(cloneVideo);
+  }
+
+  async listOwnedVideosByOwnerId(ownerId: string): Promise<Video[]> {
+    return [...this.videosById.values()]
+      .filter((video) => video.ownerId === ownerId)
       .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
       .map(cloneVideo);
   }
@@ -487,6 +496,15 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       .select()
       .from(videos)
       .where(and(eq(videos.ownerId, ownerId), eq(videos.status, 'draft')))
+      .orderBy(desc(videos.updatedAt));
+    return rows.map(toVideo);
+  }
+
+  async listOwnedVideosByOwnerId(ownerId: string): Promise<Video[]> {
+    const rows = await this.db
+      .select()
+      .from(videos)
+      .where(eq(videos.ownerId, ownerId))
       .orderBy(desc(videos.updatedAt));
     return rows.map(toVideo);
   }
