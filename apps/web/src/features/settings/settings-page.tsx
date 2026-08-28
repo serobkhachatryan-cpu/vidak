@@ -1,7 +1,7 @@
 'use client';
 
 import { SettingsPageData } from '@w3ds/settings-page';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ApplicationShell } from '../../components/application-shell';
 import { authApiClient } from '../../lib/auth-api-client';
 import { videoApiClient } from '../../lib/video-api-client';
@@ -10,6 +10,9 @@ import { useAppearancePreference } from './appearance-preference';
 
 export function SettingsPageFeature() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedSection = searchParams.get('section');
+  const activeSection = requestedSection === 'imports' ? 'imports' : undefined;
   const { session, logout, updateSessionUser } = useAuthentication();
   const { setAppearance } = useAppearancePreference();
 
@@ -28,6 +31,8 @@ export function SettingsPageFeature() {
         {...(session.user.avatarUrl ? { avatarUrl: session.user.avatarUrl } : {})}
         onAuthUserUpdate={updateSessionUser}
         onAppearancePreferenceChange={setAppearance}
+        {...(activeSection ? { activeSection } : {})}
+        onViewLinkedVideos={() => router.push('/library')}
         onAccountDeleted={() => {
           void logout().then(() => router.replace('/'));
         }}

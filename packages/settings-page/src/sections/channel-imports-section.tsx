@@ -41,6 +41,7 @@ export interface ChannelImportsSectionProps {
   success?: string;
   onConnect: (provider: ChannelImportProvider) => void;
   onAddPublicYouTube?: (source: string) => void;
+  onViewLinkedVideos?: () => void;
   onRetry?: () => void;
 }
 
@@ -55,10 +56,12 @@ export function ChannelImportsSection({
   success,
   onConnect,
   onAddPublicYouTube,
+  onViewLinkedVideos,
   onRetry,
 }: ChannelImportsSectionProps) {
   const publicChannelId = useId();
   const [publicChannelSource, setPublicChannelSource] = useState('');
+  const availableProviders = providers.filter((provider) => provider.available);
   if (isLoading) {
     return (
       <div
@@ -95,16 +98,16 @@ export function ChannelImportsSection({
         <div className="space-y-1">
           <Text className="font-semibold">Add a public YouTube channel</Text>
           <Text size="sm" tone="muted">
-            Paste a channel link. Vidak lists its latest public videos; private and unlisted videos
-            are never requested.
+            Paste a channel link or ID. Vidak lists its latest public videos; private and unlisted
+            videos are never requested.
           </Text>
         </div>
         <div className="flex flex-col gap-3 sm:flex-row">
           <div className="min-w-0 flex-1 space-y-2">
-            <Label htmlFor={publicChannelId}>YouTube channel URL</Label>
+            <Label htmlFor={publicChannelId}>YouTube channel link or ID</Label>
             <Input
               id={publicChannelId}
-              type="url"
+              type="text"
               inputMode="url"
               placeholder="https://www.youtube.com/channel/UC…"
               value={publicChannelSource}
@@ -124,36 +127,31 @@ export function ChannelImportsSection({
           </div>
         </div>
         <Text size="sm" tone="muted">
-          Use a canonical channel link like youtube.com/channel/UC…; handles and search-result URLs
-          are not accepted.
+          Paste a channel ID (UC…) or a canonical link like youtube.com/channel/UC…. If you only
+          have a handle link, find the channel ID in YouTube Studio → Settings → Channel → Advanced
+          settings.
         </Text>
       </form>
 
-      <ul className="space-y-3" aria-label="Available channel providers">
-        {providers.map((provider) => {
-          const name = providerNames[provider.provider];
-          const available = provider.available;
-          const pending = pendingProvider === provider.provider;
-          return (
-            <li
-              key={provider.provider}
-              className="flex flex-col gap-3 rounded-md border border-border px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
-            >
-              <div className="space-y-1">
-                <div className="flex flex-wrap items-center gap-2">
-                  <Text className="font-semibold">{name}</Text>
-                  <Badge tone={available ? 'success' : 'muted'}>
-                    {available ? 'Ready to connect' : 'Owner connection unavailable'}
-                  </Badge>
+      {availableProviders.length > 0 ? (
+        <ul className="space-y-3" aria-label="Available channel providers">
+          {availableProviders.map((provider) => {
+            const name = providerNames[provider.provider];
+            const pending = pendingProvider === provider.provider;
+            return (
+              <li
+                key={provider.provider}
+                className="flex flex-col gap-3 rounded-md border border-border px-4 py-4 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div className="space-y-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Text className="font-semibold">{name}</Text>
+                    <Badge tone="success">Ready to connect</Badge>
+                  </div>
+                  <Text size="sm" tone="muted">
+                    {`Connect an account to add its authorized ${name} channels to Vidak.`}
+                  </Text>
                 </div>
-                <Text size="sm" tone="muted">
-                  {available
-                    ? `Connect an account to add its authorized ${name} channels to Vidak.`
-                    : name +
-                      ' owner connection is not available yet. You can still add a public YouTube channel above.'}
-                </Text>
-              </div>
-              {available && (
                 <Button
                   size="sm"
                   isLoading={pending}
@@ -163,11 +161,16 @@ export function ChannelImportsSection({
                 >
                   Connect {name}
                 </Button>
-              )}
-            </li>
-          );
-        })}
-      </ul>
+              </li>
+            );
+          })}
+        </ul>
+      ) : (
+        <Text size="sm" tone="muted">
+          Owner-authorized channel connections are not available right now. Public YouTube channels
+          can still be linked above.
+        </Text>
+      )}
 
       <div className="space-y-3">
         <div>
@@ -180,7 +183,11 @@ export function ChannelImportsSection({
           <EmptyState
             icon="◌"
             title="No linked channels yet"
-            description="Add a public YouTube channel above, or connect an owner-authorized channel when available."
+            description={
+              availableProviders.length > 0
+                ? 'Add a public YouTube channel above, or connect an owner-authorized channel when available.'
+                : 'Add a public YouTube channel above to see its latest public videos here.'
+            }
           />
         ) : (
           <ul className="space-y-3">
@@ -221,25 +228,39 @@ export function ChannelImportsSection({
                       </Text>
                     </div>
                   </div>
-                  <a
-                    href={channel.sourceUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-sm font-semibold text-primary underline underline-offset-4"
-                  >
-                    Open source channel
-                  </a>
+                  <div className="flex flex-wrap items-center gap-3">
+                    {onViewLinkedVideos ? (
+                      <Button size="sm" variant="secondary" onClick={onViewLinkedVideos}>
+                        View videos
+                      </Button>
+                    ) : null}
+                    <a
+                      href={channel.sourceUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-sm font-semibold text-primary underline underline-offset-4"
+                    >
+                      Open source channel
+                    </a>
+                  </div>
                 </li>
               );
             })}
           </ul>
         )}
       </div>
-      {success && (
-        <Text size="sm" tone="success" role="status">
-          {success}
-        </Text>
-      )}
+      {success ? (
+        <div className="flex flex-wrap items-center gap-3" role="status">
+          <Text size="sm" tone="success">
+            {success}
+          </Text>
+          {onViewLinkedVideos ? (
+            <Button size="sm" variant="secondary" onClick={onViewLinkedVideos}>
+              View linked videos
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
       {error && (
         <div
           role="alert"

@@ -197,6 +197,7 @@ export interface SettingsPageProps {
   onConnectChannelImport?: (provider: ChannelImportProvider) => void;
   onAddPublicYouTubeChannel?: (source: string) => void;
   onRetryChannelImports?: () => void;
+  onViewLinkedVideos?: () => void;
   sessions?: readonly AuthDeviceSession[];
   sessionsLoading?: boolean;
   sessionsPendingId?: string;
@@ -321,6 +322,7 @@ export function SettingsPage({
   onConnectChannelImport,
   onAddPublicYouTubeChannel,
   onRetryChannelImports,
+  onViewLinkedVideos,
   sessions = [],
   sessionsLoading,
   sessionsPendingId,
@@ -482,6 +484,7 @@ export function SettingsPage({
                 {...(onAddPublicYouTubeChannel
                   ? { onAddPublicYouTube: onAddPublicYouTubeChannel }
                   : {})}
+                {...(onViewLinkedVideos ? { onViewLinkedVideos } : {})}
               />
             )}
             {currentSection === 'sessions' && sections.includes('sessions') && (

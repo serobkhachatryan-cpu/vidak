@@ -1,8 +1,9 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Card, EmptyState, Heading, Skeleton, Text } from '@w3ds/ui';
+import { Button, Card, EmptyState, Heading, Skeleton, Text } from '@w3ds/ui';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { listImportedVideos } from './imported-video-api';
 
 function providerName(provider: 'youtube' | 'vimeo'): string {
@@ -20,6 +21,7 @@ function formatDate(value: string | undefined): string | undefined {
 }
 
 export function ImportedVideosLibrary() {
+  const router = useRouter();
   const query = useQuery({
     queryKey: ['imported-channel-videos'],
     queryFn: listImportedVideos,
@@ -56,7 +58,12 @@ export function ImportedVideosLibrary() {
       <EmptyState
         icon="◌"
         title="No linked-channel videos yet"
-        description="Go to Settings → External video channels to add a public YouTube channel or link a channel you own."
+        description="Add a public YouTube channel to see its latest public videos here. Owner-channel connections appear only when they are available."
+        action={
+          <Button onClick={() => router.push('/settings?section=imports')}>
+            Add a public YouTube channel
+          </Button>
+        }
       />
     );
   }

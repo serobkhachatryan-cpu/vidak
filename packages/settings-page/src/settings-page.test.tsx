@@ -135,6 +135,7 @@ describe('SettingsPage', () => {
           { provider: 'youtube', label: 'YouTube', available: true },
           { provider: 'vimeo', label: 'Vimeo', available: false },
         ]}
+        onViewLinkedVideos={() => undefined}
         channelImportChannels={[
           {
             id: 'import-1',
@@ -151,10 +152,30 @@ describe('SettingsPage', () => {
     );
     expect(markup).toContain('Connect YouTube');
     expect(markup).toContain('Add a public YouTube channel');
-    expect(markup).toContain('Owner connection unavailable');
+    expect(markup).not.toContain('Owner connection unavailable');
     expect(markup).toContain('Creator channel');
     expect(markup).toContain('Videos keep playing from YouTube or Vimeo');
     expect(markup).toContain('12 videos in Vidak');
+    expect(markup).toContain('View videos');
+  });
+
+  it('hides unavailable owner connections while retaining the public YouTube action', () => {
+    const markup = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@vidak.video"
+        profile={profile}
+        activeSection="imports"
+        channelImportProviders={[
+          { provider: 'youtube', label: 'YouTube', available: false },
+          { provider: 'vimeo', label: 'Vimeo', available: false },
+        ]}
+      />,
+    );
+
+    expect(markup).toContain('Add a public YouTube channel');
+    expect(markup).toContain('Owner-authorized channel connections are not available right now.');
+    expect(markup).not.toContain('Owner connection unavailable');
+    expect(markup).not.toContain('aria-label="Available channel providers"');
   });
 
   it('refreshes a W3DS cookie session before retrying channel imports', async () => {
