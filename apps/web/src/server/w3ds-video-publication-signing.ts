@@ -57,6 +57,8 @@ export interface W3dsVideoPublicationSigningStore {
 export interface W3dsVideoPublicationSigningOffer {
   sessionId: string;
   qrData: string;
+  /** The exact approval statement encoded in the wallet request. */
+  approvalMessage: string;
   expiresAt: string;
 }
 
@@ -173,14 +175,16 @@ export class W3dsVideoPublicationSigningService {
       expiresAt,
     });
 
+    const approvalMessage = buildPublicationApprovalMessage(draft.title, draft.visibility);
     return {
       sessionId,
       qrData: buildSigningUri({
         sessionId,
         videoId: draft.id,
-        title: draft.title,
+        approvalMessage,
         publicBaseUrl: input.publicBaseUrl,
       }),
+      approvalMessage,
       expiresAt: new Date(expiresAt).toISOString(),
     };
   }
@@ -292,10 +296,21 @@ export class W3dsVideoPublicationSigningService {
   }
 }
 
+function buildPublicationApprovalMessage(title: string, visibility: Video['visibility']): string {
+  const name = title.trim() || 'Untitled video';
+  if (visibility === 'public') {
+    return `Publish “${name}” publicly on Vidak. Anyone can find and watch it.`;
+  }
+  if (visibility === 'unlisted') {
+    return `Share “${name}” by link on Vidak. Anyone with the link can watch it.`;
+  }
+  return `Keep “${name}” private in Vidak. Only you can watch it.`;
+}
+
 function buildSigningUri(input: {
   sessionId: string;
   videoId: string;
-  title: string;
+  approvalMessage: string;
   publicBaseUrl: string;
 }): string {
   let baseUrl: URL;
@@ -318,7 +333,7 @@ function buildSigningUri(input: {
 
   const data = Buffer.from(
     JSON.stringify({
-      message: `Publish video “${input.title}” on Vidak.`,
+      message: input.approvalMessage,
       sessionId: input.sessionId,
       videoId: input.videoId,
     }),

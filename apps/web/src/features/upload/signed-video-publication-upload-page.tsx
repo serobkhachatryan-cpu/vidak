@@ -11,6 +11,7 @@ const pollIntervalMs = 2_500;
 interface SigningOffer {
   sessionId: string;
   qrData: string;
+  approvalMessage: string;
   expiresAt: string;
   videoId: string;
 }
@@ -38,6 +39,7 @@ function isSigningOffer(value: unknown): value is Omit<SigningOffer, 'videoId'> 
   return (
     typeof candidate.sessionId === 'string' &&
     typeof candidate.qrData === 'string' &&
+    typeof candidate.approvalMessage === 'string' &&
     typeof candidate.expiresAt === 'string'
   );
 }
@@ -177,6 +179,12 @@ export function SignedVideoPublicationUploadPage({
                   <SignInQr value={offer.qrData} alt="QR code to approve video publication" />
                   <div className="min-w-0 flex-1 space-y-2">
                     <Text className="font-semibold">Approve publication in your eID Wallet</Text>
+                    <div className="rounded-md border border-border bg-muted p-3">
+                      <Text size="sm" className="font-semibold">
+                        You are approving
+                      </Text>
+                      <Text size="sm">{offer.approvalMessage}</Text>
+                    </div>
                     <Text size="sm" tone="muted">
                       Scan the QR code or open the approval link. This one-time request expires at{' '}
                       {new Date(offer.expiresAt).toLocaleTimeString()}.

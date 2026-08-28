@@ -15,6 +15,7 @@ const draft = {
   id: 'video-1',
   title: 'A real consent action',
   status: 'draft',
+  visibility: 'public',
 } as Video;
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../../../..');
@@ -91,10 +92,13 @@ describe('W3DS signed video publication', () => {
       'https://vidak.example/api/signing/video-publication/callback',
     );
     expect(data).toEqual({
-      message: 'Publish video “A real consent action” on Vidak.',
+      message: 'Publish “A real consent action” publicly on Vidak. Anyone can find and watch it.',
       sessionId: 'session-1',
       videoId: draft.id,
     });
+    expect(offer.approvalMessage).toBe(
+      'Publish “A real consent action” publicly on Vidak. Anyone can find and watch it.',
+    );
     expect(new Date(offer.expiresAt).getTime()).toBe(1_780_000_900_000);
     expect(resolveUser).toHaveBeenCalledWith('access-token');
     expect(getOwnedDraft).toHaveBeenCalledWith('access-token', draft.id);
@@ -104,6 +108,29 @@ describe('W3DS signed video publication', () => {
       ownerEName: owner.eName,
       status: 'pending',
     });
+  });
+
+  it('keeps a Cyrillic visibility statement intact in the Vidak offer and wallet data', async () => {
+    const { service, getOwnedDraft } = createService();
+    getOwnedDraft.mockResolvedValue({
+      ...draft,
+      title: 'Музыка без слов',
+      visibility: 'unlisted',
+    });
+    const offer = await service.createOffer({
+      accessToken: 'access-token',
+      videoId: draft.id,
+      publicBaseUrl: 'https://vidak.example',
+    });
+    const uri = new URL(offer.qrData);
+    const data = JSON.parse(
+      Buffer.from(uri.searchParams.get('data') ?? '', 'base64').toString('utf8'),
+    );
+
+    expect(offer.approvalMessage).toBe(
+      'Share “Музыка без слов” by link on Vidak. Anyone with the link can watch it.',
+    );
+    expect(data.message).toBe(offer.approvalMessage);
   });
 
   it('verifies the exact session id and publishes only the bound draft once', async () => {

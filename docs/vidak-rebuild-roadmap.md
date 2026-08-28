@@ -151,4 +151,4 @@ External links enhance a person’s library without disguising what is supported
 
 ## Status
 
-Release 1 is in progress. The eVault-first entry point, legacy-route redirect, actionable home empty state, clearer settings language, social metadata, and a source-neutral eVault library endpoint are deployed and verified. The library now includes standard W3DS upload records from personal and authorised group eVaults, alongside recognised call and video-message metadata. Visibility controls, signing repair, and upload automation remain next.
+Release 1 is in progress. The eVault-first entry point, legacy-route redirect, actionable home empty state, clearer settings language, social metadata, and a source-neutral eVault library endpoint are deployed and verified. The library now includes standard W3DS upload records from personal and authorised group eVaults, alongside recognised call and video-message metadata. Visibility controls and upload automation remain next. Signed publication now shows the exact title-and-audience statement in Vidak and in the wallet request, with Cyrillic regression coverage.
