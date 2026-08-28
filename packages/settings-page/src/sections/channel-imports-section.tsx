@@ -12,7 +12,10 @@ const providerNames: Record<ChannelImportProvider, string> = {
   vimeo: 'Vimeo',
 };
 
-function channelStatus(channel: ImportedChannel): { label: string; tone: 'success' | 'warning' | 'danger' | 'muted' } {
+function channelStatus(channel: ImportedChannel): {
+  label: string;
+  tone: 'success' | 'warning' | 'danger' | 'muted';
+} {
   switch (channel.status) {
     case 'ready':
       return { label: 'Ready', tone: 'success' };
@@ -35,6 +38,7 @@ export interface ChannelImportsSectionProps {
   error?: string;
   success?: string;
   onConnect: (provider: ChannelImportProvider) => void;
+  onRetry?: () => void;
 }
 
 /** Links provider catalogues only; provider media remains on its original service. */
@@ -46,10 +50,16 @@ export function ChannelImportsSection({
   error,
   success,
   onConnect,
+  onRetry,
 }: ChannelImportsSectionProps) {
   if (isLoading) {
     return (
-      <div role="status" aria-busy="true" aria-label="Loading channel imports" className="space-y-3">
+      <div
+        role="status"
+        aria-busy="true"
+        aria-label="Loading channel imports"
+        className="space-y-3"
+      >
         <Skeleton className="h-24 w-full" />
         <Skeleton className="h-20 w-full" />
       </div>
@@ -62,7 +72,8 @@ export function ChannelImportsSection({
         <Text className="font-semibold">Link a channel, not a copy of your files.</Text>
         <Text size="sm" tone="muted" className="mt-1">
           Vidak reads the channel and video information you authorize. Videos continue to play from
-          YouTube or Vimeo, so private files are never downloaded or republished without your action.
+          YouTube or Vimeo, so private files are never downloaded or republished without your
+          action.
         </Text>
       </div>
 
@@ -142,7 +153,8 @@ export function ChannelImportsSection({
                         <Badge tone={status.tone}>{status.label}</Badge>
                       </div>
                       <Text size="sm" tone="muted">
-                        {providerNames[channel.provider]} · {channel.importedVideoCount} videos in Vidak
+                        {providerNames[channel.provider]} · {channel.importedVideoCount} videos in
+                        Vidak
                       </Text>
                     </div>
                   </div>
@@ -166,9 +178,19 @@ export function ChannelImportsSection({
         </Text>
       )}
       {error && (
-        <Text size="sm" tone="danger" role="alert">
-          {error}
-        </Text>
+        <div
+          role="alert"
+          className="flex flex-col gap-3 rounded-md border border-danger/30 bg-danger/5 p-4 sm:flex-row sm:items-center sm:justify-between"
+        >
+          <Text size="sm" tone="danger">
+            {error}
+          </Text>
+          {onRetry && (
+            <Button size="sm" variant="secondary" onClick={onRetry}>
+              Try again
+            </Button>
+          )}
+        </div>
       )}
     </div>
   );

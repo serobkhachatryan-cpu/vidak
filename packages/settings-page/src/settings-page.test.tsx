@@ -1,8 +1,9 @@
 import { getAuthProviderCapabilities } from '@w3ds/auth';
 import { defaultNotificationPreferences, defaultPrivacySettings } from '@w3ds/types';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SettingsPage } from './settings-page';
+import { readChannelImports } from './settings-page-data';
 import { settingsSectionsForCapabilities } from './settings-page-helpers';
 
 const profile = {
@@ -152,6 +153,53 @@ describe('SettingsPage', () => {
     expect(markup).toContain('Creator channel');
     expect(markup).toContain('Videos continue to play from YouTube or Vimeo');
     expect(markup).toContain('12 videos in Vidak');
+  });
+
+  it('refreshes a W3DS cookie session before retrying channel imports', async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: { message: 'Authentication is required.' } }), {
+          status: 401,
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            items: [],
+            providers: [{ provider: 'youtube', label: 'YouTube', available: true }],
+          }),
+        ),
+      );
+    const restoreFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    const getCurrentUser = vi.fn().mockResolvedValue({ id: 'creator' });
+
+    try {
+      await expect(readChannelImports({ getCurrentUser }, '')).resolves.toEqual({
+        items: [],
+        providers: [{ provider: 'youtube', label: 'YouTube', available: true }],
+      });
+      expect(getCurrentUser).toHaveBeenCalledWith('');
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      globalThis.fetch = restoreFetch;
+    }
+  });
+
+  it('keeps a retry action visible when channel imports cannot load', () => {
+    const markup = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@vidak.video"
+        profile={profile}
+        activeSection="imports"
+        channelImportsError="Could not load channel imports."
+        onRetryChannelImports={() => undefined}
+      />,
+    );
+
+    expect(markup).toContain('Could not load channel imports.');
+    expect(markup).toContain('Try again');
   });
 
   it('renders email, password, privacy, and language sections', () => {

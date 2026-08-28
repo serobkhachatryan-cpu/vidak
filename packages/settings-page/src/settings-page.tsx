@@ -4,9 +4,9 @@ import type {
   AppearancePreference,
   AppLanguage,
   AuthDeviceSession,
-  ConnectedAccount,
   ChannelImportProvider,
   ChannelImportProviderStatus,
+  ConnectedAccount,
   ConnectedAccountProvider,
   ImportedChannel,
   NotificationPreferences,
@@ -116,6 +116,7 @@ export type SettingsPageDataOwnedProp =
   | 'channelImportsError'
   | 'channelImportsSuccess'
   | 'onConnectChannelImport'
+  | 'onRetryChannelImports'
   | 'sessions'
   | 'sessionsLoading'
   | 'sessionsPendingId'
@@ -191,6 +192,7 @@ export interface SettingsPageProps {
   channelImportsError?: string;
   channelImportsSuccess?: string;
   onConnectChannelImport?: (provider: ChannelImportProvider) => void;
+  onRetryChannelImports?: () => void;
   sessions?: readonly AuthDeviceSession[];
   sessionsLoading?: boolean;
   sessionsPendingId?: string;
@@ -312,6 +314,7 @@ export function SettingsPage({
   channelImportsError,
   channelImportsSuccess,
   onConnectChannelImport,
+  onRetryChannelImports,
   sessions = [],
   sessionsLoading,
   sessionsPendingId,
@@ -465,6 +468,7 @@ export function SettingsPage({
                   : {})}
                 {...(channelImportsError ? { error: channelImportsError } : {})}
                 {...(channelImportsSuccess ? { success: channelImportsSuccess } : {})}
+                {...(onRetryChannelImports ? { onRetry: onRetryChannelImports } : {})}
                 onConnect={(provider) => onConnectChannelImport?.(provider)}
               />
             )}

@@ -17,9 +17,9 @@ import {
 import type {
   AppearancePreference,
   AppLanguage,
+  AuthDeviceSession,
   ChannelImportProvider,
   ChannelImportProviderStatus,
-  AuthDeviceSession,
   ConnectedAccountProvider,
   ImportedChannel,
   NotificationPreferences,
@@ -94,11 +94,38 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-async function readChannelImports(): Promise<ChannelImportsResponse> {
-  const response = await fetch('/api/channel-imports', { credentials: 'same-origin' });
+async function requestChannelImports(accessToken: string): Promise<Response> {
+  return fetch('/api/channel-imports', {
+    cache: 'no-store',
+    credentials: 'same-origin',
+    ...(accessToken ? { headers: { Authorization: `Bearer ${accessToken}` } } : {}),
+  });
+}
+
+/**
+ * Channel imports use a dedicated API route, so they must explicitly follow
+ * the same cookie-refresh path as the platform auth client. Without this,
+ * an otherwise signed-in person sees an empty error state after access-cookie
+ * expiry instead of the available provider actions.
+ */
+export async function readChannelImports(
+  authClient: Pick<AuthClient, 'getCurrentUser'>,
+  accessToken: string,
+): Promise<ChannelImportsResponse> {
+  let response = await requestChannelImports(accessToken);
+  if (response.status === 401) {
+    await authClient.getCurrentUser(accessToken);
+    response = await requestChannelImports(accessToken);
+  }
+
   const body = (await response.json().catch(() => undefined)) as unknown;
-  if (!response.ok || !isRecord(body) || !Array.isArray(body.items) || !Array.isArray(body.providers)) {
-    throw new Error('Could not load channel imports.');
+  if (
+    !response.ok ||
+    !isRecord(body) ||
+    !Array.isArray(body.items) ||
+    !Array.isArray(body.providers)
+  ) {
+    throw new Error(readApiError(body, 'Could not load channel imports.'));
   }
   return body as unknown as ChannelImportsResponse;
 }
@@ -145,7 +172,7 @@ export function SettingsPageData({
   const connectedQuery = useConnectedAccounts(videoClient, userId);
   const channelImportsQuery = useQuery({
     queryKey: ['channel-imports', userId],
-    queryFn: readChannelImports,
+    queryFn: () => readChannelImports(authClient, accessToken),
     retry: false,
   });
   const refetchChannelImports = channelImportsQuery.refetch;
@@ -204,9 +231,8 @@ export function SettingsPageData({
   >();
   const [channelImportsError, setChannelImportsError] = useState<string | undefined>();
   const [channelImportsSuccess, setChannelImportsSuccess] = useState<string | undefined>();
-  const [activeSettingsSection, setActiveSettingsSection] = useState<
-    SettingsPageProps['activeSection']
-  >();
+  const [activeSettingsSection, setActiveSettingsSection] =
+    useState<SettingsPageProps['activeSection']>();
 
   useEffect(() => {
     const profile = profileQuery.data;
@@ -231,7 +257,9 @@ export function SettingsPageData({
     window.history.replaceState({}, '', url);
     setActiveSettingsSection('imports');
     if (result === 'connected') {
-      setChannelImportsSuccess('Channel connected. Vidak will show only the channels you approved.');
+      setChannelImportsSuccess(
+        'Channel connected. Vidak will show only the channels you approved.',
+      );
       void refetchChannelImports();
     } else if (result === 'cancelled') {
       setChannelImportsError('Channel connection was cancelled.');
@@ -467,9 +495,7 @@ export function SettingsPageData({
   return (
     <SettingsPage
       {...pageProps}
-      {...(resolvedActiveSettingsSection
-        ? { activeSection: resolvedActiveSettingsSection }
-        : {})}
+      {...(resolvedActiveSettingsSection ? { activeSection: resolvedActiveSettingsSection } : {})}
       onSectionChange={(section) => {
         setActiveSettingsSection(section);
         pageProps.onSectionChange?.(section);
@@ -564,11 +590,20 @@ export function SettingsPageData({
       {...(channelImportsError
         ? { channelImportsError }
         : channelImportsQuery.error
-          ? { channelImportsError: errorMessage(channelImportsQuery.error, 'Could not load channel imports.') }
+          ? {
+              channelImportsError: errorMessage(
+                channelImportsQuery.error,
+                'Could not load channel imports.',
+              ),
+            }
           : {})}
       {...(channelImportsSuccess ? { channelImportsSuccess } : {})}
       onConnectChannelImport={(provider) => {
         void startChannelImport(provider);
+      }}
+      onRetryChannelImports={() => {
+        setChannelImportsError(undefined);
+        void refetchChannelImports();
       }}
       connectedAccounts={connectedQuery.data ?? []}
       connectedAccountsLoading={connectedQuery.isPending}
