@@ -38,7 +38,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     }
     const { videoId, assetId } = await context.params;
-    const download = await getMediaAssetService().openDownload(accessToken, videoId, assetId);
+    const download = await getMediaAssetService().openDownload(accessToken, videoId, assetId, {
+      rangeHeader: request.headers.get('range'),
+    });
     return new NextResponse(download.body, {
       status: download.status,
       headers: download.headers,

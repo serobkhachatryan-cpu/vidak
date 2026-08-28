@@ -413,13 +413,18 @@ export class MediaAssetService {
     accessToken: string,
     videoId: string,
     assetId: string,
+    options: { rangeHeader?: string | null } = {},
   ): Promise<MediaAssetDownload> {
     const user = await this.requireUser(accessToken);
     const asset = await this.requireOwnedAssetForDraft(assetId, videoId, user.id);
     if (asset.uploadState !== 'ready') {
       throw new MediaAssetError('Media asset is not ready for download.', 'not_found', 404);
     }
-    return this.openReadyAssetStream(asset, { disposition: 'attachment' });
+    return this.openReadyAssetStream(asset, {
+      disposition: 'inline',
+      ...(options.rangeHeader !== undefined ? { rangeHeader: options.rangeHeader } : {}),
+      acceptRanges: true,
+    });
   }
 
   /**

@@ -87,7 +87,7 @@ describe('upload validation', () => {
     });
     expect(errors.title).toMatch(/required/i);
     expect(errors.category).toMatch(/required/i);
-    expect(errors.language).toMatch(/required/i);
+    expect(errors.language).toBeUndefined();
     expect(hasDetailsErrors(errors)).toBe(true);
 
     expect(
@@ -118,7 +118,7 @@ describe('upload validation', () => {
   });
 
   it('validates thumbnails and visibility', () => {
-    expect(validateThumbnailSelection({ thumbnailUrl: '' })).toMatch(/thumbnail/i);
+    expect(validateThumbnailSelection({ thumbnailUrl: '' })).toBeUndefined();
     expect(
       validateThumbnailSelection({ thumbnailUrl: 'https://example.com/a.jpg' }),
     ).toBeUndefined();
@@ -144,7 +144,7 @@ describe('upload validation', () => {
     expect(validatePublishDraft(ready)).toBeUndefined();
     expect(validatePublishDraft({ ...ready, uploadId: undefined })).toMatch(/required fields/i);
     expect(validatePublishDraft({ ...ready, title: '' })).toMatch(/required fields/i);
-    expect(validatePublishDraft({ ...ready, thumbnailUrl: '' })).toMatch(/required fields/i);
+    expect(validatePublishDraft({ ...ready, thumbnailUrl: '' })).toBeUndefined();
     expect(validatePublishDraft({ ...ready, visibility: '' })).toMatch(/required fields/i);
   });
 
@@ -161,7 +161,7 @@ describe('upload validation', () => {
     expect(validateSaveDraft(ready)).toBeUndefined();
     expect(validateSaveDraft({ ...ready, uploadId: undefined })).toBeUndefined();
     expect(validateSaveDraft({ ...ready, title: '' })).toMatch(/saving this draft/i);
-    expect(validateSaveDraft({ ...ready, thumbnailUrl: '' })).toMatch(/saving this draft/i);
+    expect(validateSaveDraft({ ...ready, thumbnailUrl: '' })).toBeUndefined();
   });
 });
 

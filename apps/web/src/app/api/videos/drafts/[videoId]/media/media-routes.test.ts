@@ -162,9 +162,28 @@ describe('protected media transfer routes', () => {
     expect(download.headers.get('Content-Length')).toBe(String(payload.byteLength));
     expect(download.headers.get('Cache-Control')).toBe('private, no-store');
     expect(download.headers.get('X-Content-Type-Options')).toBe('nosniff');
+    expect(download.headers.get('Content-Disposition')).toMatch(/^inline;/);
     expect(download.headers.get('Content-Disposition')).toContain('other.webm');
     expect(download.headers.get('Content-Disposition')).not.toContain(rootDir);
+    expect(download.headers.get('Accept-Ranges')).toBe('bytes');
     await expect(download.text()).resolves.toBe('streamed-video-bytes');
+
+    const rangedDownload = await getContent(
+      new NextRequest(
+        `https://vidak.example/api/videos/drafts/${ctx.draftId}/media/${bearerAsset.id}/content`,
+        {
+          headers: {
+            Authorization: `Bearer ${ctx.ownerToken}`,
+            Range: 'bytes=2-7',
+          },
+        },
+      ),
+      { params: Promise.resolve({ videoId: ctx.draftId, assetId: bearerAsset.id }) },
+    );
+    expect(rangedDownload.status).toBe(206);
+    expect(rangedDownload.headers.get('Content-Range')).toBe('bytes 2-7/20');
+    expect(rangedDownload.headers.get('Accept-Ranges')).toBe('bytes');
+    await expect(rangedDownload.text()).resolves.toBe('reamed');
 
     const deleted = await deleteAsset(
       new NextRequest(

@@ -61,3 +61,9 @@ export {
   validateVideoFile,
   validateVisibility,
 } from './upload-validation';
+export {
+  createGeneratedVideoThumbnail,
+  generatedThumbnailCaptureTime,
+  generatedThumbnailDimensions,
+  generatedThumbnailFilename,
+} from './video-thumbnail';

@@ -53,6 +53,7 @@ import {
   validateVideoFile,
   validateVisibility,
 } from './upload-validation';
+import { createGeneratedVideoThumbnail } from './video-thumbnail';
 
 export interface UploadPageDataProps
   extends Omit<
@@ -163,6 +164,7 @@ export function UploadPageData({
   const draftCreateInFlightRef = useRef<Promise<VideoId> | undefined>(undefined);
   const mediaUploadInFlightRef = useRef<Promise<void> | undefined>(undefined);
   const uploadEpochRef = useRef(0);
+  const thumbnailGenerationEpochRef = useRef(0);
   const draftRef = useRef(draft);
   const fileRef = useRef(file);
   const mediaAssetRef = useRef(mediaAsset);
@@ -219,6 +221,7 @@ export function UploadPageData({
     draftCreateInFlightRef.current = undefined;
     mediaUploadInFlightRef.current = undefined;
     uploadEpochRef.current += 1;
+    thumbnailGenerationEpochRef.current += 1;
     if (customObjectUrlRef.current) {
       URL.revokeObjectURL(customObjectUrlRef.current);
       customObjectUrlRef.current = undefined;
@@ -254,7 +257,7 @@ export function UploadPageData({
     description: draft.description,
     tags: draft.tags,
     category: draft.category as VideoCategory,
-    language: draft.language as VideoLanguage,
+    ...(draft.language ? { language: draft.language as VideoLanguage } : {}),
     visibility: draft.visibility as VideoVisibility,
     thumbnailUrl: normalizePersistedThumbnailUrl(draft.thumbnailUrl),
   });
@@ -367,6 +370,31 @@ export function UploadPageData({
           patchDraft({
             title: draftRef.current.title.trim() || titleFromFileName(asset.originalFilename),
           });
+
+          const generationEpoch = thumbnailGenerationEpochRef.current + 1;
+          thumbnailGenerationEpochRef.current = generationEpoch;
+          void (async () => {
+            try {
+              const previewImage = await createGeneratedVideoThumbnail(
+                client.draftMediaContentPath(videoId, asset.id),
+                asset.originalFilename,
+              );
+              if (thumbnailGenerationEpochRef.current !== generationEpoch) return;
+              const video = await client.uploadDraftThumbnail(videoId, {
+                name: previewImage.name,
+                size: previewImage.size,
+                type: previewImage.type,
+                body: previewImage,
+              });
+              if (thumbnailGenerationEpochRef.current !== generationEpoch) return;
+              const thumbnailUrl = normalizePersistedThumbnailUrl(video.thumbnailUrl);
+              if (!thumbnailUrl) return;
+              setAutoThumbnails([thumbnailUrl]);
+              if (!draftRef.current.thumbnailUrl.trim()) patchDraft({ thumbnailUrl });
+            } catch {
+              // A browser may not decode every valid upload. Never block the creator on a preview.
+            }
+          })();
         }
         setStep('details');
       } finally {
@@ -544,8 +572,10 @@ export function UploadPageData({
     try {
       await client.deleteDraftMedia(videoId, mediaAsset.id);
       revokeLocalPreview();
+      thumbnailGenerationEpochRef.current += 1;
       setMediaAsset(undefined);
       setAutoThumbnails([]);
+      patchDraft({ thumbnailUrl: '' });
       setUploadStatus('idle');
       setProgress(undefined);
       setCompletedSteps((current) => current.filter((item) => item !== 'progress'));

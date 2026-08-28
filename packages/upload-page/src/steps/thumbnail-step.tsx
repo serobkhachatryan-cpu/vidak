@@ -40,9 +40,10 @@ export function ThumbnailStep({
   return (
     <div className="space-y-5">
       <div className="space-y-2">
-        <Text className="font-semibold">Auto-generated thumbnails</Text>
+        <Text className="font-semibold">Video preview</Text>
         <Text size="sm" tone="muted">
-          Pick a frame generated from your upload, or upload your own image.
+          Vidak picks a frame from your upload automatically. You can replace it with your own
+          image.
         </Text>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {autoThumbnails.map((url, index) => {
@@ -75,6 +76,12 @@ export function ThumbnailStep({
               </label>
             );
           })}
+          {autoThumbnails.length === 0 && !customPreviewUrl && (
+            <Text size="sm" tone="muted" className="sm:col-span-2 lg:col-span-4">
+              A preview is optional. If your browser cannot create one from this video, you can
+              still continue or upload an image.
+            </Text>
+          )}
         </div>
       </div>
 

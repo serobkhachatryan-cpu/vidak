@@ -79,7 +79,6 @@ export function validateDetails(input: UploadDetailsInput): UploadDetailsErrors 
     errors.description = 'Description must be 5,000 characters or fewer.';
   }
   if (!input.category) errors.category = 'Category is required.';
-  if (!input.language) errors.language = 'Language is required.';
   if (input.tags.length > 20) errors.tags = 'You can add up to 20 tags.';
   return errors;
 }
@@ -89,7 +88,9 @@ export function hasDetailsErrors(errors: UploadDetailsErrors): boolean {
 }
 
 export function validateThumbnailSelection(input: ThumbnailSelectionInput): string | undefined {
-  if (!input.thumbnailUrl.trim()) return 'Select or upload a thumbnail.';
+  // Vidak tries to create a preview from the uploaded video, but a thumbnail
+  // must never block music-only, unsupported-codec, or otherwise valid uploads.
+  void input;
   return undefined;
 }
 
@@ -103,13 +104,13 @@ export interface PublishDraftInput extends UploadDetailsInput, ThumbnailSelectio
   uploadId?: string | undefined;
 }
 
-/** Final gate before createVideo — details, thumbnail, visibility, and a finished upload. */
+/** Final gate before createVideo — required details, visibility, and a finished upload. */
 export function validatePublishDraft(input: PublishDraftInput): string | undefined {
   if (!input.uploadId) return 'Complete all required fields before publishing.';
   if (hasDetailsErrors(validateDetails(input))) {
     return 'Complete all required fields before publishing.';
   }
-  if (validateThumbnailSelection(input) || validateVisibility(input)) {
+  if (validateVisibility(input)) {
     return 'Complete all required fields before publishing.';
   }
   return undefined;
@@ -120,7 +121,7 @@ export function validateSaveDraft(input: PublishDraftInput): string | undefined 
   if (hasDetailsErrors(validateDetails(input))) {
     return 'Complete all required fields before saving this draft.';
   }
-  if (validateThumbnailSelection(input) || validateVisibility(input)) {
+  if (validateVisibility(input)) {
     return 'Complete all required fields before saving this draft.';
   }
   return undefined;

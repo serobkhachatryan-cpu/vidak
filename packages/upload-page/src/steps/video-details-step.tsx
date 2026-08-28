@@ -156,16 +156,15 @@ export function VideoDetailsStep({ value, errors, onChange }: VideoDetailsStepPr
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor={languageId}>Language</Label>
+          <Label htmlFor={languageId}>Spoken language (optional)</Label>
           <Select
             id={languageId}
             value={value.language}
             invalid={Boolean(errors?.language)}
             aria-describedby={errors?.language ? `${languageId}-error` : undefined}
-            required
             onChange={(event) => onChange?.({ language: event.target.value as VideoLanguage | '' })}
           >
-            <option value="">Select a language</option>
+            <option value="">No speech / music only</option>
             {videoLanguageOptions.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
@@ -177,6 +176,9 @@ export function VideoDetailsStep({ value, errors, onChange }: VideoDetailsStepPr
               {errors.language}
             </Text>
           )}
+          <Text size="sm" tone="muted">
+            Leave this as is when the video has no spoken language.
+          </Text>
         </div>
       </div>
     </div>

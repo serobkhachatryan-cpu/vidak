@@ -60,7 +60,8 @@ describe('UploadPage', () => {
     expect(markup).toContain('Details');
     expect(markup).toContain('Title');
     expect(markup).toContain('Category');
-    expect(markup).toContain('Language');
+    expect(markup).toContain('Spoken language (optional)');
+    expect(markup).toContain('No speech / music only');
   });
 
   it('surfaces required field validation messaging on details', () => {
