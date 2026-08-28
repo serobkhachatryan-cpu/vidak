@@ -133,7 +133,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(15);
+    expect(applied.rows).toHaveLength(16);
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -356,6 +356,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(15);
+    expect(Number(applied.rows[0]?.count)).toBe(16);
   });
 });

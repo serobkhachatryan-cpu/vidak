@@ -10,6 +10,7 @@ import {
   decryptChannelImportCredential,
   encryptChannelImportCredential,
 } from './channel-import-crypto';
+import { readPublicYouTubeChannelFeed } from './channel-import-public-youtube';
 import type { W3dsDatabase } from './db/client';
 import {
   channelImportConnections,
@@ -31,10 +32,11 @@ interface ClaimedSyncJob {
   importedChannelId: string;
   connectionId: string;
   provider: ChannelImportProvider;
+  connectionKind: 'oauth' | 'public_feed';
   sourceChannelId: string;
   sourceCatalogueId?: string;
   nextCursor?: string;
-  encryptedAccessToken: string;
+  encryptedAccessToken?: string;
   encryptedRefreshToken?: string;
   accessTokenExpiresAt?: Date;
   attemptCount: number;
@@ -80,7 +82,7 @@ class ChannelImportSyncError extends Error {
 }
 
 /**
- * Processes one bounded provider catalogue page per invocation. Credentials
+ * Processes one bounded provider catalogue page per invocation. OAuth credentials
  * remain encrypted at rest and never leave this server-side service.
  */
 export class ChannelImportSyncService {
@@ -99,13 +101,22 @@ export class ChannelImportSyncService {
   }
 
   async runNextBatch(): Promise<'processed' | 'idle' | 'disabled'> {
-    const security = readChannelImportSecurityConfig(this.env);
-    if (!security) return 'disabled';
     const now = this.now();
     const job = await this.claimNextJob(now);
     if (!job) return 'idle';
 
     try {
+      if (job.connectionKind === 'public_feed') {
+        const page = await this.readPublicYouTubePage(job);
+        await this.completePage(job, page, now);
+        return 'processed';
+      }
+
+      const security = readChannelImportSecurityConfig(this.env);
+      if (!security) {
+        await this.releaseClaim(job, now);
+        return 'disabled';
+      }
       const config = readChannelImportProviderConfig(job.provider, this.env);
       if (!config) throw new ChannelImportSyncError(true);
       const credential = await this.readUsableCredential(job, config, security.encryptionKey, now);
@@ -126,6 +137,7 @@ export class ChannelImportSyncService {
           importedChannelId: importedChannels.id,
           connectionId: channelImportConnections.id,
           provider: channelImportConnections.provider,
+          connectionKind: channelImportConnections.connectionKind,
           sourceChannelId: importedChannels.sourceChannelId,
           sourceCatalogueId: importedChannels.sourceCatalogueId,
           nextCursor: channelImportSyncJobs.nextCursor,
@@ -173,10 +185,13 @@ export class ChannelImportSyncService {
         importedChannelId: candidate.importedChannelId,
         connectionId: candidate.connectionId,
         provider: candidate.provider,
+        connectionKind: candidate.connectionKind,
         sourceChannelId: candidate.sourceChannelId,
         ...(candidate.sourceCatalogueId ? { sourceCatalogueId: candidate.sourceCatalogueId } : {}),
         ...(candidate.nextCursor ? { nextCursor: candidate.nextCursor } : {}),
-        encryptedAccessToken: candidate.encryptedAccessToken,
+        ...(candidate.encryptedAccessToken
+          ? { encryptedAccessToken: candidate.encryptedAccessToken }
+          : {}),
         ...(candidate.encryptedRefreshToken
           ? { encryptedRefreshToken: candidate.encryptedRefreshToken }
           : {}),
@@ -188,12 +203,20 @@ export class ChannelImportSyncService {
     });
   }
 
+  private async releaseClaim(job: ClaimedSyncJob, now: Date): Promise<void> {
+    await this.db
+      .update(channelImportSyncJobs)
+      .set({ status: 'queued', lockedUntil: null, updatedAt: now })
+      .where(eq(channelImportSyncJobs.id, job.jobId));
+  }
+
   private async readUsableCredential(
     job: ClaimedSyncJob,
     config: ChannelImportProviderConfig,
     encryptionKey: Buffer,
     now: Date,
   ): Promise<ProviderCredential> {
+    if (!job.encryptedAccessToken) throw new ChannelImportSyncError(true);
     let accessToken: string;
     try {
       accessToken = decryptChannelImportCredential(job.encryptedAccessToken, encryptionKey);
@@ -258,6 +281,27 @@ export class ChannelImportSyncService {
       refreshToken: nextRefreshToken,
       ...(expiresIn ? { expiresAt: new Date(now.getTime() + expiresIn * 1000) } : {}),
     };
+  }
+
+  private async readPublicYouTubePage(job: ClaimedSyncJob): Promise<SourcePage> {
+    if (job.provider !== 'youtube' || job.nextCursor) throw new ChannelImportSyncError(false);
+    try {
+      const feed = await readPublicYouTubeChannelFeed(job.sourceChannelId, this.fetchImpl);
+      return {
+        videos: feed.videos.map((video) => ({
+          sourceVideoId: video.sourceVideoId,
+          title: video.title,
+          sourceUrl: video.sourceUrl,
+          embedUrl: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.sourceVideoId)}`,
+          thumbnailUrl: video.thumbnailUrl,
+          sourceVisibility: 'public' as const,
+          playbackStatus: 'embedded' as const,
+          ...(video.publishedAt ? { publishedAt: video.publishedAt } : {}),
+        })),
+      };
+    } catch {
+      throw new ChannelImportSyncError(false);
+    }
   }
 
   private async readSourcePage(job: ClaimedSyncJob, accessToken: string): Promise<SourcePage> {

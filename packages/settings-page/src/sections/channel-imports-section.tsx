@@ -5,7 +5,8 @@ import type {
   ChannelImportProviderStatus,
   ImportedChannel,
 } from '@w3ds/types';
-import { Badge, Button, EmptyState, Skeleton, Text } from '@w3ds/ui';
+import { Badge, Button, EmptyState, Input, Label, Skeleton, Text } from '@w3ds/ui';
+import { useId, useState } from 'react';
 
 const providerNames: Record<ChannelImportProvider, string> = {
   youtube: 'YouTube',
@@ -35,9 +36,11 @@ export interface ChannelImportsSectionProps {
   channels: readonly ImportedChannel[];
   isLoading?: boolean;
   pendingProvider?: ChannelImportProvider;
+  isAddingPublicYouTube?: boolean;
   error?: string;
   success?: string;
   onConnect: (provider: ChannelImportProvider) => void;
+  onAddPublicYouTube?: (source: string) => void;
   onRetry?: () => void;
 }
 
@@ -47,11 +50,15 @@ export function ChannelImportsSection({
   channels,
   isLoading = false,
   pendingProvider,
+  isAddingPublicYouTube = false,
   error,
   success,
   onConnect,
+  onAddPublicYouTube,
   onRetry,
 }: ChannelImportsSectionProps) {
+  const publicChannelId = useId();
+  const [publicChannelSource, setPublicChannelSource] = useState('');
   if (isLoading) {
     return (
       <div
@@ -71,11 +78,56 @@ export function ChannelImportsSection({
       <div className="rounded-md border border-border bg-muted/40 p-4">
         <Text className="font-semibold">Link a channel, not a copy of your files.</Text>
         <Text size="sm" tone="muted" className="mt-1">
-          Vidak reads the channel and video information you authorize. Videos continue to play from
-          YouTube or Vimeo, so private files are never downloaded or republished without your
-          action.
+          Add a public YouTube channel by link, or connect a channel you own when its provider is
+          available. Videos keep playing from YouTube or Vimeo; Vidak never downloads or republishes
+          their media.
         </Text>
       </div>
+
+      <form
+        className="space-y-3 rounded-md border border-border p-4"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const source = publicChannelSource.trim();
+          if (source) onAddPublicYouTube?.(source);
+        }}
+      >
+        <div className="space-y-1">
+          <Text className="font-semibold">Add a public YouTube channel</Text>
+          <Text size="sm" tone="muted">
+            Paste a channel link. Vidak lists its latest public videos; private and unlisted videos
+            are never requested.
+          </Text>
+        </div>
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <div className="min-w-0 flex-1 space-y-2">
+            <Label htmlFor={publicChannelId}>YouTube channel URL</Label>
+            <Input
+              id={publicChannelId}
+              type="url"
+              inputMode="url"
+              placeholder="https://www.youtube.com/channel/UC…"
+              value={publicChannelSource}
+              disabled={isAddingPublicYouTube}
+              onChange={(event) => setPublicChannelSource(event.target.value)}
+            />
+          </div>
+          <div className="sm:self-end">
+            <Button
+              type="submit"
+              disabled={!onAddPublicYouTube || !publicChannelSource.trim()}
+              isLoading={isAddingPublicYouTube}
+              loadingText="Adding channel"
+            >
+              Add channel
+            </Button>
+          </div>
+        </div>
+        <Text size="sm" tone="muted">
+          Use a canonical channel link like youtube.com/channel/UC…; handles and search-result URLs
+          are not accepted.
+        </Text>
+      </form>
 
       <ul className="space-y-3" aria-label="Available channel providers">
         {providers.map((provider) => {
@@ -91,25 +143,27 @@ export function ChannelImportsSection({
                 <div className="flex flex-wrap items-center gap-2">
                   <Text className="font-semibold">{name}</Text>
                   <Badge tone={available ? 'success' : 'muted'}>
-                    {available ? 'Ready to connect' : 'Not configured yet'}
+                    {available ? 'Ready to connect' : 'Owner connection unavailable'}
                   </Badge>
                 </div>
                 <Text size="sm" tone="muted">
                   {available
                     ? `Connect an account to add its authorized ${name} channels to Vidak.`
-                    : `${name} import is being prepared.`}
+                    : name +
+                      ' owner connection is not available yet. You can still add a public YouTube channel above.'}
                 </Text>
               </div>
-              <Button
-                size="sm"
-                disabled={!available}
-                isLoading={pending}
-                loadingText="Opening provider"
-                aria-label={`Connect ${name} channel`}
-                onClick={() => onConnect(provider.provider)}
-              >
-                Connect {name}
-              </Button>
+              {available && (
+                <Button
+                  size="sm"
+                  isLoading={pending}
+                  loadingText="Opening provider"
+                  aria-label={`Connect ${name} channel`}
+                  onClick={() => onConnect(provider.provider)}
+                >
+                  Connect {name}
+                </Button>
+              )}
             </li>
           );
         })}
@@ -119,14 +173,14 @@ export function ChannelImportsSection({
         <div>
           <Text className="font-semibold">Your imported channels</Text>
           <Text size="sm" tone="muted" className="mt-1">
-            Only channels returned by the provider account you approve appear here.
+            Public channels you add and owner channels you approve appear here.
           </Text>
         </div>
         {channels.length === 0 ? (
           <EmptyState
             icon="◌"
             title="No imported channels yet"
-            description="Connect YouTube or Vimeo to bring an authorized channel into Vidak."
+            description="Add a public YouTube channel above, or connect an owner-authorized channel when available."
           />
         ) : (
           <ul className="space-y-3">
@@ -151,10 +205,19 @@ export function ChannelImportsSection({
                       <div className="flex flex-wrap items-center gap-2">
                         <Text className="truncate font-semibold">{channel.title}</Text>
                         <Badge tone={status.tone}>{status.label}</Badge>
+                        <Badge tone="muted">
+                          {channel.access === 'public' ? 'Public channel' : 'Owner-approved'}
+                        </Badge>
                       </div>
                       <Text size="sm" tone="muted">
-                        {providerNames[channel.provider]} · {channel.importedVideoCount} videos in
-                        Vidak
+                        {channel.access === 'public'
+                          ? 'Public YouTube · ' +
+                            channel.importedVideoCount +
+                            ' latest videos in Vidak'
+                          : providerNames[channel.provider] +
+                            ' · ' +
+                            channel.importedVideoCount +
+                            ' videos in Vidak'}
                       </Text>
                     </div>
                   </div>

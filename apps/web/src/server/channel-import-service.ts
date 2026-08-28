@@ -17,6 +17,11 @@ import {
 } from './channel-import-config';
 import { encryptChannelImportCredential } from './channel-import-crypto';
 import {
+  PublicYouTubeChannelError,
+  type PublicYouTubeChannelFeed,
+  readPublicYouTubeChannelFeed,
+} from './channel-import-public-youtube';
+import {
   type ChannelImportStore,
   InMemoryChannelImportStore,
   PostgresChannelImportStore,
@@ -46,7 +51,8 @@ export class ChannelImportError extends Error {
       | 'invalid_state'
       | 'authorization_denied'
       | 'authorization_failed'
-      | 'invalid_session',
+      | 'invalid_session'
+      | 'invalid_public_channel',
     public readonly status: 400 | 401 | 403 | 503,
   ) {
     super(message);
@@ -101,6 +107,56 @@ export class ChannelImportService {
   async listImportedChannels(accessToken: string): Promise<ImportedChannel[]> {
     const user = await this.requireUser(accessToken);
     return this.store.listImportedChannelsByOwnerId(user.id);
+  }
+
+  /**
+   * Links the latest public catalogue from a canonical YouTube channel URL.
+   * No account, OAuth grant, or provider credential is involved.
+   */
+  async importPublicYouTubeChannel(
+    accessToken: string,
+    sourceInput: unknown,
+  ): Promise<{ importedChannels: number }> {
+    const user = await this.requireUser(accessToken);
+    let feed: PublicYouTubeChannelFeed;
+    try {
+      feed = await readPublicYouTubeChannelFeed(sourceInput, this.fetchImpl);
+    } catch (error) {
+      const message =
+        error instanceof PublicYouTubeChannelError
+          ? error.message
+          : 'Could not read that public YouTube channel.';
+      throw new ChannelImportError(message, 'invalid_public_channel', 400);
+    }
+
+    const now = this.now();
+    const connection = await this.store.upsertConnection({
+      id: this.createId(),
+      ownerId: user.id,
+      provider: 'youtube',
+      connectionKind: 'public_feed',
+      providerAccountId: `public:${feed.sourceChannelId}`,
+      accountLabel: feed.title,
+      grantedScopes: [],
+      now,
+    });
+    const importedChannels = await this.store.upsertImportedChannels([
+      {
+        id: this.createId(),
+        connectionId: connection.id,
+        sourceChannelId: feed.sourceChannelId,
+        title: feed.title,
+        sourceUrl: feed.sourceUrl,
+        status: 'connected',
+        now,
+      },
+    ]);
+    await this.store.enqueueSyncJobs({
+      id: this.createId(),
+      importedChannelIds: importedChannels.map((channel) => channel.id),
+      now,
+    });
+    return { importedChannels: 1 };
   }
 
   async beginAuthorization(

@@ -47,7 +47,8 @@ export const settingsSectionDescriptions: Record<SettingsSectionId, string> = {
   appearance: 'Choose light, dark, or match your system.',
   language: 'Select the language used across the product.',
   connected: 'Link or unlink third-party sign-in providers.',
-  imports: 'Bring an authorised YouTube or Vimeo channel into Vidak without copying its media.',
+  imports:
+    'Add a public YouTube channel or connect an owner-authorized YouTube or Vimeo channel without copying its media.',
   sessions: 'Review devices that are currently signed in.',
   danger: 'Permanently delete your account and creator data.',
 };

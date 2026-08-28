@@ -4,6 +4,9 @@ import { PGlite } from '@electric-sql/pglite';
 import { drizzle } from 'drizzle-orm/pglite';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+
 import { encryptChannelImportCredential } from './channel-import-crypto';
 import { ChannelImportSyncService } from './channel-import-sync';
 import type { W3dsDatabase } from './db/client';
@@ -141,5 +144,103 @@ describe('channel import sync', () => {
       playbackStatus: 'embedded',
     });
     expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('catalogues a linked public YouTube feed without a provider credential', async () => {
+    client = new PGlite();
+    const db = drizzle(client) as unknown as W3dsDatabase;
+    await migrate(db, { migrationsFolder });
+    const sourceChannelId = 'UC1234567890123456789012';
+    await db.insert(w3dsPlatformUsers).values({
+      id: 'user-1',
+      eName: 'creator.w3id',
+      eVaultId: 'vault-1',
+      displayName: 'Creator',
+      roles: [],
+      capabilities: [],
+      permissions: {
+        canUpload: true,
+        canComment: true,
+        canManageOwnChannels: true,
+        canModerate: false,
+        canAccessAdmin: false,
+      },
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(channelImportConnections).values({
+      id: 'connection-public',
+      ownerId: 'user-1',
+      provider: 'youtube',
+      connectionKind: 'public_feed',
+      providerAccountId: sourceChannelId,
+      accountLabel: 'Public creator',
+      grantedScopes: [],
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(importedChannels).values({
+      id: 'import-public',
+      connectionId: 'connection-public',
+      sourceChannelId,
+      title: 'Public creator',
+      sourceUrl: `https://www.youtube.com/channel/${sourceChannelId}`,
+      status: 'syncing',
+      createdAt: now,
+      updatedAt: now,
+    });
+    await db.insert(channelImportSyncJobs).values({
+      id: 'job-public',
+      importedChannelId: 'import-public',
+      status: 'queued',
+      attemptCount: 0,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(
+        new Response(
+          [
+            '<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">',
+            '<entry>',
+            '<yt:videoId>public_video_1</yt:videoId>',
+            '<title>Public video</title>',
+            '<author><name>Public creator</name></author>',
+            '<published>2026-08-01T10:00:00Z</published>',
+            '</entry>',
+            '</feed>',
+          ].join(''),
+        ),
+      );
+    const service = new ChannelImportSyncService({
+      db,
+      fetch,
+      env: {},
+      now: () => now,
+      createId: () => 'catalogue-public-video',
+    });
+
+    await expect(service.runNextBatch()).resolves.toBe('processed');
+
+    const [channel] = await db
+      .select({ status: importedChannels.status, count: importedChannels.importedVideoCount })
+      .from(importedChannels);
+    expect(channel).toEqual({ status: 'ready', count: 1 });
+    const [video] = await db
+      .select({
+        sourceUrl: importedChannelVideos.sourceUrl,
+        embedUrl: importedChannelVideos.embedUrl,
+        sourceVisibility: importedChannelVideos.sourceVisibility,
+        playbackStatus: importedChannelVideos.playbackStatus,
+      })
+      .from(importedChannelVideos);
+    expect(video).toEqual({
+      sourceUrl: 'https://www.youtube.com/watch?v=public_video_1',
+      embedUrl: 'https://www.youtube-nocookie.com/embed/public_video_1',
+      sourceVisibility: 'public',
+      playbackStatus: 'embedded',
+    });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

@@ -531,10 +531,16 @@ export const channelImportConnections = pgTable(
       .notNull()
       .references(() => w3dsPlatformUsers.id, { onDelete: 'cascade' }),
     provider: text('provider').$type<ChannelImportProvider>().notNull(),
+    /** OAuth credentials or the documented public YouTube Atom feed. */
+    connectionKind: text('connection_kind')
+      .$type<'oauth' | 'public_feed'>()
+      .notNull()
+      .default('oauth'),
     /** Provider-owned stable account/channel identity, never an email address. */
     providerAccountId: text('provider_account_id').notNull(),
     accountLabel: text('account_label').notNull(),
-    encryptedAccessToken: text('encrypted_access_token').notNull(),
+    /** Null only for a public feed, which has no user credential to retain. */
+    encryptedAccessToken: text('encrypted_access_token'),
     encryptedRefreshToken: text('encrypted_refresh_token'),
     grantedScopes: jsonb('granted_scopes').$type<string[]>().notNull(),
     accessTokenExpiresAt: timestamp('access_token_expires_at', {

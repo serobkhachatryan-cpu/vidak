@@ -229,6 +229,7 @@ export function SettingsPageData({
   const [pendingChannelImportProvider, setPendingChannelImportProvider] = useState<
     ChannelImportProvider | undefined
   >();
+  const [isAddingPublicYouTube, setIsAddingPublicYouTube] = useState(false);
   const [channelImportsError, setChannelImportsError] = useState<string | undefined>();
   const [channelImportsSuccess, setChannelImportsSuccess] = useState<string | undefined>();
   const [activeSettingsSection, setActiveSettingsSection] =
@@ -463,6 +464,40 @@ export function SettingsPageData({
     }
   };
 
+  const addPublicYouTubeChannel = async (source: string) => {
+    setChannelImportsError(undefined);
+    setChannelImportsSuccess(undefined);
+    setIsAddingPublicYouTube(true);
+    try {
+      const request = () =>
+        fetch('/api/channel-imports/public-youtube', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ source }),
+        });
+      let response = await request();
+      if (response.status === 401) {
+        await authClient.getCurrentUser(accessToken);
+        response = await request();
+      }
+      const body = (await response.json().catch(() => undefined)) as unknown;
+      if (!response.ok)
+        throw new Error(readApiError(body, 'Could not add that public YouTube channel.'));
+      setChannelImportsSuccess(
+        'Public YouTube channel added. Its latest public videos will appear shortly.',
+      );
+      await refetchChannelImports();
+    } catch (error) {
+      setChannelImportsError(errorMessage(error, 'Could not add that public YouTube channel.'));
+    } finally {
+      setIsAddingPublicYouTube(false);
+    }
+  };
+
   const deleteAccount = () => {
     if (!capabilities.deleteAccount) return;
     const errors = validateDeleteAccount(deleteForm);
@@ -587,6 +622,9 @@ export function SettingsPageData({
       {...(pendingChannelImportProvider
         ? { channelImportsPendingProvider: pendingChannelImportProvider }
         : {})}
+      {...(isAddingPublicYouTube
+        ? { channelImportsAddingPublicYouTube: isAddingPublicYouTube }
+        : {})}
       {...(channelImportsError
         ? { channelImportsError }
         : channelImportsQuery.error
@@ -600,6 +638,9 @@ export function SettingsPageData({
       {...(channelImportsSuccess ? { channelImportsSuccess } : {})}
       onConnectChannelImport={(provider) => {
         void startChannelImport(provider);
+      }}
+      onAddPublicYouTubeChannel={(source) => {
+        void addPublicYouTubeChannel(source);
       }}
       onRetryChannelImports={() => {
         setChannelImportsError(undefined);

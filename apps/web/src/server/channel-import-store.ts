@@ -22,9 +22,10 @@ export interface UpsertChannelImportConnectionInput {
   id: string;
   ownerId: string;
   provider: ChannelImportProvider;
+  connectionKind?: 'oauth' | 'public_feed';
   providerAccountId: string;
   accountLabel: string;
-  encryptedAccessToken: string;
+  encryptedAccessToken?: string;
   encryptedRefreshToken?: string;
   grantedScopes: readonly string[];
   accessTokenExpiresAt?: Date;
@@ -66,6 +67,7 @@ export interface ChannelImportStore {
 function importedChannelFromRow(row: {
   id: string;
   provider: ChannelImportProvider;
+  connectionKind: 'oauth' | 'public_feed';
   sourceChannelId: string;
   title: string;
   sourceUrl: string;
@@ -77,6 +79,7 @@ function importedChannelFromRow(row: {
   return {
     id: row.id,
     provider: row.provider,
+    access: row.connectionKind === 'public_feed' ? 'public' : 'authorised',
     sourceChannelId: row.sourceChannelId,
     title: row.title,
     sourceUrl: row.sourceUrl,
@@ -127,7 +130,11 @@ export class InMemoryChannelImportStore implements ChannelImportStore {
   async upsertConnection(input: UpsertChannelImportConnectionInput): Promise<{ id: string }> {
     const key = [input.ownerId, input.provider, input.providerAccountId].join(':');
     const existing = this.connections.get(key);
-    const connection = { ...input, id: existing?.id ?? input.id };
+    const connection = {
+      ...input,
+      connectionKind: input.connectionKind ?? 'oauth',
+      id: existing?.id ?? input.id,
+    };
     this.connections.set(key, connection);
     return { id: connection.id };
   }
@@ -166,19 +173,20 @@ export class InMemoryChannelImportStore implements ChannelImportStore {
         .filter((connection) => connection.ownerId === ownerId && !connection.revokedAt)
         .map((connection) => connection.id),
     );
-    const providersByConnectionId = new Map(
-      [...this.connections.values()].map((connection) => [connection.id, connection.provider]),
+    const connectionsById = new Map(
+      [...this.connections.values()].map((connection) => [connection.id, connection]),
     );
     return [...this.imports.values()]
       .filter((channel) => ownerConnectionIds.has(channel.connectionId))
       .sort((left, right) => right.now.getTime() - left.now.getTime())
       .flatMap((channel) => {
-        const provider = providersByConnectionId.get(channel.connectionId);
-        if (!provider) return [];
+        const connection = connectionsById.get(channel.connectionId);
+        if (!connection) return [];
         return [
           {
             id: channel.id,
-            provider,
+            provider: connection.provider,
+            access: connection.connectionKind === 'public_feed' ? 'public' : 'authorised',
             sourceChannelId: channel.sourceChannelId,
             title: channel.title,
             sourceUrl: channel.sourceUrl,
@@ -235,9 +243,10 @@ export class PostgresChannelImportStore implements ChannelImportStore {
         id: input.id,
         ownerId: input.ownerId,
         provider: input.provider,
+        connectionKind: input.connectionKind ?? 'oauth',
         providerAccountId: input.providerAccountId,
         accountLabel: input.accountLabel,
-        encryptedAccessToken: input.encryptedAccessToken,
+        encryptedAccessToken: input.encryptedAccessToken ?? null,
         ...(input.encryptedRefreshToken
           ? { encryptedRefreshToken: input.encryptedRefreshToken }
           : {}),
@@ -254,15 +263,12 @@ export class PostgresChannelImportStore implements ChannelImportStore {
           channelImportConnections.providerAccountId,
         ],
         set: {
+          connectionKind: input.connectionKind ?? 'oauth',
           accountLabel: input.accountLabel,
-          encryptedAccessToken: input.encryptedAccessToken,
-          ...(input.encryptedRefreshToken
-            ? { encryptedRefreshToken: input.encryptedRefreshToken }
-            : {}),
+          encryptedAccessToken: input.encryptedAccessToken ?? null,
+          encryptedRefreshToken: input.encryptedRefreshToken ?? null,
           grantedScopes: [...input.grantedScopes],
-          ...(input.accessTokenExpiresAt
-            ? { accessTokenExpiresAt: input.accessTokenExpiresAt }
-            : {}),
+          accessTokenExpiresAt: input.accessTokenExpiresAt ?? null,
           revokedAt: null,
           updatedAt: input.now,
         },
@@ -352,6 +358,7 @@ export class PostgresChannelImportStore implements ChannelImportStore {
       .select({
         id: importedChannels.id,
         provider: channelImportConnections.provider,
+        connectionKind: channelImportConnections.connectionKind,
         sourceChannelId: importedChannels.sourceChannelId,
         title: importedChannels.title,
         sourceUrl: importedChannels.sourceUrl,

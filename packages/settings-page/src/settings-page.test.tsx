@@ -139,6 +139,7 @@ describe('SettingsPage', () => {
           {
             id: 'import-1',
             provider: 'youtube',
+            access: 'authorised',
             sourceChannelId: 'channel-1',
             title: 'Creator channel',
             sourceUrl: 'https://www.youtube.com/channel/channel-1',
@@ -149,9 +150,10 @@ describe('SettingsPage', () => {
       />,
     );
     expect(markup).toContain('Connect YouTube');
-    expect(markup).toContain('Not configured yet');
+    expect(markup).toContain('Add a public YouTube channel');
+    expect(markup).toContain('Owner connection unavailable');
     expect(markup).toContain('Creator channel');
-    expect(markup).toContain('Videos continue to play from YouTube or Vimeo');
+    expect(markup).toContain('Videos keep playing from YouTube or Vimeo');
     expect(markup).toContain('12 videos in Vidak');
   });
 

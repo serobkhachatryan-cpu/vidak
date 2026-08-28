@@ -113,9 +113,11 @@ export type SettingsPageDataOwnedProp =
   | 'channelImportChannels'
   | 'channelImportsLoading'
   | 'channelImportsPendingProvider'
+  | 'channelImportsAddingPublicYouTube'
   | 'channelImportsError'
   | 'channelImportsSuccess'
   | 'onConnectChannelImport'
+  | 'onAddPublicYouTubeChannel'
   | 'onRetryChannelImports'
   | 'sessions'
   | 'sessionsLoading'
@@ -189,9 +191,11 @@ export interface SettingsPageProps {
   channelImportChannels?: readonly ImportedChannel[];
   channelImportsLoading?: boolean;
   channelImportsPendingProvider?: ChannelImportProvider;
+  channelImportsAddingPublicYouTube?: boolean;
   channelImportsError?: string;
   channelImportsSuccess?: string;
   onConnectChannelImport?: (provider: ChannelImportProvider) => void;
+  onAddPublicYouTubeChannel?: (source: string) => void;
   onRetryChannelImports?: () => void;
   sessions?: readonly AuthDeviceSession[];
   sessionsLoading?: boolean;
@@ -311,9 +315,11 @@ export function SettingsPage({
   channelImportChannels = [],
   channelImportsLoading,
   channelImportsPendingProvider,
+  channelImportsAddingPublicYouTube,
   channelImportsError,
   channelImportsSuccess,
   onConnectChannelImport,
+  onAddPublicYouTubeChannel,
   onRetryChannelImports,
   sessions = [],
   sessionsLoading,
@@ -466,10 +472,16 @@ export function SettingsPage({
                 {...(channelImportsPendingProvider
                   ? { pendingProvider: channelImportsPendingProvider }
                   : {})}
+                {...(channelImportsAddingPublicYouTube
+                  ? { isAddingPublicYouTube: channelImportsAddingPublicYouTube }
+                  : {})}
                 {...(channelImportsError ? { error: channelImportsError } : {})}
                 {...(channelImportsSuccess ? { success: channelImportsSuccess } : {})}
                 {...(onRetryChannelImports ? { onRetry: onRetryChannelImports } : {})}
                 onConnect={(provider) => onConnectChannelImport?.(provider)}
+                {...(onAddPublicYouTubeChannel
+                  ? { onAddPublicYouTube: onAddPublicYouTubeChannel }
+                  : {})}
               />
             )}
             {currentSection === 'sessions' && sections.includes('sessions') && (

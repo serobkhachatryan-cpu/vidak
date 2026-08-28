@@ -15,6 +15,8 @@ export interface ChannelImportProviderStatus {
 export interface ImportedChannel {
   id: string;
   provider: ChannelImportProvider;
+  /** Whether the source was approved by its owner or linked as a public feed. */
+  access: 'authorised' | 'public';
   sourceChannelId: string;
   title: string;
   sourceUrl: string;

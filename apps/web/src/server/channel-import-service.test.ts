@@ -100,6 +100,7 @@ describe('channel imports', () => {
       {
         id: 'id-3',
         provider: 'youtube',
+        access: 'authorised',
         sourceChannelId: 'UC_source',
         title: 'Creator source channel',
         sourceUrl: 'https://www.youtube.com/channel/UC_source',
@@ -118,6 +119,68 @@ describe('channel imports', () => {
         code: 'replayed-code',
       }),
     ).rejects.toMatchObject({ code: 'invalid_state', status: 400 });
+  });
+
+  it('links a public YouTube channel by its canonical URL without OAuth credentials', async () => {
+    const sourceChannelId = 'UC1234567890123456789012';
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValue(
+        new Response(
+          [
+            '<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">',
+            '<entry>',
+            '<yt:videoId>video_123</yt:videoId>',
+            '<title>Public &amp; useful video</title>',
+            '<author><name>Public creator</name></author>',
+            '<published>2026-08-28T10:00:00Z</published>',
+            '</entry>',
+            '</feed>',
+          ].join(''),
+        ),
+      );
+    const { service } = createInMemoryChannelImportService({
+      resolveUser: async () => user,
+      fetch,
+      createId: (() => {
+        let index = 0;
+        return () => `public-${++index}`;
+      })(),
+      now: () => new Date('2026-08-28T10:00:00.000Z'),
+    });
+
+    await expect(
+      service.importPublicYouTubeChannel(
+        'session',
+        `https://www.youtube.com/channel/${sourceChannelId}`,
+      ),
+    ).resolves.toEqual({ importedChannels: 1 });
+
+    await expect(service.listImportedChannels('session')).resolves.toEqual([
+      {
+        id: 'public-2',
+        provider: 'youtube',
+        access: 'public',
+        sourceChannelId,
+        title: 'Public creator',
+        sourceUrl: `https://www.youtube.com/channel/${sourceChannelId}`,
+        status: 'syncing',
+        importedVideoCount: 0,
+      },
+    ]);
+    expect(fetch).toHaveBeenCalledWith(
+      new URL(`https://www.youtube.com/feeds/videos.xml?channel_id=${sourceChannelId}`),
+      expect.objectContaining({
+        headers: { Accept: 'application/atom+xml, application/xml;q=0.9' },
+      }),
+    );
+    await expect(
+      service.importPublicYouTubeChannel(
+        'session',
+        `https://example.invalid/channel/${sourceChannelId}`,
+      ),
+    ).rejects.toMatchObject({ code: 'invalid_public_channel', status: 400 });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed when a provider has not been configured', async () => {
