@@ -1,5 +1,6 @@
 import type { ChannelImportProvider, ImportedChannel } from '@w3ds/types';
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
+import type { PublicYouTubeVideo } from './channel-import-public-youtube';
 import type { W3dsDatabase } from './db/client';
 import {
   type ChannelImportStatus,
@@ -7,6 +8,7 @@ import {
   channelImportOAuthStates,
   channelImportSyncJobs,
   importedChannels,
+  importedChannelVideos,
 } from './db/schema';
 
 export interface CreateChannelImportOAuthStateInput {
@@ -59,6 +61,11 @@ export interface ChannelImportStore {
   enqueueSyncJobs(input: {
     id: string;
     importedChannelIds: readonly string[];
+    now: Date;
+  }): Promise<void>;
+  recordPublicYouTubeVideos(input: {
+    importedChannelId: string;
+    videos: readonly (PublicYouTubeVideo & { id: string })[];
     now: Date;
   }): Promise<void>;
   listImportedChannelsByOwnerId(ownerId: string): Promise<ImportedChannel[]>;
@@ -164,6 +171,19 @@ export class InMemoryChannelImportStore implements ChannelImportStore {
     const importedIds = new Set(input.importedChannelIds);
     for (const imported of this.imports.values()) {
       if (importedIds.has(imported.id)) imported.status = 'syncing';
+    }
+  }
+
+  async recordPublicYouTubeVideos(input: {
+    importedChannelId: string;
+    videos: readonly (PublicYouTubeVideo & { id: string })[];
+    now: Date;
+  }): Promise<void> {
+    for (const imported of this.imports.values()) {
+      if (imported.id !== input.importedChannelId) continue;
+      imported.importedVideoCount = input.videos.length;
+      imported.lastSyncedAt = input.now;
+      imported.status = 'ready';
     }
   }
 
@@ -353,6 +373,61 @@ export class PostgresChannelImportStore implements ChannelImportStore {
     }
   }
 
+  async recordPublicYouTubeVideos(input: {
+    importedChannelId: string;
+    videos: readonly (PublicYouTubeVideo & { id: string })[];
+    now: Date;
+  }): Promise<void> {
+    await this.db.transaction(async (tx) => {
+      for (const video of input.videos) {
+        await tx
+          .insert(importedChannelVideos)
+          .values({
+            id: video.id,
+            importedChannelId: input.importedChannelId,
+            sourceVideoId: video.sourceVideoId,
+            title: video.title,
+            sourceUrl: video.sourceUrl,
+            embedUrl:
+              'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(video.sourceVideoId),
+            thumbnailUrl: video.thumbnailUrl,
+            sourceVisibility: 'public',
+            playbackStatus: 'embedded',
+            ...(video.publishedAt ? { publishedAt: video.publishedAt } : {}),
+            createdAt: input.now,
+            updatedAt: input.now,
+          })
+          .onConflictDoUpdate({
+            target: [importedChannelVideos.importedChannelId, importedChannelVideos.sourceVideoId],
+            set: {
+              title: video.title,
+              sourceUrl: video.sourceUrl,
+              embedUrl:
+                'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(video.sourceVideoId),
+              thumbnailUrl: video.thumbnailUrl,
+              sourceVisibility: 'public',
+              playbackStatus: 'embedded',
+              ...(video.publishedAt ? { publishedAt: video.publishedAt } : {}),
+              updatedAt: input.now,
+            },
+          });
+      }
+      const videos = await tx
+        .select({ id: importedChannelVideos.id })
+        .from(importedChannelVideos)
+        .where(eq(importedChannelVideos.importedChannelId, input.importedChannelId));
+      await tx
+        .update(importedChannels)
+        .set({
+          importedVideoCount: videos.length,
+          status: 'ready',
+          lastSyncedAt: input.now,
+          failureReason: null,
+          updatedAt: input.now,
+        })
+        .where(eq(importedChannels.id, input.importedChannelId));
+    });
+  }
   async listImportedChannelsByOwnerId(ownerId: string): Promise<ImportedChannel[]> {
     const rows = await this.db
       .select({

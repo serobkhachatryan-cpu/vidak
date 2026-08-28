@@ -151,9 +151,11 @@ export class ChannelImportService {
         now,
       },
     ]);
-    await this.store.enqueueSyncJobs({
-      id: this.createId(),
-      importedChannelIds: importedChannels.map((channel) => channel.id),
+    const importedChannel = importedChannels[0];
+    if (!importedChannel) throw new Error('Could not save that public YouTube channel.');
+    await this.store.recordPublicYouTubeVideos({
+      importedChannelId: importedChannel.id,
+      videos: feed.videos.map((video) => ({ ...video, id: this.createId() })),
       now,
     });
     return { importedChannels: 1 };

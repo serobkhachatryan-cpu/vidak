@@ -488,7 +488,7 @@ export function SettingsPageData({
       if (!response.ok)
         throw new Error(readApiError(body, 'Could not add that public YouTube channel.'));
       setChannelImportsSuccess(
-        'Public YouTube channel added. Its latest public videos will appear shortly.',
+        'Public YouTube channel added. Its latest public videos are ready now.',
       );
       await refetchChannelImports();
     } catch (error) {

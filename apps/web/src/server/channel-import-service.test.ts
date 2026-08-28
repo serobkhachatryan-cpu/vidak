@@ -164,8 +164,9 @@ describe('channel imports', () => {
         sourceChannelId,
         title: 'Public creator',
         sourceUrl: `https://www.youtube.com/channel/${sourceChannelId}`,
-        status: 'syncing',
-        importedVideoCount: 0,
+        status: 'ready',
+        importedVideoCount: 1,
+        lastSyncedAt: '2026-08-28T10:00:00.000Z',
       },
     ]);
     expect(fetch).toHaveBeenCalledWith(
