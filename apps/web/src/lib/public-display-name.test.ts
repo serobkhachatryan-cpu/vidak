@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   headerAccountCta,
+  isReplaceableWithVerifiedFullName,
   isValidPublicDisplayName,
   NEUTRAL_PUBLIC_DISPLAY_NAME,
   SET_PUBLIC_NAME_LABEL,
@@ -34,6 +35,22 @@ describe('isValidPublicDisplayName', () => {
     expect(isValidPublicDisplayName('Ada Lovelace')).toBe(true);
     expect(isValidPublicDisplayName(NEUTRAL_PUBLIC_DISPLAY_NAME)).toBe(true);
     expect(isValidPublicDisplayName('creator')).toBe(true);
+  });
+});
+
+describe('isReplaceableWithVerifiedFullName', () => {
+  it('allows replacing the platform placeholder and identifier-shaped names', () => {
+    expect(isReplaceableWithVerifiedFullName(NEUTRAL_PUBLIC_DISPLAY_NAME)).toBe(true);
+    expect(isReplaceableWithVerifiedFullName('')).toBe(true);
+    expect(isReplaceableWithVerifiedFullName(opaqueUuid)).toBe(true);
+    expect(isReplaceableWithVerifiedFullName('@creator.w3id')).toBe(true);
+  });
+
+  it('protects a name the person already chose', () => {
+    expect(isReplaceableWithVerifiedFullName('Ada Lovelace')).toBe(false);
+    expect(isReplaceableWithVerifiedFullName('Ada Lovelace', { eName: '@creator.w3id' })).toBe(
+      false,
+    );
   });
 });
 

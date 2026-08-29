@@ -7,7 +7,11 @@ import {
   type UpdateAuthProfileInput,
 } from '@w3ds/auth';
 import type { AuthDeviceSession } from '@w3ds/types';
-import { isValidPublicDisplayName, NEUTRAL_PUBLIC_DISPLAY_NAME } from '../lib/public-display-name';
+import {
+  isReplaceableWithVerifiedFullName,
+  isValidPublicDisplayName,
+  NEUTRAL_PUBLIC_DISPLAY_NAME,
+} from '../lib/public-display-name';
 import { getW3dsDatabase } from './db/client';
 import {
   readRequiredW3dsServerConfig,
@@ -23,8 +27,16 @@ import {
   PostgresW3dsAuthStore,
   type StoredOffer,
   type StoredPlatformSession,
+  type VerifiedFullNameDecision,
   type W3dsAuthStore,
 } from './w3ds-auth-store';
+import {
+  assertReplaceablePublicName,
+  createVerifiedFullNameReader,
+  normalizeEName,
+  VerifiedFullNameError,
+  type VerifiedFullNameReader,
+} from './w3ds-verified-full-name';
 
 export { W3dsAuthError } from './w3ds-auth-errors';
 export type { W3dsAuthStore } from './w3ds-auth-store';
@@ -106,6 +118,7 @@ export interface W3dsAuthServiceOptions {
   config: W3dsAuthConfig;
   store: W3dsAuthStore;
   identityVerifier?: W3dsIdentityVerifier;
+  verifiedFullNameReader?: VerifiedFullNameReader;
   now?: () => number;
 }
 
@@ -124,6 +137,7 @@ export class W3dsAuthService {
   private readonly config: Required<Pick<W3dsAuthConfig, 'offerLifetimeMs'>> & W3dsAuthConfig;
   private readonly store: W3dsAuthStore;
   private readonly identityVerifier: W3dsIdentityVerifier;
+  private readonly verifiedFullNameReader: VerifiedFullNameReader | undefined;
   private readonly now: () => number;
 
   constructor(options: W3dsAuthServiceOptions) {
@@ -135,6 +149,7 @@ export class W3dsAuthService {
     this.now = options.now ?? Date.now;
     this.identityVerifier =
       options.identityVerifier ?? new RegistryW3dsIdentityVerifier(this.config.registryBaseUrl);
+    this.verifiedFullNameReader = options.verifiedFullNameReader;
   }
 
   async createOffer(publicBaseUrl: string): Promise<LoginOffer> {
@@ -351,6 +366,91 @@ export class W3dsAuthService {
       displayName,
       ...(input.avatarUrl !== undefined ? { avatarUrl: input.avatarUrl } : {}),
     });
+  }
+
+  async getVerifiedFullNameConsent(accessToken: string): Promise<{
+    eligible: boolean;
+    decision: VerifiedFullNameDecision | null;
+  }> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    const decision = await this.store.getVerifiedFullNameDecision(platformSession.user.id);
+    const eligible =
+      !decision &&
+      Boolean(this.verifiedFullNameReader) &&
+      isReplaceableWithVerifiedFullName(platformSession.user.displayName, {
+        id: platformSession.user.id,
+        eName: platformSession.user.eName,
+        eVaultId: platformSession.user.eVaultId,
+      });
+    return { eligible, decision: decision ?? null };
+  }
+
+  /**
+   * Reads `id_document.data.name` only after an explicit grant. Login never
+   * performs this read. A chosen public name is never overwritten.
+   */
+  async applyVerifiedFullName(accessToken: string, input: { grant: boolean }): Promise<AuthUser> {
+    if (input.grant !== true) {
+      throw new W3dsAuthError(
+        'Permission to use the verified full name is required.',
+        'consent_required',
+        400,
+      );
+    }
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    try {
+      assertReplaceablePublicName(platformSession.user.displayName, {
+        id: platformSession.user.id,
+        eName: platformSession.user.eName,
+        eVaultId: platformSession.user.eVaultId,
+      });
+    } catch (error) {
+      throw toAuthError(error);
+    }
+    const reader = this.verifiedFullNameReader;
+    if (!reader) {
+      throw new W3dsAuthError(
+        'Verified full name is not configured for this Vidak deployment.',
+        'not_configured',
+        503,
+      );
+    }
+    const eVaultUri = platformSession.user.eVaultUri?.trim();
+    if (!eVaultUri) {
+      throw new W3dsAuthError(
+        'No verified identity document name is available.',
+        'name_unavailable',
+        404,
+      );
+    }
+    let record: Awaited<ReturnType<VerifiedFullNameReader['readVerifiedFullName']>>;
+    try {
+      record = await reader.readVerifiedFullName({
+        eName: platformSession.user.eName,
+        eVaultUri,
+      });
+    } catch (error) {
+      throw toAuthError(error);
+    }
+    if (normalizeEName(record.subject) !== normalizeEName(platformSession.user.eName)) {
+      throw new W3dsAuthError(
+        'The identity document does not belong to this eName.',
+        'identity_mismatch',
+        403,
+      );
+    }
+    const user = await this.store.updateUserProfile({
+      userId: platformSession.user.id,
+      displayName: record.name,
+    });
+    await this.store.setVerifiedFullNameDecision(platformSession.user.id, 'granted');
+    return user;
+  }
+
+  async declineVerifiedFullName(accessToken: string): Promise<AuthUser> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    await this.store.setVerifiedFullNameDecision(platformSession.user.id, 'declined');
+    return platformSession.user;
   }
 
   /** Lists only the authenticated user's active platform sessions. */
@@ -706,6 +806,18 @@ function isHttpUrl(value: string): boolean {
   } catch {
     return false;
   }
+}
+
+function toAuthError(error: unknown): W3dsAuthError {
+  if (error instanceof W3dsAuthError) return error;
+  if (error instanceof VerifiedFullNameError) {
+    return new W3dsAuthError(error.message, error.code, error.status);
+  }
+  return new W3dsAuthError(
+    'No verified identity document name is available.',
+    'name_unavailable',
+    404,
+  );
 }
 
 function toDeviceSession(
@@ -1083,6 +1195,14 @@ function createE2eStubAuthService(
   });
 }
 
+function optionalVerifiedFullNameReader(): VerifiedFullNameReader | undefined {
+  try {
+    return createVerifiedFullNameReader();
+  } catch {
+    return undefined;
+  }
+}
+
 export function getW3dsAuthService(): W3dsAuthService {
   if (isW3dsAuthE2eStubEnabled()) {
     const globalState = globalThis as typeof globalThis & {
@@ -1093,10 +1213,14 @@ export function getW3dsAuthService(): W3dsAuthService {
     return globalState.__vidakW3dsE2eAuthService;
   }
 
-  service ??= new W3dsAuthService({
-    config: readW3dsAuthConfig(),
-    store: new PostgresW3dsAuthStore(getW3dsDatabase()),
-  });
+  if (!service) {
+    const verifiedFullNameReader = optionalVerifiedFullNameReader();
+    service = new W3dsAuthService({
+      config: readW3dsAuthConfig(),
+      store: new PostgresW3dsAuthStore(getW3dsDatabase()),
+      ...(verifiedFullNameReader ? { verifiedFullNameReader } : {}),
+    });
+  }
   return service;
 }
 

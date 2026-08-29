@@ -30,6 +30,9 @@ export const w3dsPlatformUsers = pgTable('w3ds_platform_users', {
   eVaultId: text('e_vault_id').notNull(),
   eVaultUri: text('e_vault_uri'),
   displayName: text('display_name').notNull(),
+  verifiedFullNameDecision: text('verified_full_name_decision').$type<
+    'granted' | 'declined' | null
+  >(),
   handle: text('handle'),
   avatarUrl: text('avatar_url'),
   bio: text('bio'),

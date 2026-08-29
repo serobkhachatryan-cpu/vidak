@@ -11,6 +11,7 @@ import {
   useState,
 } from 'react';
 import { useAuthentication, useCurrentUser } from '../features/auth/auth-provider';
+import { VerifiedFullNameConsent } from '../features/auth/verified-full-name-consent';
 import { useAppearancePreference } from '../features/settings/appearance-preference';
 import { headerAccountCta } from '../lib/public-display-name';
 
@@ -224,6 +225,7 @@ export function ApplicationShell({
       mobileNavigationTitle="Browse"
     >
       {children}
+      {user ? <VerifiedFullNameConsent /> : null}
     </AppShell>
   );
 }

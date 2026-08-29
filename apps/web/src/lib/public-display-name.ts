@@ -31,6 +31,20 @@ export function isValidPublicDisplayName(
   return true;
 }
 
+/**
+ * True when the stored public name is still the platform placeholder or an
+ * identifier. A later verified-name grant may replace these; a chosen name
+ * must not be overwritten without a separate explicit user action.
+ */
+export function isReplaceableWithVerifiedFullName(
+  value: string | null | undefined,
+  identity?: PublicDisplayNameIdentity,
+): boolean {
+  const name = value?.trim() ?? '';
+  if (!name || name === NEUTRAL_PUBLIC_DISPLAY_NAME) return true;
+  return !isValidPublicDisplayName(name, identity);
+}
+
 export function headerAccountCta(
   displayName: string | null | undefined,
   identity?: PublicDisplayNameIdentity,

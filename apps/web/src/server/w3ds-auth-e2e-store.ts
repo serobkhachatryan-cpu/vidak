@@ -9,6 +9,7 @@ import {
   type StoredOffer,
   type StoredPlatformSession,
   type UpdateUserProfileRecordInput,
+  type VerifiedFullNameDecision,
   type W3dsAuthStore,
 } from './w3ds-auth-store';
 
@@ -47,6 +48,7 @@ export class FilePersistedE2eW3dsAuthStore implements W3dsAuthStore {
           offers: StoredOffer[];
           users: AuthUser[];
           sessions: StoredPlatformSession[];
+          verifiedFullNameDecisions?: Record<string, VerifiedFullNameDecision>;
         },
       );
     } catch {
@@ -91,6 +93,12 @@ export class FilePersistedE2eW3dsAuthStore implements W3dsAuthStore {
   }
   updateUserProfile(input: UpdateUserProfileRecordInput) {
     return this.withState(true, () => this.memory.updateUserProfile(input));
+  }
+  getVerifiedFullNameDecision(userId: string) {
+    return this.withState(false, () => this.memory.getVerifiedFullNameDecision(userId));
+  }
+  setVerifiedFullNameDecision(userId: string, decision: VerifiedFullNameDecision) {
+    return this.withState(true, () => this.memory.setVerifiedFullNameDecision(userId, decision));
   }
   createSession(input: CreateSessionRecordInput) {
     return this.withState(true, () => this.memory.createSession(input));

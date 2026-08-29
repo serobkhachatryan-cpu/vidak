@@ -27,6 +27,8 @@ export interface StoredPlatformSession {
   updatedAt: number;
 }
 
+export type VerifiedFullNameDecision = 'granted' | 'declined';
+
 export interface UpdateUserProfileRecordInput {
   userId: string;
   displayName: string;
@@ -83,6 +85,8 @@ export interface W3dsAuthStore {
   findOrCreateUser(user: AuthUser): Promise<AuthUser>;
   /** Updates only local platform profile fields for the given user id. */
   updateUserProfile(input: UpdateUserProfileRecordInput): Promise<AuthUser>;
+  getVerifiedFullNameDecision(userId: string): Promise<VerifiedFullNameDecision | undefined>;
+  setVerifiedFullNameDecision(userId: string, decision: VerifiedFullNameDecision): Promise<void>;
 
   createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession>;
   getSessionById(sessionId: string): Promise<StoredPlatformSession | undefined>;
@@ -159,6 +163,7 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
   private readonly usersByEName = new Map<string, AuthUser>();
   private readonly usersById = new Map<string, AuthUser>();
   private readonly sessionsById = new Map<string, StoredPlatformSession>();
+  private readonly verifiedFullNameDecisions = new Map<string, VerifiedFullNameDecision>();
   /** Serializes claim operations to emulate atomic DB updates in tests. */
   private claimChain: Promise<unknown> = Promise.resolve();
 
@@ -281,6 +286,17 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     return cloneUser(updated);
   }
 
+  async getVerifiedFullNameDecision(userId: string): Promise<VerifiedFullNameDecision | undefined> {
+    return this.verifiedFullNameDecisions.get(userId);
+  }
+
+  async setVerifiedFullNameDecision(
+    userId: string,
+    decision: VerifiedFullNameDecision,
+  ): Promise<void> {
+    this.verifiedFullNameDecisions.set(userId, decision);
+  }
+
   async createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession> {
     const now = Date.now();
     const session: StoredPlatformSession = {
@@ -339,11 +355,13 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     offers: StoredOffer[];
     users: AuthUser[];
     sessions: StoredPlatformSession[];
+    verifiedFullNameDecisions: Record<string, VerifiedFullNameDecision>;
   } {
     return {
       offers: [...this.offersById.values()].map((offer) => ({ ...offer })),
       users: [...this.usersById.values()].map(cloneUser),
       sessions: [...this.sessionsById.values()].map(cloneSession),
+      verifiedFullNameDecisions: Object.fromEntries(this.verifiedFullNameDecisions),
     };
   }
 
@@ -352,12 +370,14 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     offers: StoredOffer[];
     users: AuthUser[];
     sessions: StoredPlatformSession[];
+    verifiedFullNameDecisions?: Record<string, VerifiedFullNameDecision>;
   }): void {
     this.offersById.clear();
     this.offersBySessionId.clear();
     this.usersByEName.clear();
     this.usersById.clear();
     this.sessionsById.clear();
+    this.verifiedFullNameDecisions.clear();
     for (const offer of snapshot.offers) {
       const copy = { ...offer };
       this.offersById.set(copy.id, copy);
@@ -370,6 +390,9 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     }
     for (const session of snapshot.sessions) {
       this.sessionsById.set(session.id, cloneSession(session));
+    }
+    for (const [userId, decision] of Object.entries(snapshot.verifiedFullNameDecisions ?? {})) {
+      this.verifiedFullNameDecisions.set(userId, decision);
     }
   }
 }
@@ -567,6 +590,33 @@ export class PostgresW3dsAuthStore implements W3dsAuthStore {
     return toAuthUser(row);
   }
 
+  async getVerifiedFullNameDecision(userId: string): Promise<VerifiedFullNameDecision | undefined> {
+    const [row] = await this.db
+      .select({ decision: w3dsPlatformUsers.verifiedFullNameDecision })
+      .from(w3dsPlatformUsers)
+      .where(eq(w3dsPlatformUsers.id, userId))
+      .limit(1);
+    return parseVerifiedFullNameDecision(row?.decision);
+  }
+
+  async setVerifiedFullNameDecision(
+    userId: string,
+    decision: VerifiedFullNameDecision,
+  ): Promise<void> {
+    const now = new Date();
+    const [row] = await this.db
+      .update(w3dsPlatformUsers)
+      .set({
+        verifiedFullNameDecision: decision,
+        updatedAt: now,
+      })
+      .where(eq(w3dsPlatformUsers.id, userId))
+      .returning({ id: w3dsPlatformUsers.id });
+    if (!row) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+  }
+
   async createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession> {
     const now = new Date();
     await this.db.insert(w3dsPlatformSessions).values({
@@ -697,4 +747,10 @@ function sessionFromRows(
     createdAt: session.createdAt.getTime(),
     updatedAt: session.updatedAt.getTime(),
   };
+}
+
+function parseVerifiedFullNameDecision(
+  value: string | null | undefined,
+): VerifiedFullNameDecision | undefined {
+  return value === 'granted' || value === 'declined' ? value : undefined;
 }
