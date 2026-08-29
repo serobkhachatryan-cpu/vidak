@@ -21,7 +21,7 @@ import {
   Section,
   Skeleton,
 } from '@w3ds/ui';
-import { type ReactNode, useId, useState } from 'react';
+import { type ReactNode, useEffect, useId, useState } from 'react';
 import { AppearanceSection } from './sections/appearance-section';
 import { ChannelImportsSection } from './sections/channel-imports-section';
 import { ConnectedAccountsSection } from './sections/connected-accounts-section';
@@ -347,6 +347,11 @@ export function SettingsPage({
   const [selectedSection, setSelectedSection] = useState<SettingsSectionId>(initialSection);
   const preferredSection = activeSection ?? selectedSection;
   const currentSection = resolveActiveSettingsSection(sections, preferredSection);
+
+  useEffect(() => {
+    if (activeSection !== undefined) return;
+    setSelectedSection(resolveActiveSettingsSection(sections, defaultSection));
+  }, [activeSection, defaultSection, sections]);
 
   const changeSection = (section: SettingsSectionId) => {
     if (activeSection === undefined) setSelectedSection(section);

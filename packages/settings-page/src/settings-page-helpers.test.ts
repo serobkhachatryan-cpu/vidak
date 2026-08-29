@@ -7,6 +7,7 @@ import {
   errorMessage,
   isAppLanguage,
   nextSettingsSection,
+  parseSettingsSectionParam,
   profileFormFromProfile,
   resolveActiveSettingsSection,
   resolveSettingsPageState,
@@ -87,6 +88,12 @@ describe('settings navigation helpers', () => {
     expect(w3dsSections).not.toContain('danger');
     expect(w3dsSections).toContain('profile');
     expect(resolveActiveSettingsSection(w3dsSections, 'password')).toBe('profile');
+    expect(parseSettingsSectionParam('profile')).toBe('profile');
+    expect(parseSettingsSectionParam(' Profile ')).toBe('profile');
+    expect(parseSettingsSectionParam('appearance')).toBe('appearance');
+    expect(parseSettingsSectionParam('imports')).toBe('imports');
+    expect(parseSettingsSectionParam('unknown')).toBeUndefined();
+    expect(parseSettingsSectionParam(null)).toBeUndefined();
   });
 
   it('patches auth users from product profiles without inventing password fields', () => {

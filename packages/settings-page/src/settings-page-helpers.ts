@@ -67,6 +67,14 @@ export function resolveActiveSettingsSection(
   return sections[0] ?? 'profile';
 }
 
+export function parseSettingsSectionParam(
+  value: string | null | undefined,
+): SettingsSectionId | undefined {
+  if (!value) return undefined;
+  const normalized = value.trim().toLocaleLowerCase();
+  return settingsSectionOrder.find((section) => section === normalized);
+}
+
 /** Patches the auth session projection after a product-profile save when AuthClient profile APIs are unavailable. */
 export function authUserFromProductProfile(user: AuthUser, profile: UserProfile): AuthUser {
   const { avatarUrl: _previousAvatar, ...userWithoutAvatar } = user;

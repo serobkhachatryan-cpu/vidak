@@ -121,6 +121,24 @@ describe('W3dsAuthService', () => {
     expect(reused.eName).toBe('@creator.w3id');
   });
 
+  it('provisions new W3DS accounts with a neutral public display name', async () => {
+    const { service } = createService();
+    const uuidEName = '@fd10387a-b0d3-5f9c-bf54-7214a491cace';
+    const creatorAccess = await completeLogin(service, verifiedIdentity.eName);
+    const uuidAccess = await completeLogin(service, uuidEName);
+
+    const creatorSession = await service.getSession(creatorAccess);
+    const uuidSession = await service.getSession(uuidAccess);
+
+    expect(creatorSession.user.displayName).toBe('New Vidak member');
+    expect(creatorSession.user.displayName).not.toBe('creator');
+    expect(creatorSession.user.eName).toBe('@creator.w3id');
+    expect(uuidSession.user.displayName).toBe('New Vidak member');
+    expect(uuidSession.user.displayName).not.toBe('fd10387a-b0d3-5f9c-bf54-7214a491cace');
+    expect(uuidSession.user.eName).toBe(uuidEName);
+    expect(uuidSession.user.profile.handle).toBeUndefined();
+  });
+
   it('reuses the server-side verifier for arbitrary signed payloads without issuing a login session', async () => {
     const { service, verifier, store } = createService();
 
@@ -364,6 +382,20 @@ describe('W3dsAuthService', () => {
       status: 401,
     });
     await expect(service.updateProfile(accessToken, { displayName: '   ' })).rejects.toMatchObject({
+      code: 'validation_failed',
+      status: 400,
+    });
+    await expect(
+      service.updateProfile(accessToken, {
+        displayName: 'fd10387a-b0d3-5f9c-bf54-7214a491cace',
+      }),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      status: 400,
+    });
+    await expect(
+      service.updateProfile(accessToken, { displayName: '@creator.w3id' }),
+    ).rejects.toMatchObject({
       code: 'validation_failed',
       status: 400,
     });

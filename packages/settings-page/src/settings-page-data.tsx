@@ -162,6 +162,8 @@ export function SettingsPageData({
   onAuthUserUpdate,
   onAppearancePreferenceChange,
   onAccountDeleted,
+  defaultSection,
+  onSectionChange,
   ...pageProps
 }: SettingsPageDataProps) {
   const queryClient = useQueryClient();
@@ -236,6 +238,11 @@ export function SettingsPageData({
     useState<SettingsPageProps['activeSection']>();
 
   useEffect(() => {
+    if (!defaultSection) return;
+    setActiveSettingsSection(defaultSection);
+  }, [defaultSection]);
+
+  useEffect(() => {
     const profile = profileQuery.data;
     if (!profile) return;
     if (profileHydratedForUserRef.current === userId) return;
@@ -257,6 +264,7 @@ export function SettingsPageData({
     url.searchParams.delete('channelImport');
     window.history.replaceState({}, '', url);
     setActiveSettingsSection('imports');
+    onSectionChange?.('imports');
     if (result === 'connected') {
       setChannelImportsSuccess('Channel linked. Vidak will show only the channels you approved.');
       void refetchChannelImports();
@@ -265,7 +273,7 @@ export function SettingsPageData({
     } else {
       setChannelImportsError('Could not connect that channel. Please try again.');
     }
-  }, [refetchChannelImports]);
+  }, [onSectionChange, refetchChannelImports]);
 
   useEffect(() => {
     return () => {
@@ -528,10 +536,11 @@ export function SettingsPageData({
   return (
     <SettingsPage
       {...pageProps}
+      {...(defaultSection ? { defaultSection } : {})}
       {...(resolvedActiveSettingsSection ? { activeSection: resolvedActiveSettingsSection } : {})}
       onSectionChange={(section) => {
         setActiveSettingsSection(section);
-        pageProps.onSectionChange?.(section);
+        onSectionChange?.(section);
       }}
       sections={sections}
       state={resolveSettingsPageState({

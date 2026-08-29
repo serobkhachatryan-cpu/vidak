@@ -7,6 +7,7 @@ import {
   type UpdateAuthProfileInput,
 } from '@w3ds/auth';
 import type { AuthDeviceSession } from '@w3ds/types';
+import { isValidPublicDisplayName, NEUTRAL_PUBLIC_DISPLAY_NAME } from '../lib/public-display-name';
 import { getW3dsDatabase } from './db/client';
 import {
   readRequiredW3dsServerConfig,
@@ -344,7 +345,7 @@ export class W3dsAuthService {
    */
   async updateProfile(accessToken: string, input: UpdateAuthProfileInput): Promise<AuthUser> {
     const platformSession = await this.getActiveSession(accessToken, 'access');
-    const displayName = validateProfileUpdateInput(input);
+    const displayName = validateProfileUpdateInput(input, platformSession.user);
     return this.store.updateUserProfile({
       userId: platformSession.user.id,
       displayName,
@@ -409,11 +410,9 @@ export class W3dsAuthService {
   }
 
   private async findOrCreateUser(identity: VerifiedW3dsIdentity): Promise<AuthUser> {
-    const displayName = identity.eName.slice(1).split('.')[0] || 'W3DS user';
     const candidate = createAuthUser({
       id: `w3ds_${randomUUID()}`,
-      displayName,
-      handle: displayName,
+      displayName: NEUTRAL_PUBLIC_DISPLAY_NAME,
       roles: ['creator'],
       eName: identity.eName,
       eVaultId: identity.eVaultId,
@@ -667,7 +666,10 @@ function validateCallbackInput(input: W3dsCallbackInput) {
 
 const maxDisplayNameLength = 50;
 
-function validateProfileUpdateInput(input: UpdateAuthProfileInput): string {
+function validateProfileUpdateInput(
+  input: UpdateAuthProfileInput,
+  identity: { id: string; eName: string; eVaultId: string },
+): string {
   if (typeof input.displayName !== 'string') {
     throw new W3dsAuthError('Display name is required.', 'validation_failed', 400);
   }
@@ -678,6 +680,13 @@ function validateProfileUpdateInput(input: UpdateAuthProfileInput): string {
   if (displayName.length > maxDisplayNameLength) {
     throw new W3dsAuthError(
       'Display name must be 50 characters or fewer.',
+      'validation_failed',
+      400,
+    );
+  }
+  if (!isValidPublicDisplayName(displayName, identity)) {
+    throw new W3dsAuthError(
+      'Choose a public name that is not an identifier.',
       'validation_failed',
       400,
     );

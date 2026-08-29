@@ -12,6 +12,7 @@ import {
 } from 'react';
 import { useAuthentication, useCurrentUser } from '../features/auth/auth-provider';
 import { useAppearancePreference } from '../features/settings/appearance-preference';
+import { headerAccountCta } from '../lib/public-display-name';
 
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
@@ -45,6 +46,13 @@ export function ApplicationShell({
     ...item,
     current: item.href === currentHref,
   }));
+  const accountCta = user
+    ? headerAccountCta(user.displayName, {
+        id: user.id,
+        eName: user.eName,
+        eVaultId: user.eVaultId,
+      })
+    : undefined;
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -168,7 +176,7 @@ export function ApplicationShell({
                     : 'Light mode'}
               </Button>
               {!isLoading &&
-                (user ? (
+                (user && accountCta ? (
                   <>
                     <Button size="sm" variant="ghost" onClick={() => router.push('/support')}>
                       Report a problem
@@ -176,8 +184,8 @@ export function ApplicationShell({
                     <Button size="sm" variant="secondary" onClick={() => router.push('/upload')}>
                       Upload
                     </Button>
-                    <Button size="sm" variant="ghost" onClick={() => router.push('/settings')}>
-                      {user.displayName}
+                    <Button size="sm" variant="ghost" onClick={() => router.push(accountCta.href)}>
+                      {accountCta.label}
                     </Button>
                     <Button
                       size="sm"

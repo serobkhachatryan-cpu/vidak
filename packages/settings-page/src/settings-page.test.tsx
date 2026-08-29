@@ -31,6 +31,15 @@ describe('SettingsPage', () => {
     expect(markup).toContain('Bio');
   });
 
+  it('opens the Profile panel from defaultSection so /settings?section=profile can land there', () => {
+    const markup = renderToStaticMarkup(
+      <SettingsPage email="demo@vidak.video" profile={profile} defaultSection="profile" />,
+    );
+    expect(markup).toContain('Display name');
+    expect(markup).toContain('Update how you appear across Vidak.');
+    expect(markup).toContain('aria-selected="true"');
+  });
+
   it('surfaces profile validation messaging', () => {
     const markup = renderToStaticMarkup(
       <SettingsPage

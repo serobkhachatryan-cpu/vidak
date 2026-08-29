@@ -23,6 +23,7 @@ export {
   errorMessage,
   isAppLanguage,
   nextSettingsSection,
+  parseSettingsSectionParam,
   profileFormFromProfile,
   resolveActiveSettingsSection,
   resolveSettingsPageState,

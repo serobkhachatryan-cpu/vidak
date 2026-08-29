@@ -55,20 +55,20 @@ test('completed offer cookies hand off to an authenticated session', async ({ pa
 
   await expect.poll(() => pathnameOf(page.url())).toBe('/settings');
   const session = await expectAuthenticatedCookieSession(page);
-  expect(session.user.displayName).toBe('ada');
+  expect(session.user.displayName).toBe('New Vidak member');
 
   await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: 'ada' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Upload', exact: true }).click();
   await expect.poll(() => pathnameOf(page.url())).toBe('/upload');
-  await expect(page.getByRole('button', { name: 'ada' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await expect.poll(() => pathnameOf(page.url())).toBe('/settings');
   await expect.poll(() => pathnameOf(page.url())).not.toBe('/auth/handoff');
-  await expect(page.getByRole('button', { name: 'ada' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
 });
 
 test('Return after mocked wallet approval lands authenticated on Settings then Upload', async ({
@@ -107,17 +107,17 @@ test('Return after mocked wallet approval lands authenticated on Settings then U
   // User clicks Return: original browser finishes via continue → cookie → handoff.
   await expect.poll(() => pathnameOf(page.url()), { timeout: 20_000 }).toBe('/settings');
   await expectAuthenticatedCookieSession(page);
-  await expect(page.getByRole('button', { name: 'return' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
   await expect.poll(() => pathnameOf(page.url())).not.toBe('/auth/handoff');
   await expect.poll(() => pathnameOf(page.url())).not.toBe('/login');
 
   await page.getByRole('button', { name: 'Upload', exact: true }).click();
   await expect.poll(() => pathnameOf(page.url())).toBe('/upload');
-  await expect(page.getByRole('button', { name: 'return' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
   await expect.poll(() => pathnameOf(page.url())).toBe('/settings');
-  await expect(page.getByRole('button', { name: 'return' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
 });
 
 test('handoff never soft-loops on login or handoff returnTo', async ({ page }) => {
