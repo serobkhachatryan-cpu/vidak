@@ -1,14 +1,8 @@
 'use client';
 
-import { useQueries, useQuery } from '@tanstack/react-query';
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
 import { isPublicVideoId, type VideoApiClient } from '@w3ds/api-client';
-import {
-  useChannel,
-  useInfiniteVideoComments,
-  usePublicVideo,
-  useVideo,
-  videoQueryKeys,
-} from '@w3ds/hooks';
+import { useInfiniteVideoComments, usePublicVideo, useVideo, videoQueryKeys } from '@w3ds/hooks';
 import type {
   Channel,
   Comment,
@@ -16,10 +10,12 @@ import type {
   CommentReaction,
   CommentRichText,
   CommentSort,
+  PublicChannelProjection,
   Video,
   VideoId,
   VideoMediaRendition,
 } from '@w3ds/types';
+import { SOURCE_NEUTRAL_CHANNEL_LABEL } from '@w3ds/types';
 import {
   AppShell,
   type AppShellProps,
@@ -37,6 +33,7 @@ import {
   VideoCardSkeleton,
 } from '@w3ds/ui';
 import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { createPublicViewRecorder, replacePublicVideoInPages } from './meaningful-playback';
 
 const cx = (...classes: Array<string | false | null | undefined>) =>
   classes.filter(Boolean).join(' ');
@@ -82,11 +79,14 @@ export interface WatchPageActions {
 
 export interface WatchPageProps {
   video?: Video;
-  channel?: Channel;
+  channel?:
+    | PublicChannelProjection
+    | Pick<Channel, 'name' | 'handle' | 'avatarUrl' | 'subscriberCount' | 'id'>;
   /** Same-origin public or owner media content path for playable bytes. */
   mediaSrc?: string;
   relatedVideos?: readonly Video[];
-  relatedChannels?: Readonly<Record<string, Pick<Channel, 'name' | 'handle' | 'avatarUrl'>>>;
+  relatedChannels?: Readonly<Record<string, Pick<Channel, 'name' | 'handle' | 'avatarUrl' | 'id'>>>;
+  onMeaningfulPlayback?: (currentTime: number, duration: number) => void;
   state?: WatchPageState;
   errorTitle?: ReactNode;
   errorDescription?: ReactNode;
@@ -346,10 +346,12 @@ function VideoPlayer({
   title,
   mediaSrc,
   mediaRenditions,
+  onMeaningfulPlayback,
 }: {
   title: string;
   mediaSrc?: string;
   mediaRenditions?: readonly VideoMediaRendition[];
+  onMeaningfulPlayback?: (currentTime: number, duration: number) => void;
 }) {
   const qualityOptions = useMemo(
     () => buildQualityOptions(mediaSrc, mediaRenditions),
@@ -414,6 +416,12 @@ function VideoPlayer({
                   ? current
                   : { ...current, [selectedQuality.id]: height },
               );
+            }}
+            onTimeUpdate={(event) => {
+              onMeaningfulPlayback?.(event.currentTarget.currentTime, event.currentTarget.duration);
+            }}
+            onEnded={(event) => {
+              onMeaningfulPlayback?.(event.currentTarget.currentTime, event.currentTarget.duration);
             }}
             data-testid="public-video-player"
           >
@@ -511,7 +519,7 @@ function RelatedVideos({
       ) : (
         <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-1">
           {videos.map((relatedVideo) => {
-            const relatedChannel = channels?.[relatedVideo.channelId];
+            const relatedChannel = channels?.[relatedVideo.channelId] ?? relatedVideo.channel;
             return (
               <VideoCard
                 key={relatedVideo.id}
@@ -532,6 +540,7 @@ function WatchContent({
   mediaSrc,
   relatedVideos = [],
   relatedChannels,
+  onMeaningfulPlayback,
   actions,
   subscribed = false,
   comments = [],
@@ -557,8 +566,41 @@ function WatchContent({
     | 'errorDescription'
     | 'onRetry'
   >) {
-  const channelName = channel?.name ?? 'Unknown channel';
+  const resolvedChannel = channel ?? video.channel;
+  const hasRealChannel = Boolean(resolvedChannel?.id && resolvedChannel.name);
+  const channelName = hasRealChannel
+    ? (resolvedChannel?.name ?? SOURCE_NEUTRAL_CHANNEL_LABEL)
+    : SOURCE_NEUTRAL_CHANNEL_LABEL;
   const date = formatDate(video.publishedAt);
+  const channelHref = hasRealChannel
+    ? `/channel/${resolvedChannel?.id ?? video.channelId}`
+    : undefined;
+
+  const channelIdentity = (
+    <>
+      <Avatar
+        {...(resolvedChannel?.avatarUrl ? { src: resolvedChannel.avatarUrl } : {})}
+        alt=""
+        name={channelName}
+        size="lg"
+      />
+      <span className="min-w-0">
+        <span className="block truncate font-sans font-semibold text-foreground">
+          {channelName}
+        </span>
+        {hasRealChannel ? (
+          <span className="block text-sm text-muted-foreground">
+            {compactNumber.format(
+              typeof resolvedChannel?.subscriberCount === 'number'
+                ? resolvedChannel.subscriberCount
+                : 0,
+            )}{' '}
+            subscribers
+          </span>
+        ) : null}
+      </span>
+    </>
+  );
 
   return (
     <div className="grid gap-8 xl:grid-cols-[minmax(0,1fr)_22rem]">
@@ -567,6 +609,7 @@ function WatchContent({
           title={video.title}
           {...(mediaSrc !== undefined ? { mediaSrc } : {})}
           {...(video.mediaRenditions ? { mediaRenditions: video.mediaRenditions } : {})}
+          {...(onMeaningfulPlayback ? { onMeaningfulPlayback } : {})}
         />
         <div>
           <Heading as="h1" size="xl">
@@ -578,25 +621,16 @@ function WatchContent({
         </div>
 
         <div className="flex flex-col gap-4 border-y border-border py-4 sm:flex-row sm:items-center sm:justify-between">
-          <a
-            href={`/channel/${video.channelId}`}
-            className="flex min-w-0 items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-          >
-            <Avatar
-              {...(channel?.avatarUrl ? { src: channel.avatarUrl } : {})}
-              alt=""
-              name={channelName}
-              size="lg"
-            />
-            <span className="min-w-0">
-              <span className="block truncate font-sans font-semibold text-foreground">
-                {channelName}
-              </span>
-              <span className="block text-sm text-muted-foreground">
-                {compactNumber.format(channel?.subscriberCount ?? 0)} subscribers
-              </span>
-            </span>
-          </a>
+          {channelHref ? (
+            <a
+              href={channelHref}
+              className="flex min-w-0 items-center gap-3 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            >
+              {channelIdentity}
+            </a>
+          ) : (
+            <div className="flex min-w-0 items-center gap-3">{channelIdentity}</div>
+          )}
           <Button
             variant={subscribed ? 'secondary' : 'primary'}
             onClick={actions?.onSubscribe}
@@ -679,6 +713,7 @@ export function WatchPage({
   mediaSrc,
   relatedVideos,
   relatedChannels,
+  onMeaningfulPlayback,
   state = video ? 'ready' : 'empty',
   errorTitle = 'Could not load this video',
   errorDescription = 'Please check your connection and try again.',
@@ -722,6 +757,7 @@ export function WatchPage({
         {...(mediaSrc !== undefined ? { mediaSrc } : {})}
         {...(relatedVideos ? { relatedVideos } : {})}
         {...(relatedChannels ? { relatedChannels } : {})}
+        {...(onMeaningfulPlayback ? { onMeaningfulPlayback } : {})}
         {...(actions ? { actions } : {})}
         {...(subscribed === undefined ? {} : { subscribed })}
         {...(comments ? { comments } : {})}
@@ -748,6 +784,7 @@ export function WatchPage({
 }
 
 export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps) {
+  const queryClient = useQueryClient();
   const looksPublic = isPublicVideoId(videoId);
   const publicVideoQuery = usePublicVideo(client, videoId, { enabled: looksPublic });
   const legacyVideoQuery = useVideo(client, videoId, { enabled: !looksPublic });
@@ -770,7 +807,28 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
     enabled: Boolean(video?.publicVideoId),
   });
 
-  const channelQuery = useChannel(client, video?.channelId ?? '', { enabled: Boolean(video) });
+  const publicVideoId = video?.publicVideoId;
+  const viewRecorder = useMemo(
+    () => ({
+      publicVideoId,
+      ...createPublicViewRecorder(async (id) => {
+        const result = await client.recordPublicView(id);
+        queryClient.setQueryData(videoQueryKeys.publicVideo(id), result.video);
+        queryClient.setQueriesData({ queryKey: videoQueryKeys.publicVideos() }, (current) => {
+          if (!current || typeof current !== 'object') return current;
+          return replacePublicVideoInPages(
+            current as {
+              items?: readonly Video[];
+              pages?: readonly { items: readonly Video[] }[];
+            },
+            result.video,
+          );
+        });
+        return result;
+      }),
+    }),
+    [client, queryClient, publicVideoId],
+  );
   const [commentSort, setCommentSort] = useState<CommentSort>('top');
   const [expandedCommentIds, setExpandedCommentIds] = useState<readonly CommentId[]>([]);
   const commentVideoId = video?.id ?? videoId;
@@ -828,9 +886,15 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
       {...props}
       {...(video ? { video } : {})}
       {...(mediaQuery.data ? { mediaSrc: mediaQuery.data } : {})}
-      {...(channelQuery.data ? { channel: channelQuery.data } : {})}
+      {...(video?.channel ? { channel: video.channel } : {})}
       relatedVideos={relatedVideos}
-      relatedChannels={channelQuery.data ? { [channelQuery.data.id]: channelQuery.data } : {}}
+      relatedChannels={Object.fromEntries(
+        relatedVideos.flatMap((item) => (item.channel ? [[item.channelId, item.channel]] : [])),
+      )}
+      onMeaningfulPlayback={(currentTime, duration) => {
+        if (!viewRecorder.publicVideoId) return;
+        void viewRecorder.onPlaybackProgress(viewRecorder.publicVideoId, currentTime, duration);
+      }}
       comments={comments}
       commentAuthors={commentAuthors}
       commentReplies={commentReplies}

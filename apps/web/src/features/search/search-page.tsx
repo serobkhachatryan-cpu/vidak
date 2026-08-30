@@ -1,11 +1,6 @@
 'use client';
 
-import {
-  useChannel,
-  useInfiniteChannels,
-  useInfinitePlaylists,
-  useInfiniteVideos,
-} from '@w3ds/hooks';
+import { useInfiniteChannels, useInfinitePlaylists, useInfiniteVideos } from '@w3ds/hooks';
 import type { SearchResultType, SearchSort, Video } from '@w3ds/types';
 import {
   ChannelSearchResult,
@@ -29,8 +24,7 @@ const RECENT_SEARCHES_KEY = 'w3ds-recent-searches';
 const MAX_RECENT_SEARCHES = 6;
 
 function SearchVideoCard({ video }: { video: Video }) {
-  const { data: channel } = useChannel(videoApiClient, video.channelId);
-  return <VideoCard video={video} {...(channel ? { channel } : {})} />;
+  return <VideoCard video={video} {...(video.channel ? { channel: video.channel } : {})} />;
 }
 
 function useRecentSearches() {

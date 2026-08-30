@@ -225,6 +225,44 @@ export class CreatorVideoService {
   }
 
   /**
+   * Safe public channel projection by local channel id.
+   * Used by public watch/channel pages instead of MockVideoApiClient.
+   */
+  async getPublicChannel(channelId: string): Promise<Channel> {
+    const normalized = channelId.trim();
+    if (!normalized) {
+      throw new CreatorVideoError('Channel was not found.', 'not_found', 404);
+    }
+    const channel = await this.store.findChannelById(normalized);
+    if (!channel) {
+      throw new CreatorVideoError('Channel was not found.', 'not_found', 404);
+    }
+    return channel;
+  }
+
+  /**
+   * Anonymous view count after meaningful Watch-page playback.
+   * Deduplicates by hashed viewer key. Never writes eVault or changes visibility.
+   */
+  async recordPublicView(
+    publicVideoId: string,
+    viewerKeyHash: string,
+    now?: Date,
+  ): Promise<{ counted: boolean; video: Video }> {
+    const normalized = publicVideoId.trim();
+    const hash = viewerKeyHash.trim();
+    if (!normalized || !hash) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+    return this.store.recordPublicView({
+      publicVideoId: normalized,
+      viewerKeyHash: hash,
+      eventId: this.createId(),
+      ...(now ? { now } : {}),
+    });
+  }
+
+  /**
    * Anonymous discovery page: only `published` + `public` videos.
    * `unlisted`, `private`, and drafts are never included.
    */

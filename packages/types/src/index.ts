@@ -1,4 +1,5 @@
-export type { Channel, ChannelId } from './channel';
+export type { Channel, ChannelId, PublicChannelProjection } from './channel';
+export { SOURCE_NEUTRAL_CHANNEL_LABEL } from './channel';
 export type {
   ChannelImportProvider,
   ChannelImportProviderStatus,
@@ -55,6 +56,7 @@ export type {
   CreateVideoInput,
   DraftMediaAsset,
   MediaUploadState,
+  PublicViewRecordResult,
   UpdateVideoDraftInput,
   UpdateVideoInput,
   UploadDraftMediaFile,

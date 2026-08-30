@@ -1,6 +1,6 @@
 'use client';
 
-import { useChannel, useInfinitePublicVideos } from '@w3ds/hooks';
+import { useInfinitePublicVideos } from '@w3ds/hooks';
 import { isRenderableThumbnailUrl, type Video } from '@w3ds/types';
 import {
   Button,
@@ -22,12 +22,12 @@ import { videoApiClient } from '../../lib/video-api-client';
 import {
   evaultItemsForTab,
   formatSpaceDuration,
+  type InventoryCompleteness,
   isVideoSpaceEmpty,
   ownedItemsForTab,
   ownedVideoSpaceVisibility,
   shareChangeConfirmation,
   sharedInventoryBanner,
-  type InventoryCompleteness,
   type VideoSpaceLibraryItem,
   type VideoSpaceTab,
   videoSpaceEmptyCopy,
@@ -506,8 +506,7 @@ function PublicExplorePanel() {
 }
 
 function PublicVideoCard({ video }: { video: Video }) {
-  const { data: channel } = useChannel(videoApiClient, video.channelId);
-  return <VideoCard video={video} {...(channel ? { channel } : {})} />;
+  return <VideoCard video={video} {...(video.channel ? { channel: video.channel } : {})} />;
 }
 
 export function PublicHomeFeed() {

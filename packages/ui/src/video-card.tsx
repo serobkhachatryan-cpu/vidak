@@ -1,7 +1,7 @@
 'use client';
 
 import type { Channel, Video } from '@w3ds/types';
-import { isRenderableThumbnailUrl } from '@w3ds/types';
+import { isRenderableThumbnailUrl, SOURCE_NEUTRAL_CHANNEL_LABEL } from '@w3ds/types';
 import { useState } from 'react';
 import { Avatar, Badge, Skeleton } from './primitives';
 import { cx, focusRing } from './utils';
@@ -58,7 +58,7 @@ function VideoThumbnail({ src, title }: { src: string; title: string }) {
 
 export interface VideoCardProps {
   video: Video;
-  channel?: Pick<Channel, 'name' | 'handle' | 'avatarUrl'>;
+  channel?: Pick<Channel, 'name' | 'handle' | 'avatarUrl'> & { id?: string };
   href?: string;
   channelHref?: string;
   className?: string;
@@ -68,13 +68,20 @@ export function VideoCard({
   video,
   channel,
   href = `/watch/${video.publicVideoId ?? video.id}`,
-  channelHref = `/channel/${video.channelId}`,
+  channelHref,
   className,
 }: VideoCardProps) {
   const metadata = [formatViews(video.viewCount), formatPublishedAt(video.publishedAt)]
     .filter(Boolean)
     .join(' · ');
-  const channelName = channel?.name ?? 'Unknown channel';
+  const resolvedChannel = channel ?? video.channel;
+  const hasRealChannel = Boolean(resolvedChannel?.id && resolvedChannel.name);
+  const channelName = hasRealChannel
+    ? (resolvedChannel?.name ?? SOURCE_NEUTRAL_CHANNEL_LABEL)
+    : SOURCE_NEUTRAL_CHANNEL_LABEL;
+  const resolvedChannelHref = hasRealChannel
+    ? (channelHref ?? `/channel/${resolvedChannel?.id ?? video.channelId}`)
+    : undefined;
 
   return (
     <article className={cx('group min-w-0', className)}>
@@ -93,18 +100,29 @@ export function VideoCard({
         </Badge>
       </a>
       <div className="flex gap-3 pt-3">
-        <a
-          href={channelHref}
-          aria-label={`Visit ${channelName}`}
-          className={cx('shrink-0 rounded-full', focusRing)}
-        >
-          <Avatar
-            {...(channel?.avatarUrl ? { src: channel.avatarUrl } : {})}
-            alt=""
-            name={channelName}
-            size="md"
-          />
-        </a>
+        {resolvedChannelHref ? (
+          <a
+            href={resolvedChannelHref}
+            aria-label={`Visit ${channelName}`}
+            className={cx('shrink-0 rounded-full', focusRing)}
+          >
+            <Avatar
+              {...(resolvedChannel?.avatarUrl ? { src: resolvedChannel.avatarUrl } : {})}
+              alt=""
+              name={channelName}
+              size="md"
+            />
+          </a>
+        ) : (
+          <span className="shrink-0">
+            <Avatar
+              {...(resolvedChannel?.avatarUrl ? { src: resolvedChannel.avatarUrl } : {})}
+              alt=""
+              name={channelName}
+              size="md"
+            />
+          </span>
+        )}
         <div className="min-w-0">
           <a
             href={href}
@@ -115,15 +133,19 @@ export function VideoCard({
           >
             {video.title}
           </a>
-          <a
-            href={channelHref}
-            className={cx(
-              'mt-1 block truncate font-sans text-sm text-muted-foreground hover:text-foreground',
-              focusRing,
-            )}
-          >
-            {channelName}
-          </a>
+          {resolvedChannelHref ? (
+            <a
+              href={resolvedChannelHref}
+              className={cx(
+                'mt-1 block truncate font-sans text-sm text-muted-foreground hover:text-foreground',
+                focusRing,
+              )}
+            >
+              {channelName}
+            </a>
+          ) : (
+            <p className="mt-1 truncate font-sans text-sm text-muted-foreground">{channelName}</p>
+          )}
           <p className="mt-0.5 font-sans text-sm text-muted-foreground">{metadata}</p>
         </div>
       </div>

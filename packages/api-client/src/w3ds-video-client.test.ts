@@ -480,6 +480,69 @@ describe('W3dsVideoApiClient', () => {
       }),
     ).rejects.toThrow(/forbidden storage key/i);
   });
+
+  it('loads public channels from the platform API instead of MockVideoApiClient', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith('/api/channels/public/channel-real')) {
+        return jsonResponse({
+          id: 'channel-real',
+          ownerId: 'user-ada',
+          handle: 'ada',
+          name: 'Ada Lovelace',
+          subscriberCount: 12,
+          videoCount: 3,
+          createdAt: '2026-08-01T00:00:00.000Z',
+        });
+      }
+      if (url.endsWith('/api/channels/public/missing')) {
+        return jsonResponse({ error: { code: 'not_found' } }, 404);
+      }
+      return jsonResponse({ error: { code: 'not_found' } }, 404);
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock, mock: { delayMs: 0 } });
+    await expect(client.getChannel('channel-real')).resolves.toMatchObject({
+      id: 'channel-real',
+      name: 'Ada Lovelace',
+    });
+    await expect(client.getChannel('missing')).resolves.toBeUndefined();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/channels/public/channel-real');
+  });
+
+  it('records a public view through the anonymous views route', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/videos/public/pub_live/views') && init?.method === 'POST') {
+        return jsonResponse({
+          counted: true,
+          video: {
+            id: 'draft-1',
+            channelId: 'channel-1',
+            channel: { id: 'channel-1', name: 'Ada Lovelace', handle: 'ada' },
+            title: 'Live clip',
+            description: '',
+            thumbnailUrl: '',
+            durationSeconds: 0,
+            status: 'published',
+            visibility: 'public',
+            publicVideoId: 'pub_live',
+            createdAt: '2026-08-04T10:00:00.000Z',
+            updatedAt: '2026-08-04T12:00:00.000Z',
+            viewCount: 1,
+            likeCount: 0,
+            commentCount: 0,
+            tags: [],
+          },
+        });
+      }
+      return jsonResponse({ error: { code: 'not_found' } }, 404);
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    await expect(client.recordPublicView('pub_live')).resolves.toMatchObject({
+      counted: true,
+      video: { viewCount: 1, channel: { name: 'Ada Lovelace' } },
+    });
+  });
 });
 
 describe('createVideoApiClient', () => {

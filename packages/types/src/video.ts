@@ -1,4 +1,4 @@
-import type { ChannelId } from './channel';
+import type { ChannelId, PublicChannelProjection } from './channel';
 import type { SearchSort } from './search';
 
 export type VideoId = string;
@@ -44,9 +44,19 @@ export const videoLanguages = ['en', 'es', 'fr', 'de', 'pt', 'ja', 'ko', 'zh', '
 
 export type VideoLanguage = (typeof videoLanguages)[number];
 
+export interface PublicViewRecordResult {
+  counted: boolean;
+  video: Video;
+}
+
 export interface Video {
   id: VideoId;
   channelId: ChannelId;
+  /**
+   * Safe creator-channel projection for public cards and watch pages.
+   * Joined on public discovery/detail so clients never N+1 mock lookups.
+   */
+  channel?: PublicChannelProjection;
   title: string;
   description: string;
   thumbnailUrl: string;

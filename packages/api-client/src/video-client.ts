@@ -15,6 +15,7 @@ import type {
   PaginationParams,
   Playlist,
   PlaylistId,
+  PublicViewRecordResult,
   SearchFilters,
   UpdateProfileInput,
   UpdateUserPreferencesInput,
@@ -128,6 +129,11 @@ export interface VideoApiClient {
    * Resolves `public` / `unlisted` published videos; drafts and private return undefined.
    */
   getPublicVideo(publicVideoId: string): Promise<Video | undefined>;
+  /**
+   * Record a public view after meaningful Watch-page playback.
+   * Returns the updated public video projection (channel + viewCount).
+   */
+  recordPublicView(publicVideoId: string): Promise<PublicViewRecordResult>;
   /**
    * Same-origin anonymous content path for a published public/unlisted asset.
    * Uses only opaque publicVideoId + asset id.

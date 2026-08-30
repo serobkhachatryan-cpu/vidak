@@ -200,6 +200,31 @@ export const videoPreviewAssets = pgTable(
 );
 
 /**
+ * Anonymous public view receipts. Stores only a keyed hash of viewer material —
+ * never raw IP addresses, eNames, tokens, or third-party tracking data.
+ * Counted views update `videos.view_count` locally and are never written to eVault.
+ */
+export const videoViewEvents = pgTable(
+  'video_view_events',
+  {
+    id: text('id').primaryKey(),
+    videoId: text('video_id')
+      .notNull()
+      .references(() => videos.id, { onDelete: 'cascade' }),
+    publicVideoId: text('public_video_id').notNull(),
+    viewerKeyHash: text('viewer_key_hash').notNull(),
+    countedAt: timestamp('counted_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('video_view_events_public_video_viewer_uidx').on(
+      table.publicVideoId,
+      table.viewerKeyHash,
+    ),
+    index('video_view_events_video_id_idx').on(table.videoId),
+  ],
+);
+
+/**
  * One-time login offers for w3ds://auth.
  * Status transitions and expiry are enforced by store operations.
  */
@@ -716,6 +741,7 @@ export const channelImportOAuthStates = pgTable(
   ],
 );
 
+export type VideoViewEventRow = typeof videoViewEvents.$inferSelect;
 export type W3dsPlatformSessionRow = typeof w3dsPlatformSessions.$inferSelect;
 export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
 export type VideoRow = typeof videos.$inferSelect;

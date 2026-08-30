@@ -1,15 +1,17 @@
 import type {
   Channel,
+  PublicChannelProjection,
   UpdateVideoDraftInput,
   Video,
   VideoCategory,
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
-import { and, desc, eq, inArray, like, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, like, lte, sql } from 'drizzle-orm';
 import { CreatorVideoError } from './creator-video-errors';
 import type { W3dsDatabase } from './db/client';
-import { creatorChannels, mediaAssets, videos } from './db/schema';
+import { creatorChannels, mediaAssets, videos, videoViewEvents } from './db/schema';
+import { PUBLIC_VIEW_DEDUP_WINDOW_MS } from './public-video-views';
 
 export interface CreateChannelRecordInput {
   id: string;
@@ -43,6 +45,7 @@ export interface CreatorVideoStore {
    */
   findOrCreateChannel(input: CreateChannelRecordInput): Promise<Channel>;
   findChannelByOwnerId(ownerId: string): Promise<Channel | undefined>;
+  findChannelById(channelId: string): Promise<Channel | undefined>;
   createDraft(input: CreateDraftRecordInput): Promise<Video>;
   listDraftsByOwnerId(ownerId: string): Promise<Video[]>;
   /** Every local Vidak video the owner can manage, regardless of lifecycle state. */
@@ -82,6 +85,32 @@ export interface CreatorVideoStore {
    * Callers page with `limit` / `offset` (fetch `limit + 1` to detect a next page).
    */
   listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]>;
+  /**
+   * Atomically records one anonymous public view when the hashed viewer key is
+   * new (or outside the dedup window). Never changes visibility or writes eVault.
+   */
+  recordPublicView(input: {
+    publicVideoId: string;
+    viewerKeyHash: string;
+    eventId: string;
+    now?: Date;
+  }): Promise<{ counted: boolean; video: Video }>;
+}
+
+function toPublicChannelProjection(input: {
+  id: string;
+  name: string;
+  handle: string;
+  avatarUrl?: string | null;
+  subscriberCount: number;
+}): PublicChannelProjection {
+  return {
+    id: input.id,
+    name: input.name,
+    handle: input.handle,
+    ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
+    subscriberCount: input.subscriberCount,
+  };
 }
 
 function toChannel(row: {
@@ -110,26 +139,29 @@ function toChannel(row: {
   };
 }
 
-function toVideo(row: {
-  id: string;
-  channelId: string;
-  title: string;
-  description: string;
-  thumbnailUrl: string;
-  durationSeconds: number;
-  status: Video['status'];
-  visibility: VideoVisibility;
-  category: VideoCategory | null;
-  language: VideoLanguage | null;
-  tags: string[];
-  viewCount: number;
-  likeCount: number;
-  commentCount: number;
-  publicVideoId: string | null;
-  publishedAt: Date | null;
-  createdAt: Date;
-  updatedAt: Date;
-}): Video {
+function toVideo(
+  row: {
+    id: string;
+    channelId: string;
+    title: string;
+    description: string;
+    thumbnailUrl: string;
+    durationSeconds: number;
+    status: Video['status'];
+    visibility: VideoVisibility;
+    category: VideoCategory | null;
+    language: VideoLanguage | null;
+    tags: string[];
+    viewCount: number;
+    likeCount: number;
+    commentCount: number;
+    publicVideoId: string | null;
+    publishedAt: Date | null;
+    createdAt: Date;
+    updatedAt: Date;
+  },
+  channel?: PublicChannelProjection,
+): Video {
   return {
     id: row.id,
     channelId: row.channelId,
@@ -149,6 +181,7 @@ function toVideo(row: {
     likeCount: row.likeCount,
     commentCount: row.commentCount,
     tags: row.tags,
+    ...(channel ? { channel } : {}),
   };
 }
 
@@ -157,7 +190,11 @@ function cloneChannel(channel: Channel): Channel {
 }
 
 function cloneVideo(video: Video): Video {
-  return { ...video, tags: [...video.tags] };
+  return {
+    ...video,
+    tags: [...video.tags],
+    ...(video.channel ? { channel: { ...video.channel } } : {}),
+  };
 }
 
 type StoredVideo = Video & { ownerId: string };
@@ -169,6 +206,8 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
   private readonly videosById = new Map<string, StoredVideo>();
   /** videoId → ready media asset count (test helper for publish preconditions). */
   private readonly readyMediaCounts = new Map<string, number>();
+  private readonly viewEvents = new Map<string, Date>();
+  private viewMutex: Promise<void> = Promise.resolve();
 
   /** Test helper: registers that an owned video has a ready media asset attached. */
   seedReadyMediaAsset(videoId: string): void {
@@ -178,6 +217,24 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
   /** Test helper: clears ready-media registration for a video. */
   clearReadyMediaAssets(videoId: string): void {
     this.readyMediaCounts.delete(videoId);
+  }
+
+  private withPublicChannel(video: Video): Video {
+    const channel = this.channelsById.get(video.channelId);
+    if (!channel) return cloneVideo(video);
+    return cloneVideo({
+      ...video,
+      channel: toPublicChannelProjection(channel),
+    });
+  }
+
+  private enqueueView<T>(fn: () => T | Promise<T>): Promise<T> {
+    const result = this.viewMutex.then(fn, fn);
+    this.viewMutex = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   async findOrCreateChannel(input: CreateChannelRecordInput): Promise<Channel> {
@@ -201,6 +258,11 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
 
   async findChannelByOwnerId(ownerId: string): Promise<Channel | undefined> {
     const channel = this.channelsByOwnerId.get(ownerId);
+    return channel ? cloneChannel(channel) : undefined;
+  }
+
+  async findChannelById(channelId: string): Promise<Channel | undefined> {
+    const channel = this.channelsById.get(channelId);
     return channel ? cloneChannel(channel) : undefined;
   }
 
@@ -391,7 +453,7 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
         video.status === 'published' &&
         (video.visibility === 'public' || video.visibility === 'unlisted'),
     );
-    return match ? cloneVideo(match) : undefined;
+    return match ? this.withPublicChannel(match) : undefined;
   }
 
   async listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]> {
@@ -408,7 +470,35 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
         return right.id.localeCompare(left.id);
       })
       .slice(safeOffset, safeOffset + safeLimit)
-      .map(cloneVideo);
+      .map((video) => this.withPublicChannel(video));
+  }
+
+  async recordPublicView(input: {
+    publicVideoId: string;
+    viewerKeyHash: string;
+    eventId: string;
+    now?: Date;
+  }): Promise<{ counted: boolean; video: Video }> {
+    return this.enqueueView(async () => {
+      const video = await this.getPublishedAccessibleByPublicVideoId(input.publicVideoId);
+      if (!video) {
+        throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+      }
+      const stored = this.videosById.get(video.id);
+      if (!stored?.publicVideoId) {
+        throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+      }
+      const now = input.now ?? new Date();
+      const key = `${stored.publicVideoId}:${input.viewerKeyHash}`;
+      const previous = this.viewEvents.get(key);
+      if (previous && now.getTime() - previous.getTime() < PUBLIC_VIEW_DEDUP_WINDOW_MS) {
+        return { counted: false, video: this.withPublicChannel(stored) };
+      }
+      this.viewEvents.set(key, now);
+      stored.viewCount += 1;
+      void input.eventId;
+      return { counted: true, video: this.withPublicChannel(stored) };
+    });
   }
 }
 
@@ -448,6 +538,17 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       .select()
       .from(creatorChannels)
       .where(eq(creatorChannels.ownerId, ownerId))
+      .limit(1);
+    return row ? toChannel(row) : undefined;
+  }
+
+  async findChannelById(channelId: string): Promise<Channel | undefined> {
+    const normalized = channelId.trim();
+    if (!normalized) return undefined;
+    const [row] = await this.db
+      .select()
+      .from(creatorChannels)
+      .where(eq(creatorChannels.id, normalized))
       .limit(1);
     return row ? toChannel(row) : undefined;
   }
@@ -497,7 +598,7 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       .from(videos)
       .where(and(eq(videos.ownerId, ownerId), eq(videos.status, 'draft')))
       .orderBy(desc(videos.updatedAt));
-    return rows.map(toVideo);
+    return rows.map((row) => toVideo(row));
   }
 
   async listOwnedVideosByOwnerId(ownerId: string): Promise<Video[]> {
@@ -506,7 +607,7 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       .from(videos)
       .where(eq(videos.ownerId, ownerId))
       .orderBy(desc(videos.updatedAt));
-    return rows.map(toVideo);
+    return rows.map((row) => toVideo(row));
   }
 
   async getOwnedDraft(videoId: string, ownerId: string): Promise<Video | undefined> {
@@ -707,8 +808,9 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
     const normalized = publicVideoId.trim();
     if (!normalized) return undefined;
     const [row] = await this.db
-      .select()
+      .select({ video: videos, channel: creatorChannels })
       .from(videos)
+      .innerJoin(creatorChannels, eq(videos.channelId, creatorChannels.id))
       .where(
         and(
           eq(videos.publicVideoId, normalized),
@@ -717,7 +819,7 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
         ),
       )
       .limit(1);
-    return row ? toVideo(row) : undefined;
+    return row ? toVideo(row.video, toPublicChannelProjection(row.channel)) : undefined;
   }
 
   async listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]> {
@@ -725,12 +827,84 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
     const safeOffset = Math.max(0, Math.floor(offset));
     if (safeLimit === 0) return [];
     const rows = await this.db
-      .select()
+      .select({ video: videos, channel: creatorChannels })
       .from(videos)
+      .innerJoin(creatorChannels, eq(videos.channelId, creatorChannels.id))
       .where(and(eq(videos.status, 'published'), eq(videos.visibility, 'public')))
       .orderBy(desc(videos.publishedAt), desc(videos.id))
       .limit(safeLimit)
       .offset(safeOffset);
-    return rows.map(toVideo);
+    return rows.map((row) => toVideo(row.video, toPublicChannelProjection(row.channel)));
+  }
+
+  async recordPublicView(input: {
+    publicVideoId: string;
+    viewerKeyHash: string;
+    eventId: string;
+    now?: Date;
+  }): Promise<{ counted: boolean; video: Video }> {
+    const normalized = input.publicVideoId.trim();
+    const viewerKeyHash = input.viewerKeyHash.trim();
+    if (!normalized || !viewerKeyHash) {
+      throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+    }
+
+    return this.db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select({ video: videos, channel: creatorChannels })
+        .from(videos)
+        .innerJoin(creatorChannels, eq(videos.channelId, creatorChannels.id))
+        .where(
+          and(
+            eq(videos.publicVideoId, normalized),
+            eq(videos.status, 'published'),
+            inArray(videos.visibility, ['public', 'unlisted']),
+          ),
+        )
+        .limit(1);
+      if (!existing) {
+        throw new CreatorVideoError('Video was not found.', 'not_found', 404);
+      }
+
+      const now = input.now ?? new Date();
+      const cutoff = new Date(now.getTime() - PUBLIC_VIEW_DEDUP_WINDOW_MS);
+      const [event] = await tx
+        .insert(videoViewEvents)
+        .values({
+          id: input.eventId,
+          videoId: existing.video.id,
+          publicVideoId: existing.video.publicVideoId ?? normalized,
+          viewerKeyHash,
+          countedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: [videoViewEvents.publicVideoId, videoViewEvents.viewerKeyHash],
+          set: { countedAt: now },
+          setWhere: lte(videoViewEvents.countedAt, cutoff),
+        })
+        .returning({ id: videoViewEvents.id });
+
+      if (!event) {
+        return {
+          counted: false,
+          video: toVideo(existing.video, toPublicChannelProjection(existing.channel)),
+        };
+      }
+
+      const [updated] = await tx
+        .update(videos)
+        .set({
+          viewCount: sql`${videos.viewCount} + 1`,
+        })
+        .where(eq(videos.id, existing.video.id))
+        .returning();
+      if (!updated) {
+        throw new CreatorVideoError('Failed to record the view.', 'internal_error', 500);
+      }
+      return {
+        counted: true,
+        video: toVideo(updated, toPublicChannelProjection(existing.channel)),
+      };
+    });
   }
 }

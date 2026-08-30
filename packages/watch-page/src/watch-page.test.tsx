@@ -64,6 +64,7 @@ describe('WatchPage', () => {
     expect(markup).toContain('<h1');
     expect(markup).toContain('Building a practical design system');
     expect(markup).toContain('Vidak Studio');
+    expect(markup).not.toContain('Unknown channel');
     expect(markup).toContain('Subscribe');
     expect(markup).toContain('<legend class="sr-only">Video actions</legend>');
     expect(markup).toContain('aria-label="Video tags"');

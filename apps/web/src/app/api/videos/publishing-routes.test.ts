@@ -35,6 +35,7 @@ import { GET as getPublicMediaContent } from './public/[publicVideoId]/media/[as
 import { GET as getPublicPrimaryMedia } from './public/[publicVideoId]/media/route';
 import { GET as getPublicVideo } from './public/[publicVideoId]/route';
 import { GET as getPublicThumbnail } from './public/[publicVideoId]/thumbnail/route';
+import { POST as recordPublicView } from './public/[publicVideoId]/views/route';
 import { GET as listPublicVideos } from './public/route';
 
 let rootDir = '';
@@ -215,6 +216,11 @@ describe('video publishing and public discovery routes', () => {
       status: 'published',
       visibility: 'public',
       publicVideoId: publicPublished.publicVideoId,
+      channel: {
+        name: expect.any(String),
+        handle: expect.any(String),
+        id: expect.any(String),
+      },
     });
 
     const unlistedDetail = await getPublicVideo(
@@ -245,6 +251,55 @@ describe('video publishing and public discovery routes', () => {
       { params: Promise.resolve({ publicVideoId: 'pub_missing' }) },
     );
     expect(missing.status).toBe(404);
+  });
+
+  it('counts a public view once and ignores refresh/replay without storing viewer identity', async () => {
+    const ctx = await createPublishingContext();
+    const draft = await createOwnedDraft(ctx, { title: 'Viewed clip', visibility: 'public' });
+    ctx.videoStore.seedReadyMediaAsset(draft.id);
+    const published = await publishOwned(ctx, draft.id);
+    const headers = {
+      'user-agent': 'VidakTest/1.0',
+      'x-forwarded-for': '203.0.113.50',
+    };
+
+    const first = await recordPublicView(
+      new NextRequest(`https://vidak.example/api/videos/public/${published.publicVideoId}/views`, {
+        method: 'POST',
+        headers,
+      }),
+      { params: Promise.resolve({ publicVideoId: published.publicVideoId }) },
+    );
+    expect(first.status).toBe(200);
+    const firstBody = (await first.json()) as {
+      counted: boolean;
+      video: { viewCount: number; channel?: { name: string }; visibility: string };
+    };
+    expect(firstBody.counted).toBe(true);
+    expect(firstBody.video.viewCount).toBe(1);
+    expect(firstBody.video.channel?.name).toBeTruthy();
+    expect(firstBody.video.channel?.name).not.toBe('Unknown channel');
+    expect(firstBody.video.visibility).toBe('public');
+    expect(JSON.stringify(firstBody)).not.toMatch(/203\.0\.113\.50|eName|evault|jwt/i);
+
+    const replay = await recordPublicView(
+      new NextRequest(`https://vidak.example/api/videos/public/${published.publicVideoId}/views`, {
+        method: 'POST',
+        headers,
+      }),
+      { params: Promise.resolve({ publicVideoId: published.publicVideoId }) },
+    );
+    expect(replay.status).toBe(200);
+    await expect(replay.json()).resolves.toMatchObject({
+      counted: false,
+      video: { viewCount: 1 },
+    });
+
+    const mediaGet = await getPublicVideo(
+      new NextRequest(`https://vidak.example/api/videos/public/${published.publicVideoId}`),
+      { params: Promise.resolve({ publicVideoId: published.publicVideoId }) },
+    );
+    await expect(mediaGet.json()).resolves.toMatchObject({ viewCount: 1 });
   });
 
   it('lists only published public videos and paginates discovery', async () => {

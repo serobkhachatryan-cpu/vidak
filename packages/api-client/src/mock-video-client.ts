@@ -15,6 +15,7 @@ import type {
   PaginationParams,
   Playlist,
   PlaylistId,
+  PublicViewRecordResult,
   SearchFilters,
   UpdateProfileInput,
   UpdateUserPreferencesInput,
@@ -122,6 +123,7 @@ export class MockVideoApiClient implements VideoApiClient {
     { fileName: string; durationSeconds: number }
   >();
   private readonly draftMediaById = new Map<string, DraftMediaAsset>();
+  private readonly viewEvents = new Map<string, number>();
 
   constructor(options: MockVideoApiClientOptions = {}) {
     this.delayMs = options.delayMs ?? 0;
@@ -795,6 +797,24 @@ export class MockVideoApiClient implements VideoApiClient {
     return video ? this.withMockMediaContentUrl(video) : undefined;
   }
 
+  async recordPublicView(publicVideoId: string): Promise<PublicViewRecordResult> {
+    await this.wait();
+    const video = await this.getPublicVideo(publicVideoId);
+    if (!video) throw new Error('Video was not found.');
+    const now = Date.now();
+    const previous = this.viewEvents.get(video.publicVideoId ?? publicVideoId);
+    const windowMs = 6 * 60 * 60 * 1000;
+    if (previous !== undefined && now - previous < windowMs) {
+      return { counted: false, video };
+    }
+    this.viewEvents.set(video.publicVideoId ?? publicVideoId, now);
+    const next = { ...video, viewCount: video.viewCount + 1 };
+    this.videos = this.videos.map((item) =>
+      item.id === video.id ? { ...item, viewCount: next.viewCount } : item,
+    );
+    return { counted: true, video: this.withMockMediaContentUrl(next) };
+  }
+
   publicMediaContentPath(publicVideoId: string, assetId: string): string {
     return publicMediaContentPath(publicVideoId, assetId);
   }
@@ -815,10 +835,25 @@ export class MockVideoApiClient implements VideoApiClient {
     return asset ? publicPrimaryMediaPath(video.publicVideoId) : undefined;
   }
 
+  private publicChannelFields(video: Video): Pick<Video, 'channel'> {
+    const channel = this.channels.find((item) => item.id === video.channelId);
+    if (!channel) return video.channel ? { channel: video.channel } : {};
+    return {
+      channel: {
+        id: channel.id,
+        name: channel.name,
+        handle: channel.handle,
+        ...(channel.avatarUrl ? { avatarUrl: channel.avatarUrl } : {}),
+        subscriberCount: channel.subscriberCount,
+      },
+    };
+  }
+
   private withMockMediaContentUrl(video: Video): Video {
     let next: Video = {
       ...video,
       thumbnailUrl: normalizePersistedThumbnailUrl(video.thumbnailUrl),
+      ...this.publicChannelFields(video),
     };
 
     const publicVideoId = next.publicVideoId;

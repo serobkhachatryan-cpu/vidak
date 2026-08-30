@@ -41,6 +41,7 @@ describe('VideoCard', () => {
     expect(markup).toContain('12:22');
     expect(markup).toContain('Vidak Studio');
     expect(markup).toContain('98.3K views');
+    expect(markup).not.toContain('Unknown channel');
     expect(markup).toContain('src="https://example.com/thumbnail.jpg"');
   });
 
@@ -87,5 +88,31 @@ describe('VideoCard', () => {
     expect(markup).toContain('IMG 1589 thumbnail unavailable');
     expect(markup).not.toContain('blob:');
     expect(markup).not.toContain('<img');
+  });
+
+  it('renders a public card from the joined video channel and never Unknown channel', () => {
+    const markup = renderToStaticMarkup(
+      <VideoCard
+        video={{
+          ...video,
+          channel: {
+            id: channel.id,
+            name: channel.name,
+            handle: channel.handle,
+            ...(channel.avatarUrl ? { avatarUrl: channel.avatarUrl } : {}),
+          },
+        }}
+      />,
+    );
+    expect(markup).toContain('Vidak Studio');
+    expect(markup).toContain('href="/channel/channel-studio"');
+    expect(markup).not.toContain('Unknown channel');
+  });
+
+  it('uses a source-neutral label without a fake channel link when no channel exists', () => {
+    const markup = renderToStaticMarkup(<VideoCard video={video} />);
+    expect(markup).toContain('Independent source');
+    expect(markup).not.toContain('Unknown channel');
+    expect(markup).not.toContain('href="/channel/channel-studio"');
   });
 });

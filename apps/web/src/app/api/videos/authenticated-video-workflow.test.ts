@@ -180,14 +180,21 @@ describe('authenticated video workflow (end-to-end)', () => {
     const discovery = await listPublicVideos(new NextRequest(`${appOrigin}/api/videos/public`));
     expect(discovery.status).toBe(200);
     const discoveryBody = (await discovery.json()) as {
-      items: Array<{ publicVideoId: string; title: string }>;
+      items: Array<{
+        publicVideoId: string;
+        title: string;
+        channel?: { name: string; id: string };
+      }>;
     };
     expect(discoveryBody.items.map((item) => item.publicVideoId)).toContain(
       publishedBody.publicVideoId,
     );
-    expect(
-      discoveryBody.items.find((item) => item.publicVideoId === publishedBody.publicVideoId)?.title,
-    ).toBe('Workflow draft saved');
+    const listed = discoveryBody.items.find(
+      (item) => item.publicVideoId === publishedBody.publicVideoId,
+    );
+    expect(listed?.title).toBe('Workflow draft saved');
+    expect(listed?.channel?.name).toBeTruthy();
+    expect(listed?.channel?.name).not.toBe('Unknown channel');
 
     const detail = await getPublicVideo(
       new NextRequest(`${appOrigin}/api/videos/public/${publishedBody.publicVideoId}`),

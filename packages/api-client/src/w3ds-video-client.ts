@@ -15,6 +15,7 @@ import type {
   PaginationParams,
   Playlist,
   PlaylistId,
+  PublicViewRecordResult,
   SearchFilters,
   UpdateProfileInput,
   UpdateUserPreferencesInput,
@@ -67,7 +68,8 @@ interface ApiErrorBody {
 
 /**
  * W3DS video client — cookie-based draft/publish routes, anonymous public
- * discovery/detail, and protected media transfer.
+ * discovery/detail with joined channel projections, public view counting,
+ * and protected media transfer.
  *
  * Session credentials stay HttpOnly; this client never reads or stores tokens.
  * Responses never surface storage keys, filesystem paths, or public CDN URLs.
@@ -114,8 +116,22 @@ export class W3dsVideoApiClient implements VideoApiClient {
     return this.mock.listChannels(filters, pagination);
   }
 
-  getChannel(id: ChannelId): Promise<Channel | undefined> {
-    return this.mock.getChannel(id);
+  async getChannel(id: ChannelId): Promise<Channel | undefined> {
+    const normalized = id.trim();
+    if (!normalized) return undefined;
+    const response = await this.fetchImpl(
+      this.url(`/api/channels/public/${encodeURIComponent(normalized)}`),
+      {
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      },
+    );
+    if (response.status === 404) return undefined;
+    if (!response.ok) {
+      const body = await readErrorBody(response);
+      throw new Error(body.error?.message ?? `Channel request failed (${response.status})`);
+    }
+    return (await response.json()) as Channel;
   }
 
   listPlaylists(
@@ -344,6 +360,17 @@ export class W3dsVideoApiClient implements VideoApiClient {
       throw new Error(body.error?.message ?? `Public video request failed (${response.status})`);
     }
     return (await response.json()) as Video;
+  }
+
+  async recordPublicView(publicVideoId: string): Promise<PublicViewRecordResult> {
+    const normalized = publicVideoId.trim();
+    if (!normalized) {
+      throw new Error('Public video id is required.');
+    }
+    return this.requestJson<PublicViewRecordResult>(
+      `/api/videos/public/${encodeURIComponent(normalized)}/views`,
+      { method: 'POST' },
+    );
   }
 
   publicMediaContentPath(publicVideoId: string, assetId: string): string {

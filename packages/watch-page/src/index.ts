@@ -1,3 +1,10 @@
+export {
+  createPublicViewRecorder,
+  hasReachedMeaningfulPlayback,
+  MEANINGFUL_PLAYBACK_FRACTION,
+  MEANINGFUL_PLAYBACK_SECONDS,
+  replacePublicVideoInPages,
+} from './meaningful-playback';
 export type {
   WatchPageActions,
   WatchPageDataProps,
