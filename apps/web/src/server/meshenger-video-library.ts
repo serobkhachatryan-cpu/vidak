@@ -190,17 +190,45 @@ export class MeshengerVideoLibrary {
    */
   async listWithContext(user: Pick<AuthUser, 'eName' | 'eVaultUri'>): Promise<MeshengerLibrary> {
     const eName = requireEName(user.eName);
-    const eVaultUri = user.eVaultUri ? httpUrl(user.eVaultUri) : await this.resolveEVault(eName);
+    const ownVault = user.eVaultUri
+      ? { ownerEName: eName, eVaultUri: httpUrl(user.eVaultUri) }
+      : await this.resolveEVault(eName);
+    const eVaultUri = ownVault.eVaultUri;
     const completeness = createInventoryCompletenessTracker();
     // eVaults throttle bursts. Scan each source in order so a first historical
     // import does not turn three independent reads into a simultaneous spike.
     // Remote failures on one ontology must not 500 the whole library.
-    const calls = await this.tryListEnvelopes(eName, eVaultUri, callSessionOntology, completeness);
-    const chatEnvelopes = await this.tryListEnvelopes(eName, eVaultUri, chatOntology, completeness);
+    const calls = await this.tryListEnvelopes(
+      ownVault.ownerEName,
+      eVaultUri,
+      callSessionOntology,
+      completeness,
+    );
+    const chatEnvelopes = await this.tryListEnvelopes(
+      ownVault.ownerEName,
+      eVaultUri,
+      chatOntology,
+      completeness,
+    );
     const chatReferences = chatReferencesFromEnvelopes(chatEnvelopes);
-    const messages = await this.tryListEnvelopes(eName, eVaultUri, messageOntology, completeness);
-    const files = await this.tryListEnvelopes(eName, eVaultUri, fileOntology, completeness);
-    const rawFiles = await this.tryListEnvelopes(eName, eVaultUri, w3dsFileOntology, completeness);
+    const messages = await this.tryListEnvelopes(
+      ownVault.ownerEName,
+      eVaultUri,
+      messageOntology,
+      completeness,
+    );
+    const files = await this.tryListEnvelopes(
+      ownVault.ownerEName,
+      eVaultUri,
+      fileOntology,
+      completeness,
+    );
+    const rawFiles = await this.tryListEnvelopes(
+      ownVault.ownerEName,
+      eVaultUri,
+      w3dsFileOntology,
+      completeness,
+    );
     const referenced = new Set<string>();
     const historicalAuthors = authorsFromMessages(messages);
     const found = await this.discoverCallVideos({
