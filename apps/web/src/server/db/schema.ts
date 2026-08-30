@@ -170,6 +170,35 @@ export const mediaAssets = pgTable(
   ],
 );
 
+/** Local cache of derived still-frame previews. Never written to eVault. */
+export type VideoPreviewStatus = 'pending' | 'ready' | 'failed';
+export type VideoPreviewSourceKind = 'owned-video' | 'evault-file';
+
+/**
+ * Derived poster images for grid cards. Bytes live in MediaStorage.
+ * Authorization is always re-checked against the source video — this table
+ * is not a sharing record and never changes visibility.
+ */
+export const videoPreviewAssets = pgTable(
+  'video_preview_assets',
+  {
+    id: text('id').primaryKey(),
+    sourceKind: text('source_kind').$type<VideoPreviewSourceKind>().notNull(),
+    sourceKey: text('source_key').notNull(),
+    storageKey: text('storage_key'),
+    status: text('status').$type<VideoPreviewStatus>().notNull(),
+    captureSeconds: integer('capture_seconds'),
+    byteSize: integer('byte_size'),
+    contentType: text('content_type'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('video_preview_assets_source_uidx').on(table.sourceKind, table.sourceKey),
+    index('video_preview_assets_status_idx').on(table.status),
+  ],
+);
+
 /**
  * One-time login offers for w3ds://auth.
  * Status transitions and expiry are enforced by store operations.

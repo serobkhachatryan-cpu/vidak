@@ -59,6 +59,12 @@ describe('VideoCard', () => {
     expect(markup).toContain('aspect-video');
   });
 
+  it('never renders an inline video player with controls', () => {
+    const markup = renderToStaticMarkup(<VideoCard video={video} channel={channel} />);
+    expect(markup).not.toContain('<video');
+    expect(markup).not.toContain('controls');
+  });
+
   it('renders a safe placeholder instead of a broken img for empty thumbnails', () => {
     const markup = renderToStaticMarkup(
       <VideoCard video={{ ...video, thumbnailUrl: '' }} channel={channel} />,

@@ -3,6 +3,8 @@ import {
   createEVaultVideoLibrary,
   EVaultVideoLibraryError,
 } from '../../../../server/evault-video-library';
+import { evaultVideoPreviewPath } from '../../../../server/video-preview/capture-time';
+import type { VideoPreviewService } from '../../../../server/video-preview/preview-service';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -19,7 +21,35 @@ export async function GET(request: NextRequest) {
     if (!accessToken)
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const session = await getW3dsAuthService().getSession(accessToken);
-    return privateJson(await createEVaultVideoLibrary().listWithContext(session.user));
+    const library = await createEVaultVideoLibrary().listWithContext(session.user);
+    let preview: VideoPreviewService | undefined;
+    try {
+      const { getVideoPreviewService } = await import(
+        '../../../../server/video-preview/preview-runtime'
+      );
+      preview = getVideoPreviewService();
+    } catch {
+      preview = undefined;
+    }
+    const items = await Promise.all(
+      library.items.map(async (item) => {
+        const streamId = item.streamIds[0];
+        const previewState = streamId
+          ? preview
+            ? await preview
+                .peekLibraryPreview(session.user, streamId)
+                .catch(() => 'processing' as const)
+            : 'processing'
+          : ('unavailable' as const);
+        return {
+          ...item,
+          previewState,
+          ...(streamId ? { previewUrl: evaultVideoPreviewPath(streamId) } : {}),
+        };
+      }),
+    );
+    if (preview) void preview.scheduleLibraryBackfill(session.user, library.items);
+    return privateJson({ ...library, items });
   } catch (error) {
     return privateJson(errorBody(error), errorStatus(error));
   }

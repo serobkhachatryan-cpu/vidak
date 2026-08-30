@@ -100,3 +100,9 @@ export {
 } from './search-results';
 export type { VideoCardProps, VideoCardSkeletonProps } from './video-card';
 export { VideoCard, VideoCardSkeleton } from './video-card';
+export type { VideoSpacePosterProps, VideoSpacePosterState } from './video-space-poster';
+export {
+  VideoSpacePoster,
+  VideoSpaceProcessingPoster,
+  VideoSpaceUnavailablePoster,
+} from './video-space-poster';

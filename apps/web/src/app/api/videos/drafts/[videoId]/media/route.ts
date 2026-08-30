@@ -4,6 +4,7 @@ import { getMediaAssetService, MediaAssetError } from '../../../../../../server/
 import { assertTrustedMutationOrigin } from '../../../../../../server/request-security';
 import {
   getBearerToken,
+  getW3dsAuthService,
   W3dsAuthError,
   w3dsAccessCookieName,
 } from '../../../../../../server/w3ds-auth';
@@ -75,6 +76,18 @@ export async function POST(request: NextRequest, context: RouteContext) {
       },
       request.body,
     );
+    try {
+      const session = await getW3dsAuthService().getSession(accessToken);
+      void import('../../../../../../server/video-preview/preview-runtime')
+        .then(({ getVideoPreviewService }) =>
+          getVideoPreviewService().scheduleOwnedBackfill(session.user, [
+            { id: videoId, thumbnailUrl: '' },
+          ]),
+        )
+        .catch(() => undefined);
+    } catch {
+      // Preview generation must not fail a completed upload.
+    }
     return NextResponse.json(asset, { status: 201 });
   } catch (error) {
     return errorResponse(error);

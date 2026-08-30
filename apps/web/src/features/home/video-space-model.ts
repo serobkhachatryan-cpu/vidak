@@ -7,6 +7,8 @@ import {
 
 export type VideoSpaceTab = 'yours' | 'shared' | 'explore';
 
+export type VideoSpacePreviewState = 'ready' | 'processing' | 'unavailable';
+
 export interface VideoSpaceLibraryItem {
   id: string;
   title: string;
@@ -16,6 +18,8 @@ export interface VideoSpaceLibraryItem {
   durationSeconds?: number;
   createdAt?: string;
   streamIds?: string[];
+  previewState?: VideoSpacePreviewState;
+  previewUrl?: string;
 }
 
 export { videoSpaceVisibilityLabels } from '../../server/video-space/visibility';
@@ -53,20 +57,29 @@ export function isVideoSpaceEmpty(
   return libraryItems.length === 0 && ownedItems.length === 0;
 }
 
-export function previewFallbackCopy(state: 'processing' | 'unsupported'): {
+export function previewFallbackCopy(state: 'processing' | 'unavailable' | 'unsupported'): {
   label: string;
   description: string;
 } {
   if (state === 'processing') {
     return {
-      label: 'Preview is being prepared',
-      description: 'This video is available. A still frame will appear when the file can be read.',
+      label: 'Preparing preview',
+      description: '',
     };
   }
   return {
     label: 'Preview unavailable',
-    description: 'This video can still be opened. A still frame could not be created from the file.',
+    description: '',
   };
+}
+
+export function formatSpaceDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const remainder = Math.floor(seconds % 60);
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, '0')}:${String(remainder).padStart(2, '0')}`
+    : `${minutes}:${String(remainder).padStart(2, '0')}`;
 }
 
 export function shareChangeConfirmation(next: VideoSpaceVisibility): string {

@@ -10,7 +10,10 @@ import {
   discoverVideoMessageVideos,
   discoverW3dsFileVideos,
 } from './video-space/adapters';
-import { documentedAuthorizationOntologies, documentedOntologyId } from './video-space/documented-sources';
+import {
+  documentedAuthorizationOntologies,
+  documentedOntologyId,
+} from './video-space/documented-sources';
 import {
   type VideoSpaceAccessScope,
   type VideoSpaceVisibility,
@@ -257,6 +260,22 @@ export class MeshengerVideoLibrary {
     const mediaUrl = safeMediaUrl(url);
     cacheMediaUrl(cacheKey, mediaUrl, grant.expiresAt);
     return mediaUrl;
+  }
+
+  /**
+   * Returns the authorized file identity for a current stream grant.
+   * Used to key the local preview cache without exposing the file URI to clients.
+   */
+  inspectStream(user: Pick<AuthUser, 'eName'>, streamId: string): { fileUri: string } {
+    const grant = verifyMeshengerVideoStreamId(streamId, this.config.signingSecret);
+    if (grant.eName !== requireEName(user.eName)) {
+      throw new MeshengerVideoLibraryError(
+        'This video is not available to this account.',
+        'invalid_stream',
+        403,
+      );
+    }
+    return { fileUri: grant.fileUri };
   }
 
   /**

@@ -6,11 +6,16 @@ vi.mock('server-only', () => ({}));
 const mocks = vi.hoisted(() => ({
   createLibrary: vi.fn(),
   getAuthService: vi.fn(),
+  getPreviewService: vi.fn(),
 }));
 
 vi.mock('../../../../server/evault-video-library', () => ({
   createEVaultVideoLibrary: mocks.createLibrary,
   EVaultVideoLibraryError: class EVaultVideoLibraryError extends Error {},
+}));
+
+vi.mock('../../../../server/video-preview/preview-runtime', () => ({
+  getVideoPreviewService: mocks.getPreviewService,
 }));
 
 vi.mock('../../../../server/w3ds-auth', async (importOriginal) => ({
@@ -24,6 +29,7 @@ describe('eVault video library route', () => {
   beforeEach(() => {
     mocks.createLibrary.mockReset();
     mocks.getAuthService.mockReset();
+    mocks.getPreviewService.mockReset();
   });
 
   afterEach(() => {
@@ -48,6 +54,10 @@ describe('eVault video library route', () => {
     mocks.createLibrary.mockReturnValue({ listWithContext });
     mocks.getAuthService.mockReturnValue({
       getSession: vi.fn().mockResolvedValue({ user: { eName: '@person.w3id' } }),
+    });
+    mocks.getPreviewService.mockReturnValue({
+      peekLibraryPreview: vi.fn().mockResolvedValue('processing'),
+      scheduleLibraryBackfill: vi.fn().mockResolvedValue(undefined),
     });
 
     const response = await GET(

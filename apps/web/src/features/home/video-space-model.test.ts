@@ -65,10 +65,11 @@ describe('video space home model', () => {
     ]);
   });
 
-  it('uses a labelled fallback when a thumbnail cannot be generated', () => {
-    expect(previewFallbackCopy('processing').label).toBe('Preview is being prepared');
-    expect(previewFallbackCopy('unsupported').label).toBe('Preview unavailable');
-    expect(previewFallbackCopy('unsupported').description).toMatch(/still be opened/i);
+  it('keeps processing copy off error language and failure copy secondary', () => {
+    expect(previewFallbackCopy('processing').label).toBe('Preparing preview');
+    expect(previewFallbackCopy('processing').description).toBe('');
+    expect(previewFallbackCopy('unavailable').label).toBe('Preview unavailable');
+    expect(previewFallbackCopy('unsupported').description).toBe('');
   });
 
   it('confirms that a share action changes only that video', () => {
