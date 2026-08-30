@@ -92,7 +92,10 @@ export interface VerifiedFullNameRecord {
 }
 
 export interface VerifiedFullNameReader {
-  readVerifiedFullName(input: { eName: string; eVaultUri?: string }): Promise<VerifiedFullNameRecord>;
+  readVerifiedFullName(input: {
+    eName: string;
+    eVaultUri?: string;
+  }): Promise<VerifiedFullNameRecord>;
 }
 
 export function normalizeEName(value: string): string {
@@ -129,11 +132,13 @@ function parseRecord(value: unknown): Record<string, unknown> | undefined {
   return record(value);
 }
 
-function bindingFields(edge: unknown): {
-  type: string;
-  subject: string;
-  name: string;
-} | undefined {
+function bindingFields(edge: unknown):
+  | {
+      type: string;
+      subject: string;
+      name: string;
+    }
+  | undefined {
   const node = isRecord(edge) ? record(edge.node) : undefined;
   if (!node) return undefined;
   const parsed = parseRecord(node.parsed);
@@ -180,7 +185,10 @@ export function extractVerifiedFullNameFromBindingDocuments(input: {
       sawMismatchedSubject = true;
       continue;
     }
-    if (fields.type !== VERIFIED_FULL_NAME_BINDING_TYPE && fields.type !== VERIFIED_FULL_NAME_SELF_TYPE) {
+    if (
+      fields.type !== VERIFIED_FULL_NAME_BINDING_TYPE &&
+      fields.type !== VERIFIED_FULL_NAME_SELF_TYPE
+    ) {
       continue;
     }
     if (!isValidPublicDisplayName(fields.name, { eName: authenticatedEName })) {
@@ -510,7 +518,10 @@ function preferredVerifiedFullNameFailure(
   const authorization = failures.find((error) => error.code === 'authorization_denied');
   if (authorization) return authorization;
   const source = failures.find(
-    (error) => error.code === 'remote_unavailable' || error.code === 'remote_rejected' || error.code === 'not_configured',
+    (error) =>
+      error.code === 'remote_unavailable' ||
+      error.code === 'remote_rejected' ||
+      error.code === 'not_configured',
   );
   if (source) return source;
   const parse = failures.find((error) => error.code === 'parse_failure');
@@ -546,7 +557,9 @@ function classifyGraphqlErrors(errors: unknown): VerifiedFullNameError {
   const list = Array.isArray(errors) ? errors : [];
   for (const error of list) {
     const recordValue = record(error);
-    const code = String(recordValue?.code ?? record(recordValue?.extensions)?.code ?? '').toUpperCase();
+    const code = String(
+      recordValue?.code ?? record(recordValue?.extensions)?.code ?? '',
+    ).toUpperCase();
     const message = String(recordValue?.message ?? '').toLowerCase();
     if (
       code.includes('FORBIDDEN') ||

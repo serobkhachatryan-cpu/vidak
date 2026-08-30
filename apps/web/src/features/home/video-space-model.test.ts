@@ -7,9 +7,9 @@ import {
   previewFallbackCopy,
   shareChangeConfirmation,
   sharedInventoryBanner,
+  type VideoSpaceLibraryItem,
   videoSpaceEmptyCopy,
   videoSpaceTabs,
-  type VideoSpaceLibraryItem,
 } from './video-space-model';
 
 const ownVideo: VideoSpaceLibraryItem = {

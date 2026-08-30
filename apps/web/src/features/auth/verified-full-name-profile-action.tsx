@@ -30,9 +30,7 @@ export function VerifiedFullNameProfileAction() {
       const result = await fetchVerifiedFullNameConsent();
       if (result.kind === 'unavailable') {
         setVisible(true);
-        setError(
-          result.reason ? `${result.message} (${result.reason})` : result.message,
-        );
+        setError(result.reason ? `${result.message} (${result.reason})` : result.message);
         return;
       }
       setError(undefined);

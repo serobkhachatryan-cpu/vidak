@@ -1,13 +1,11 @@
 import 'server-only';
 
-export type { VideoSpaceVisibility as EVaultVideoVisibility } from './video-space/visibility';
 export type {
   EVaultVideoAccessScope,
   MeshengerLibrary as EVaultVideoLibraryResult,
   MeshengerVideo as EVaultVideo,
   MeshengerVideoKind as EVaultVideoKind,
 } from './meshenger-video-library';
-export type { InventoryCompleteness as EVaultInventoryCompleteness } from './video-space/completeness';
 /**
  * Source-neutral boundary for Vidak's authorised eVault video catalogue.
  * The implementation recognises standard W3DS file records plus known call
@@ -19,4 +17,6 @@ export {
   MeshengerVideoLibraryError as EVaultVideoLibraryError,
   verifyMeshengerVideoStreamId as verifyEVaultVideoStreamId,
 } from './meshenger-video-library';
+export type { InventoryCompleteness as EVaultInventoryCompleteness } from './video-space/completeness';
 export { inventoryCompletenessCopy } from './video-space/completeness';
+export type { VideoSpaceVisibility as EVaultVideoVisibility } from './video-space/visibility';

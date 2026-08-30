@@ -120,12 +120,7 @@ export function VerifiedFullNameConsent() {
           </Text>
         ) : null}
         <div className="flex flex-col gap-2 sm:flex-row sm:justify-end">
-          <Button
-            type="button"
-            variant="ghost"
-            disabled={busy}
-            onClick={() => void respond(false)}
-          >
+          <Button type="button" variant="ghost" disabled={busy} onClick={() => void respond(false)}>
             Not now
           </Button>
           {unavailable ? (

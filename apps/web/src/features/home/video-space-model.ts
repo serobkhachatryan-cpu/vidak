@@ -1,7 +1,7 @@
 import type { Video } from '@w3ds/types';
 import {
-  type InventoryCompleteness,
   completeInventory,
+  type InventoryCompleteness,
   inventoryCompletenessCopy,
 } from '../../server/video-space/completeness';
 import {
@@ -27,8 +27,11 @@ export interface VideoSpaceLibraryItem {
   previewUrl?: string;
 }
 
+export {
+  type InventoryCompleteness,
+  inventoryCompletenessCopy,
+} from '../../server/video-space/completeness';
 export { videoSpaceVisibilityLabels } from '../../server/video-space/visibility';
-export { inventoryCompletenessCopy, type InventoryCompleteness } from '../../server/video-space/completeness';
 export { completeInventory };
 
 export const videoSpaceTabs: ReadonlyArray<{ id: VideoSpaceTab; label: string }> = [
@@ -64,7 +67,9 @@ export function isVideoSpaceEmpty(
   return libraryItems.length === 0 && ownedItems.length === 0;
 }
 
-export function sharedInventoryBanner(completeness: InventoryCompleteness | undefined): string | undefined {
+export function sharedInventoryBanner(
+  completeness: InventoryCompleteness | undefined,
+): string | undefined {
   if (!completeness) return undefined;
   if (
     completeness.complete &&

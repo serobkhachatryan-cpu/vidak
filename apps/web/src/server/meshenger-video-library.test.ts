@@ -456,7 +456,9 @@ describe('Meshenger video library', () => {
             query: string;
             variables: { chatId?: string };
           };
-          return body.query.includes('AuthorizedChatMessages') && body.variables.chatId === 'chat-1';
+          return (
+            body.query.includes('AuthorizedChatMessages') && body.variables.chatId === 'chat-1'
+          );
         }),
       ).toBe(true);
       expect(
@@ -1253,7 +1255,10 @@ describe('Meshenger video library', () => {
         eName: '@person.w3id',
         eVaultUri: 'https://vault.example',
       });
-      expect(videos.map((video) => video.title).sort()).toEqual(['First page.mp4', 'Second page.mp4']);
+      expect(videos.map((video) => video.title).sort()).toEqual([
+        'First page.mp4',
+        'Second page.mp4',
+      ]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1564,7 +1569,8 @@ describe('Meshenger video library', () => {
           return json({ ename: '@alumni.w3id', uri: 'https://alumni-vault.example' });
         return json({ ename: '@group.w3id', uri: 'https://group-vault.example' });
       }
-      if (url.hostname === 'alumni-vault.example') return new Response('forbidden', { status: 403 });
+      if (url.hostname === 'alumni-vault.example')
+        return new Response('forbidden', { status: 403 });
       const body = JSON.parse(String(init.body ?? '{}')) as { variables?: { ontologyId?: string } };
       if (
         url.hostname === 'person-vault.example' &&

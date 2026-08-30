@@ -43,7 +43,11 @@ describe('VideoSpacePoster', () => {
 
   it('does not render a broken img for an unusable poster URL', () => {
     const markup = renderToStaticMarkup(
-      <VideoSpacePoster title="IMG 1589" posterUrl="blob:https://vidak.example/abc" state="ready" />,
+      <VideoSpacePoster
+        title="IMG 1589"
+        posterUrl="blob:https://vidak.example/abc"
+        state="ready"
+      />,
     );
     expect(markup).not.toContain('blob:');
     expect(markup).not.toContain('<img');

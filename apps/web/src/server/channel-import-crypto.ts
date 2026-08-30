@@ -11,18 +11,17 @@ export function encryptChannelImportCredential(value: string, key: Buffer): stri
   const cipher = createCipheriv('aes-256-gcm', key, iv);
   const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
   const tag = cipher.getAuthTag();
-  return [version, iv.toString('base64url'), tag.toString('base64url'), encrypted.toString('base64url')].join('.');
+  return [
+    version,
+    iv.toString('base64url'),
+    tag.toString('base64url'),
+    encrypted.toString('base64url'),
+  ].join('.');
 }
 
 export function decryptChannelImportCredential(value: string, key: Buffer): string {
   const [entryVersion, ivValue, tagValue, encryptedValue, ...rest] = value.split('.');
-  if (
-    entryVersion !== version ||
-    !ivValue ||
-    !tagValue ||
-    !encryptedValue ||
-    rest.length > 0
-  ) {
+  if (entryVersion !== version || !ivValue || !tagValue || !encryptedValue || rest.length > 0) {
     throw new Error('Channel-import credential cannot be decrypted.');
   }
   try {

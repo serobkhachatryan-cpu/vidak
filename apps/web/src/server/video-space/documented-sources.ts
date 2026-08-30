@@ -32,8 +32,16 @@ export const documentedVideoSources: ReadonlyArray<{
 }> = [
   { id: 'w3ds-file', ontologyId: 'w3ds-file-v1', kind: 'file' },
   { id: 'file-record', ontologyId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890', kind: 'file' },
-  { id: 'call-recording', ontologyId: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd', kind: 'call-recording' },
-  { id: 'video-message', ontologyId: '550e8400-e29b-41d4-a716-446655440004', kind: 'video-message' },
+  {
+    id: 'call-recording',
+    ontologyId: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd',
+    kind: 'call-recording',
+  },
+  {
+    id: 'video-message',
+    ontologyId: '550e8400-e29b-41d4-a716-446655440004',
+    kind: 'video-message',
+  },
 ];
 
 /** Chat / group records used to follow authorized and historical references, never as UI categories. */

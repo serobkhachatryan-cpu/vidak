@@ -30,7 +30,11 @@ function isStaleOrIdentifierDisplayName(value: string): boolean {
 export function publicHandleOrEmpty(value: string | null | undefined, userId?: string): string {
   const handle = value?.trim().replace(/^@/, '') ?? '';
   if (!handle) return '';
-  if (handle.startsWith('w3ds_') || LOCAL_PLATFORM_ID_PATTERN.test(handle) || UUID_PATTERN.test(handle)) {
+  if (
+    handle.startsWith('w3ds_') ||
+    LOCAL_PLATFORM_ID_PATTERN.test(handle) ||
+    UUID_PATTERN.test(handle)
+  ) {
     return '';
   }
   if (userId && (handle === userId || handle === userId.replace(/^w3ds_/, ''))) return '';

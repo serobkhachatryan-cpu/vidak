@@ -1,5 +1,8 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { getChannelImportService, ChannelImportError } from '../../../../server/channel-import-service';
+import {
+  ChannelImportError,
+  getChannelImportService,
+} from '../../../../server/channel-import-service';
 import { assertTrustedMutationOrigin } from '../../../../server/request-security';
 import { getBearerToken, W3dsAuthError, w3dsAccessCookieName } from '../../../../server/w3ds-auth';
 
@@ -13,8 +16,11 @@ export async function POST(request: NextRequest) {
   try {
     assertTrustedMutationOrigin(request);
     const accessToken = accessTokenFrom(request);
-    if (!accessToken) throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
-    const body = (await request.json().catch(() => undefined)) as Record<string, unknown> | undefined;
+    if (!accessToken)
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    const body = (await request.json().catch(() => undefined)) as
+      | Record<string, unknown>
+      | undefined;
     const result = await getChannelImportService().beginAuthorization(accessToken, body?.provider);
     return privateJson(result);
   } catch (error) {

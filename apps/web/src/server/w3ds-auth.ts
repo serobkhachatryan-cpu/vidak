@@ -383,7 +383,10 @@ export class W3dsAuthService {
       eName: platformSession.user.eName,
       eVaultId: platformSession.user.eVaultId,
     };
-    const replaceable = isReplaceableWithVerifiedFullName(platformSession.user.displayName, identity);
+    const replaceable = isReplaceableWithVerifiedFullName(
+      platformSession.user.displayName,
+      identity,
+    );
     const givenNameOnly =
       decision === 'granted' &&
       isValidPublicDisplayName(platformSession.user.displayName, identity) &&

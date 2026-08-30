@@ -1,5 +1,8 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import { getChannelImportService, ChannelImportError } from '../../../server/channel-import-service';
+import {
+  ChannelImportError,
+  getChannelImportService,
+} from '../../../server/channel-import-service';
 import { getBearerToken, W3dsAuthError, w3dsAccessCookieName } from '../../../server/w3ds-auth';
 
 export const runtime = 'nodejs';
@@ -11,7 +14,8 @@ function accessTokenFrom(request: NextRequest): string | undefined {
 export async function GET(request: NextRequest) {
   try {
     const accessToken = accessTokenFrom(request);
-    if (!accessToken) throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    if (!accessToken)
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const service = getChannelImportService();
     const [items, providers] = await Promise.all([
       service.listImportedChannels(accessToken),

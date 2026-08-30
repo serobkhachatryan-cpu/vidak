@@ -134,7 +134,6 @@ describe('submitVerifiedFullNameGrant', () => {
   });
 });
 
-
 describe('shouldCheckVerifiedFullName', () => {
   it('uses the authenticated session provider, not the build-time client provider', () => {
     expect(shouldCheckVerifiedFullName({ sessionProvider: 'w3ds', hasUser: true })).toBe(true);

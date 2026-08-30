@@ -11,10 +11,10 @@ import {
   discoverW3dsFileVideos,
 } from './video-space/adapters';
 import {
-  type InventoryCompleteness,
   createInventoryCompletenessTracker,
-  inventoryCompletenessCopy,
+  type InventoryCompleteness,
   type InventoryCompletenessTracker,
+  inventoryCompletenessCopy,
 } from './video-space/completeness';
 import {
   documentedAuthorizationOntologies,
@@ -327,7 +327,11 @@ export class MeshengerVideoLibrary {
     const file = parseW3dsFileUri(grant.fileUri);
     if (!file) invalidStream();
     const vault = await this.resolveEVault(file.ownerEName);
-    const envelope = await this.readEnvelope(vault.ownerEName, vault.eVaultUri, file.metaEnvelopeId);
+    const envelope = await this.readEnvelope(
+      vault.ownerEName,
+      vault.eVaultUri,
+      file.metaEnvelopeId,
+    );
     const url = optionalString(envelope.parsed.publicUrl) ?? optionalString(envelope.parsed.url);
     if (!url)
       throw new MeshengerVideoLibraryError(
@@ -429,7 +433,13 @@ export class MeshengerVideoLibrary {
       messageRecords.push(...space.messages);
       this.recordSpaceOutcome(completeness, space);
     }
-    return { videos, conversations, messages: messageRecords, outcome: 'indexed', retryNeeded: false };
+    return {
+      videos,
+      conversations,
+      messages: messageRecords,
+      outcome: 'indexed',
+      retryNeeded: false,
+    };
   }
 
   private async readGroupSpace(input: {
@@ -449,7 +459,13 @@ export class MeshengerVideoLibrary {
       input.completeness,
     );
     if (!vaultRead.value) {
-      return emptySpace(vaultRead.failure === 'denied' ? 'denied' : vaultRead.failure === 'missing' ? 'missing' : 'retry');
+      return emptySpace(
+        vaultRead.failure === 'denied'
+          ? 'denied'
+          : vaultRead.failure === 'missing'
+            ? 'missing'
+            : 'retry',
+      );
     }
     const vault = vaultRead.value;
     const owner = vault.ownerEName;
@@ -564,19 +580,23 @@ export class MeshengerVideoLibrary {
       for (const authorEName of messageSources) {
         if (sameEName(authorEName, input.groupEName) || sameEName(authorEName, owner)) continue;
         if (sameEName(authorEName, input.viewerEName)) continue;
-        const authorRead = await this.readSource(async () => {
-          const authorVault = await this.resolveEVault(authorEName);
-          const authorMessages = await this.listMessagesForChat(
-            authorVault.ownerEName,
-            authorVault.eVaultUri,
-            chatId,
-            input.completeness,
-          );
-          videos.push(...this.discoverMessageVideos(authorMessages, input.referenced, 'shared'));
-          messageRecords.push(
-            ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
-          );
-        }, undefined, input.completeness);
+        const authorRead = await this.readSource(
+          async () => {
+            const authorVault = await this.resolveEVault(authorEName);
+            const authorMessages = await this.listMessagesForChat(
+              authorVault.ownerEName,
+              authorVault.eVaultUri,
+              chatId,
+              input.completeness,
+            );
+            videos.push(...this.discoverMessageVideos(authorMessages, input.referenced, 'shared'));
+            messageRecords.push(
+              ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
+            );
+          },
+          undefined,
+          input.completeness,
+        );
         if (isRetryFailure(authorRead.failure)) retryNeeded = true;
       }
     }
@@ -705,7 +725,9 @@ export class MeshengerVideoLibrary {
       if (isRetryFailure(messageRead.failure)) retryNeeded = true;
       if (messageRead.failure === 'denied' || messageRead.failure === 'missing') continue;
       videos.push(...this.discoverMessageVideos(messageRead.value, input.referenced, 'shared'));
-      messages.push(...messageRead.value.map((message) => toMeshengerMessage(input.ownerEName, message)));
+      messages.push(
+        ...messageRead.value.map((message) => toMeshengerMessage(input.ownerEName, message)),
+      );
     }
 
     const callsRead = await this.readSource(
@@ -995,7 +1017,10 @@ export class MeshengerVideoLibrary {
         );
       }
       if (response.status === 429) {
-        const retryAfter = Math.min(retryAfterMs(response.headers.get('retry-after')) ?? 1_000, 5_000);
+        const retryAfter = Math.min(
+          retryAfterMs(response.headers.get('retry-after')) ?? 1_000,
+          5_000,
+        );
         if (Date.now() + retryAfter <= deadline) {
           await delay(retryAfter);
           continue;
@@ -1014,11 +1039,7 @@ export class MeshengerVideoLibrary {
         );
       }
       if (response.status === 404) {
-        throw new MeshengerVideoLibraryError(
-          'The video source was not found.',
-          'not_found',
-          404,
-        );
+        throw new MeshengerVideoLibraryError('The video source was not found.', 'not_found', 404);
       }
       if (!response.ok)
         throw new MeshengerVideoLibraryError(

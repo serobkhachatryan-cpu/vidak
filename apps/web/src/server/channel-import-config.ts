@@ -47,10 +47,12 @@ export function readChannelImportProviderConfig(
   const security = readChannelImportSecurityConfig(env);
   if (!appOrigin || !security) return null;
 
-  const clientId = env[provider === 'youtube' ? 'YOUTUBE_OAUTH_CLIENT_ID' : 'VIMEO_OAUTH_CLIENT_ID']?.trim();
-  const clientSecret = env[
-    provider === 'youtube' ? 'YOUTUBE_OAUTH_CLIENT_SECRET' : 'VIMEO_OAUTH_CLIENT_SECRET'
-  ]?.trim();
+  const clientId =
+    env[provider === 'youtube' ? 'YOUTUBE_OAUTH_CLIENT_ID' : 'VIMEO_OAUTH_CLIENT_ID']?.trim();
+  const clientSecret =
+    env[
+      provider === 'youtube' ? 'YOUTUBE_OAUTH_CLIENT_SECRET' : 'VIMEO_OAUTH_CLIENT_SECRET'
+    ]?.trim();
   if (!clientId || !clientSecret) return null;
 
   return provider === 'youtube'
