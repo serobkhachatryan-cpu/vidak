@@ -11,9 +11,8 @@ import {
   useState,
 } from 'react';
 import { useAuthentication, useCurrentUser } from '../features/auth/auth-provider';
-import { VerifiedFullNameConsent } from '../features/auth/verified-full-name-consent';
 import { useAppearancePreference } from '../features/settings/appearance-preference';
-import { headerAccountCta } from '../lib/public-display-name';
+import { headerAccountCta, headerVerifiedNameCta } from '../lib/public-display-name';
 
 const navigation = [
   { label: 'Home', href: '/', icon: '⌂' },
@@ -38,7 +37,7 @@ export function ApplicationShell({
 }: ApplicationShellProps) {
   const router = useRouter();
   const pathname = usePathname();
-  const { isLoading, logout } = useAuthentication();
+  const { isLoading, logout, session } = useAuthentication();
   const user = useCurrentUser();
   const { appearance, resolvedTheme, setAppearance } = useAppearancePreference();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
@@ -47,13 +46,12 @@ export function ApplicationShell({
     ...item,
     current: item.href === currentHref,
   }));
-  const accountCta = user
-    ? headerAccountCta(user.displayName, {
-        id: user.id,
-        eName: user.eName,
-        eVaultId: user.eVaultId,
-      })
-    : undefined;
+  const identity = user ? { id: user.id, eName: user.eName, eVaultId: user.eVaultId } : undefined;
+  const accountCta = user ? headerAccountCta(user.displayName, identity) : undefined;
+  const verifiedNameCta =
+    user && session?.provider === 'w3ds'
+      ? headerVerifiedNameCta(user.displayName, identity)
+      : undefined;
 
   useEffect(() => {
     const focusSearch = (event: KeyboardEvent) => {
@@ -185,6 +183,15 @@ export function ApplicationShell({
                     <Button size="sm" variant="secondary" onClick={() => router.push('/upload')}>
                       Upload
                     </Button>
+                    {verifiedNameCta ? (
+                      <a
+                        href={verifiedNameCta.href}
+                        onClick={navigateInternally}
+                        className="rounded-md px-3 py-1.5 font-sans text-sm text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+                      >
+                        {verifiedNameCta.label}
+                      </a>
+                    ) : null}
                     <Button size="sm" variant="ghost" onClick={() => router.push(accountCta.href)}>
                       {accountCta.label}
                     </Button>
@@ -225,7 +232,6 @@ export function ApplicationShell({
       mobileNavigationTitle="Browse"
     >
       {children}
-      {user ? <VerifiedFullNameConsent /> : null}
     </AppShell>
   );
 }

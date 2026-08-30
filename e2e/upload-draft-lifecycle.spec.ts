@@ -1,31 +1,10 @@
-import { expect, type Page, type Route, test } from '@playwright/test';
+import { expect, type Route, test } from '@playwright/test';
+import { expectNoVerifiedNameOverlay, signInTo } from './helpers';
 
-function pathnameOf(pageUrl: string): string {
-  return new URL(pageUrl).pathname;
-}
-
-async function completeOfferAs(page: Page, eName: string): Promise<{ offerId: string }> {
-  const offerResponse = await page.request.get('/api/auth/offer');
-  expect(offerResponse.ok()).toBeTruthy();
-  const offer = (await offerResponse.json()) as { offerId: string; sessionId: string };
-  const completeResponse = await page.request.post('/api/auth', {
-    data: {
-      ename: eName,
-      session: offer.sessionId,
-      signature: 'e2e-stub-signature',
-    },
-  });
-  expect(completeResponse.ok()).toBeTruthy();
-  return { offerId: offer.offerId };
-}
-
-async function signInAndOpenUpload(page: Page, eName: string) {
-  const { offerId } = await completeOfferAs(page, eName);
-  await page.goto(
-    `/api/auth/offer/${encodeURIComponent(offerId)}/continue?returnTo=${encodeURIComponent('/upload')}`,
-  );
-  await expect.poll(() => pathnameOf(page.url())).toBe('/upload');
+async function signInAndOpenUpload(page: Parameters<typeof signInTo>[0], eName: string) {
+  await signInTo(page, eName, '/upload');
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await expectNoVerifiedNameOverlay(page);
 }
 
 function tinyMp4(): Buffer {

@@ -1,8 +1,5 @@
 import { expect, test } from '@playwright/test';
-
-function pathnameOf(pageUrl: string): string {
-  return new URL(pageUrl).pathname;
-}
+import { expectNoVerifiedNameOverlay, pathnameOf } from './helpers';
 
 async function completeOfferAs(
   page: import('@playwright/test').Page,
@@ -60,9 +57,11 @@ test('completed offer cookies hand off to an authenticated session', async ({ pa
   await expect(page.getByRole('button', { name: 'Sign in' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Sign out' })).toBeVisible();
+  await expectNoVerifiedNameOverlay(page);
 
   await page.getByRole('button', { name: 'Upload', exact: true }).click();
   await expect.poll(() => pathnameOf(page.url())).toBe('/upload');
+  await expectNoVerifiedNameOverlay(page);
   await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
@@ -113,6 +112,7 @@ test('Return after mocked wallet approval lands authenticated on Settings then U
 
   await page.getByRole('button', { name: 'Upload', exact: true }).click();
   await expect.poll(() => pathnameOf(page.url())).toBe('/upload');
+  await expectNoVerifiedNameOverlay(page);
   await expect(page.getByRole('button', { name: 'New Vidak member' })).toBeVisible();
 
   await page.getByRole('link', { name: 'Settings', exact: true }).click();
