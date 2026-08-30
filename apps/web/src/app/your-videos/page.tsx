@@ -2,13 +2,13 @@
 
 import { Suspense } from 'react';
 import { AuthenticationGuard, SessionLoadingSkeleton } from '../../features/auth/auth-provider';
-import { EVaultVideoLibraryPage } from '../../features/meshenger/meshenger-video-library-page';
+import { VideoSpacePage } from '../../features/home/video-space';
 
 export default function YourVideosPage() {
   return (
     <Suspense fallback={<SessionLoadingSkeleton />}>
       <AuthenticationGuard>
-        <EVaultVideoLibraryPage />
+        <VideoSpacePage currentHref="/your-videos" />
       </AuthenticationGuard>
     </Suspense>
   );

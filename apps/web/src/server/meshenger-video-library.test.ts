@@ -155,11 +155,13 @@ describe('Meshenger video library', () => {
             kind: 'file',
             title: 'A shared clip.mp4',
             accessScope: 'personal',
+            visibility: 'private',
           }),
           expect.objectContaining({
             kind: 'file',
             title: 'Video from another app.webm',
             accessScope: 'personal',
+            visibility: 'private',
           }),
         ]),
       );
@@ -419,11 +421,13 @@ describe('Meshenger video library', () => {
             kind: 'file',
             title: 'Planning demo.mp4',
             accessScope: 'shared',
+            visibility: 'shared-with-me',
           }),
           expect.objectContaining({
             kind: 'file',
             title: 'Shared raw eVault clip.mp4',
             accessScope: 'shared',
+            visibility: 'shared-with-me',
           }),
         ]),
       );
@@ -431,7 +435,7 @@ describe('Meshenger video library', () => {
         expect.arrayContaining([
           expect.objectContaining({
             kind: 'group',
-            title: 'Meshenger group',
+            title: 'Group',
             role: 'participant',
           }),
         ]),
@@ -585,6 +589,178 @@ describe('Meshenger video library', () => {
         'https://media.example/refreshed.mp4',
       );
       expect(readCount).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('lists an owned eVault video as a private library card', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: URL, init: RequestInit) => {
+        if (String(init.body ?? '').includes('w3ds-file-v1')) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'owned-clip',
+                      ontology: 'w3ds-file-v1',
+                      parsed: {
+                        contentType: 'video/mp4',
+                        filename: 'Owned studio clip.mp4',
+                        uploadedAt: '2026-08-21T10:00:00.000Z',
+                      },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        if (String(_url.pathname) === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+
+    try {
+      const videos = await configuredLibrary().list({
+        eName: '@person.w3id',
+        eVaultUri: 'https://vault.example',
+      });
+      expect(videos).toEqual([
+        expect.objectContaining({
+          kind: 'file',
+          title: 'Owned studio clip.mp4',
+          accessScope: 'personal',
+          visibility: 'private',
+        }),
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('never returns a call recording the signed-in person did not join', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: URL, init: RequestInit) => {
+        if (String(init.body ?? '').includes('e815ba40-ef85-4a2b-b6cf-e05a86d4afbd')) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'other-call',
+                      ontology: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd',
+                      parsed: {
+                        participants: ['@someone-else.w3id'],
+                        initiator: '@someone-else.w3id',
+                        recording: {
+                          mediaIsVideo: true,
+                          mediaUri: 'w3ds://file?id=@person.w3id/secret-call',
+                        },
+                      },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        if (String(_url.pathname) === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+
+    try {
+      const videos = await configuredLibrary().list({
+        eName: '@person.w3id',
+        eVaultUri: 'https://vault.example',
+      });
+      expect(videos).toEqual([]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('returns one card when the same file is bound as a message and a raw eVault blob', async () => {
+    const fileUri = 'w3ds://file?id=@person.w3id/same-clip';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: URL, init: RequestInit) => {
+        const body = String(init.body ?? '');
+        if (body.includes('550e8400-e29b-41d4-a716-446655440004')) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'message-same',
+                      ontology: '550e8400-e29b-41d4-a716-446655440004',
+                      parsed: {
+                        type: 'video',
+                        fileId: fileUri,
+                        file: { filename: 'Same clip.mp4' },
+                      },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        if (body.includes('w3ds-file-v1')) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'same-clip',
+                      ontology: 'w3ds-file-v1',
+                      parsed: { contentType: 'video/mp4', filename: 'Same clip.mp4' },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        if (String(_url.pathname) === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+
+    try {
+      const videos = await configuredLibrary().list({
+        eName: '@person.w3id',
+        eVaultUri: 'https://vault.example',
+      });
+      expect(videos).toHaveLength(1);
+      expect(videos[0]).toEqual(
+        expect.objectContaining({
+          kind: 'video-message',
+          title: 'Same clip.mp4',
+          visibility: 'private',
+        }),
+      );
     } finally {
       vi.unstubAllGlobals();
     }

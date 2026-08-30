@@ -1,5 +1,6 @@
 import 'server-only';
 
+export type { VideoSpaceVisibility as EVaultVideoVisibility } from './video-space/visibility';
 export type {
   EVaultVideoAccessScope,
   MeshengerLibrary as EVaultVideoLibraryResult,

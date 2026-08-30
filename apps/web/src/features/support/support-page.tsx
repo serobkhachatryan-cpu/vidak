@@ -72,7 +72,7 @@ export function SupportPageFeature() {
                   id="support-description"
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
-                  placeholder="For example: I opened a Meshenger call recording, pressed play, and the player stayed black."
+                  placeholder="For example: I opened a call recording, pressed play, and the player stayed black."
                   minLength={12}
                   maxLength={5000}
                   required

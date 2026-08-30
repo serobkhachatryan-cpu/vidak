@@ -38,6 +38,7 @@ describe('eVault video library route', () => {
           kind: 'file',
           title: 'Video from another app.mp4',
           accessScope: 'personal',
+          visibility: 'private',
           streamIds: ['opaque-stream-id'],
         },
       ],
