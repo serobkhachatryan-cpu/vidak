@@ -84,6 +84,9 @@ describe('video space home model', () => {
       missing: 0,
       complete: false,
       retryNeeded: true,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 0,
     });
     expect(banner).toBe('12 of 15 shared spaces indexed; retry needed.');
     expect(banner).not.toMatch(/@|[a-f0-9-]{8,}|messenger|meshenger|group|chat|title/i);
