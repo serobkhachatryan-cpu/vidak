@@ -15,7 +15,7 @@ export interface PaginatedEnvelopes<T> {
 export function readEnvelopeConnectionPage(connection: Record<string, unknown> | undefined): {
   edges: unknown[];
   hasNextPage: boolean | undefined;
-  endCursor: string | undefined;
+  endCursor?: string;
 } {
   const pageInfo =
     connection?.pageInfo && typeof connection.pageInfo === 'object' && !Array.isArray(connection.pageInfo)
