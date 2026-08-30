@@ -7,10 +7,21 @@ import type {
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
+import {
+  isReplaceableChannelName,
+  repairedChannelName,
+  toSafePublicChannelProjection,
+} from '@w3ds/types';
 import { and, desc, eq, inArray, like, lte, sql } from 'drizzle-orm';
 import { CreatorVideoError } from './creator-video-errors';
 import type { W3dsDatabase } from './db/client';
-import { creatorChannels, mediaAssets, videos, videoViewEvents } from './db/schema';
+import {
+  creatorChannels,
+  mediaAssets,
+  videos,
+  videoViewEvents,
+  w3dsPlatformUsers,
+} from './db/schema';
 import { PUBLIC_VIEW_DEDUP_WINDOW_MS } from './public-video-views';
 
 export interface CreateChannelRecordInput {
@@ -97,20 +108,42 @@ export interface CreatorVideoStore {
   }): Promise<{ counted: boolean; video: Video }>;
 }
 
-function toPublicChannelProjection(input: {
-  id: string;
-  name: string;
-  handle: string;
-  avatarUrl?: string | null;
-  subscriberCount: number;
-}): PublicChannelProjection {
-  return {
-    id: input.id,
-    name: input.name,
-    handle: input.handle,
-    ...(input.avatarUrl ? { avatarUrl: input.avatarUrl } : {}),
-    subscriberCount: input.subscriberCount,
-  };
+function toPublicChannelProjection(
+  channel: {
+    id: string;
+    ownerId?: string;
+    name: string;
+    handle: string;
+    avatarUrl?: string | null;
+    subscriberCount: number;
+  },
+  owner?: {
+    id?: string;
+    displayName?: string | null;
+    eName?: string | null;
+    eVaultId?: string | null;
+  },
+): PublicChannelProjection {
+  return toSafePublicChannelProjection({
+    id: channel.id,
+    name: channel.name,
+    handle: channel.handle,
+    subscriberCount: channel.subscriberCount,
+    ...(channel.avatarUrl ? { avatarUrl: channel.avatarUrl } : {}),
+    ...(owner?.displayName !== undefined && owner.displayName !== null
+      ? { ownerDisplayName: owner.displayName }
+      : {}),
+    identity: {
+      id: owner?.id ?? channel.ownerId ?? channel.id,
+      ...(owner?.eName ? { eName: owner.eName } : {}),
+      ...(owner?.eVaultId ? { eVaultId: owner.eVaultId } : {}),
+    },
+  });
+}
+
+function withRepairedChannelName(channel: Channel, nextName: string): Channel {
+  if (channel.name === nextName) return channel;
+  return { ...channel, name: nextName };
 }
 
 function toChannel(row: {
@@ -203,6 +236,7 @@ type StoredVideo = Video & { ownerId: string };
 export class InMemoryCreatorVideoStore implements CreatorVideoStore {
   private readonly channelsByOwnerId = new Map<string, Channel>();
   private readonly channelsById = new Map<string, Channel>();
+  private readonly ownerDisplayNames = new Map<string, string>();
   private readonly videosById = new Map<string, StoredVideo>();
   /** videoId → ready media asset count (test helper for publish preconditions). */
   private readonly readyMediaCounts = new Map<string, number>();
@@ -222,10 +256,32 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
   private withPublicChannel(video: Video): Video {
     const channel = this.channelsById.get(video.channelId);
     if (!channel) return cloneVideo(video);
+    const ownerDisplayName = this.ownerDisplayNames.get(channel.ownerId);
     return cloneVideo({
       ...video,
-      channel: toPublicChannelProjection(channel),
+      channel: toPublicChannelProjection(
+        channel,
+        ownerDisplayName
+          ? { id: channel.ownerId, displayName: ownerDisplayName }
+          : { id: channel.ownerId },
+      ),
     });
+  }
+
+  /**
+   * Test helper: owner public name used when projecting/repairing placeholder
+   * channel records that were inserted with technical identifiers.
+   */
+  seedOwnerDisplayName(ownerId: string, displayName: string): void {
+    this.ownerDisplayNames.set(ownerId, displayName);
+  }
+
+  private repairPlaceholderChannel(channel: Channel, nextName: string, ownerId: string): Channel {
+    if (!isReplaceableChannelName(channel.name, { id: ownerId })) return channel;
+    const repaired = withRepairedChannelName(channel, nextName);
+    this.channelsByOwnerId.set(ownerId, repaired);
+    this.channelsById.set(repaired.id, repaired);
+    return repaired;
   }
 
   private enqueueView<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -239,7 +295,9 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
 
   async findOrCreateChannel(input: CreateChannelRecordInput): Promise<Channel> {
     const existing = this.channelsByOwnerId.get(input.ownerId);
-    if (existing) return cloneChannel(existing);
+    if (existing) {
+      return cloneChannel(this.repairPlaceholderChannel(existing, input.name, input.ownerId));
+    }
     const channel: Channel = {
       id: input.id,
       ownerId: input.ownerId,
@@ -263,7 +321,17 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
 
   async findChannelById(channelId: string): Promise<Channel | undefined> {
     const channel = this.channelsById.get(channelId);
-    return channel ? cloneChannel(channel) : undefined;
+    if (!channel) return undefined;
+    const ownerName = this.ownerDisplayNames.get(channel.ownerId);
+    if (ownerName && isReplaceableChannelName(channel.name, { id: channel.ownerId })) {
+      const next = repairedChannelName({
+        storedName: channel.name,
+        ownerDisplayName: ownerName,
+        identity: { id: channel.ownerId },
+      });
+      return cloneChannel(this.repairPlaceholderChannel(channel, next.name, channel.ownerId));
+    }
+    return cloneChannel(channel);
   }
 
   async createDraft(input: CreateDraftRecordInput): Promise<Video> {
@@ -530,7 +598,7 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
     if (!existing) {
       throw new CreatorVideoError('Failed to persist creator channel.', 'internal_error', 500);
     }
-    return existing;
+    return this.repairPlaceholderChannelName(existing, input.name);
   }
 
   async findChannelByOwnerId(ownerId: string): Promise<Channel | undefined> {
@@ -546,11 +614,34 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
     const normalized = channelId.trim();
     if (!normalized) return undefined;
     const [row] = await this.db
-      .select()
+      .select({ channel: creatorChannels, owner: w3dsPlatformUsers })
       .from(creatorChannels)
+      .leftJoin(w3dsPlatformUsers, eq(creatorChannels.ownerId, w3dsPlatformUsers.id))
       .where(eq(creatorChannels.id, normalized))
       .limit(1);
-    return row ? toChannel(row) : undefined;
+    if (!row) return undefined;
+    const next = repairedChannelName({
+      storedName: row.channel.name,
+      ...(row.owner?.displayName !== undefined ? { ownerDisplayName: row.owner.displayName } : {}),
+      identity: {
+        id: row.owner?.id ?? row.channel.ownerId,
+        ...(row.owner?.eName ? { eName: row.owner.eName } : {}),
+        ...(row.owner?.eVaultId ? { eVaultId: row.owner.eVaultId } : {}),
+      },
+    });
+    return this.repairPlaceholderChannelName(toChannel(row.channel), next.name);
+  }
+
+  private async repairPlaceholderChannelName(channel: Channel, nextName: string): Promise<Channel> {
+    if (!isReplaceableChannelName(channel.name, { id: channel.ownerId })) return channel;
+    const name = nextName.trim();
+    if (!name || name === channel.name) return channel;
+    const [row] = await this.db
+      .update(creatorChannels)
+      .set({ name, updatedAt: new Date() })
+      .where(eq(creatorChannels.id, channel.id))
+      .returning();
+    return row ? toChannel(row) : withRepairedChannelName(channel, name);
   }
 
   async createDraft(input: CreateDraftRecordInput): Promise<Video> {
@@ -808,9 +899,10 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
     const normalized = publicVideoId.trim();
     if (!normalized) return undefined;
     const [row] = await this.db
-      .select({ video: videos, channel: creatorChannels })
+      .select({ video: videos, channel: creatorChannels, owner: w3dsPlatformUsers })
       .from(videos)
       .innerJoin(creatorChannels, eq(videos.channelId, creatorChannels.id))
+      .innerJoin(w3dsPlatformUsers, eq(creatorChannels.ownerId, w3dsPlatformUsers.id))
       .where(
         and(
           eq(videos.publicVideoId, normalized),
@@ -819,7 +911,7 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
         ),
       )
       .limit(1);
-    return row ? toVideo(row.video, toPublicChannelProjection(row.channel)) : undefined;
+    return row ? toVideo(row.video, toPublicChannelProjection(row.channel, row.owner)) : undefined;
   }
 
   async listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]> {
@@ -827,14 +919,15 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
     const safeOffset = Math.max(0, Math.floor(offset));
     if (safeLimit === 0) return [];
     const rows = await this.db
-      .select({ video: videos, channel: creatorChannels })
+      .select({ video: videos, channel: creatorChannels, owner: w3dsPlatformUsers })
       .from(videos)
       .innerJoin(creatorChannels, eq(videos.channelId, creatorChannels.id))
+      .innerJoin(w3dsPlatformUsers, eq(creatorChannels.ownerId, w3dsPlatformUsers.id))
       .where(and(eq(videos.status, 'published'), eq(videos.visibility, 'public')))
       .orderBy(desc(videos.publishedAt), desc(videos.id))
       .limit(safeLimit)
       .offset(safeOffset);
-    return rows.map((row) => toVideo(row.video, toPublicChannelProjection(row.channel)));
+    return rows.map((row) => toVideo(row.video, toPublicChannelProjection(row.channel, row.owner)));
   }
 
   async recordPublicView(input: {
@@ -907,4 +1000,40 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       };
     });
   }
+}
+
+/**
+ * One-shot repair for channels whose stored name is still a technical
+ * placeholder. Uses the owner's chosen/verified public name when safe;
+ * otherwise "Vidak channel". Never overwrites a genuinely chosen name.
+ */
+export async function repairPlaceholderCreatorChannelNames(db: W3dsDatabase): Promise<number> {
+  const rows = await db
+    .select({
+      channel: creatorChannels,
+      owner: w3dsPlatformUsers,
+    })
+    .from(creatorChannels)
+    .innerJoin(w3dsPlatformUsers, eq(creatorChannels.ownerId, w3dsPlatformUsers.id));
+
+  let repaired = 0;
+  for (const row of rows) {
+    const identity = {
+      id: row.owner.id,
+      eName: row.owner.eName,
+      eVaultId: row.owner.eVaultId,
+    };
+    const next = repairedChannelName({
+      storedName: row.channel.name,
+      ownerDisplayName: row.owner.displayName,
+      identity,
+    });
+    if (!next.shouldPersist) continue;
+    await db
+      .update(creatorChannels)
+      .set({ name: next.name, updatedAt: new Date() })
+      .where(eq(creatorChannels.id, row.channel.id));
+    repaired += 1;
+  }
+  return repaired;
 }

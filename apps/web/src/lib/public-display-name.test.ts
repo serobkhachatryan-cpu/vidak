@@ -1,3 +1,4 @@
+import { looksLikeTechnicalIdentifier } from '@w3ds/types';
 import { describe, expect, it } from 'vitest';
 import {
   headerAccountCta,
@@ -19,6 +20,10 @@ describe('isValidPublicDisplayName', () => {
     expect(isValidPublicDisplayName('@creator.w3id')).toBe(false);
     expect(isValidPublicDisplayName('  @ada.w3id  ')).toBe(false);
     expect(isValidPublicDisplayName(`w3ds_${opaqueUuid}`)).toBe(false);
+    expect(
+      isValidPublicDisplayName('fd10387a-b0d3-5f9c-bf54-7214a491-w3ds450ac914'),
+    ).toBe(false);
+    expect(looksLikeTechnicalIdentifier(`w3ds_${opaqueUuid}`)).toBe(true);
     expect(isValidPublicDisplayName('')).toBe(false);
     expect(isValidPublicDisplayName('   ')).toBe(false);
     expect(isValidPublicDisplayName(undefined)).toBe(false);

@@ -1,21 +1,22 @@
 import type { Channel } from '@w3ds/types';
+import { presentPublicChannel } from '@w3ds/types';
 import { Avatar, Badge, Button, Heading, Text } from '@w3ds/ui';
 import { formatSubscribers, formatVideoCount } from './format';
 import { cx } from './styles';
 
 export const channelBannerClassName = 'h-28 w-full rounded-xl sm:h-40 lg:h-56';
 
-function ChannelBanner({ channel }: { channel: Channel }) {
-  return channel.bannerUrl ? (
+function ChannelBanner({ bannerUrl, channelName }: { bannerUrl?: string; channelName: string }) {
+  return bannerUrl ? (
     <img
-      src={channel.bannerUrl}
-      alt={`${channel.name} channel banner`}
+      src={bannerUrl}
+      alt={`${channelName} channel banner`}
       className={cx(channelBannerClassName, 'object-cover')}
     />
   ) : (
     <div
       role="img"
-      aria-label={`${channel.name} channel banner`}
+      aria-label={`${channelName} channel banner`}
       className={cx(
         channelBannerClassName,
         'bg-gradient-to-r from-primary/40 via-primary/15 to-surface-raised',
@@ -59,28 +60,35 @@ export function ChannelHeader({
   subscribed: boolean;
   onSubscribeToggle: () => void;
 }) {
+  const presentation = presentPublicChannel(channel);
+  const channelName = presentation.label;
   const summary = [
-    `@${channel.handle}`,
+    presentation.handle ? `@${presentation.handle}` : undefined,
     formatSubscribers(subscriberCount),
     formatVideoCount(channel.videoCount),
-  ].join(' · ');
+  ]
+    .filter(Boolean)
+    .join(' · ');
 
   return (
     <header className="space-y-4">
-      <ChannelBanner channel={channel} />
+      <ChannelBanner
+        {...(channel.bannerUrl ? { bannerUrl: channel.bannerUrl } : {})}
+        channelName={channelName}
+      />
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-center">
           <Avatar
             {...(channel.avatarUrl ? { src: channel.avatarUrl } : {})}
             alt=""
-            name={channel.name}
+            name={channelName}
             size="xl"
             className="sm:h-28 sm:w-28 sm:text-2xl"
           />
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <Heading as="h1" size="xl">
-                {channel.name}
+                {channelName}
               </Heading>
               {isVerified && (
                 <Badge tone="muted" aria-label="Verified channel">
@@ -104,7 +112,7 @@ export function ChannelHeader({
         <SubscribeButton
           subscribed={subscribed}
           onToggle={onSubscribeToggle}
-          channelName={channel.name}
+          channelName={channelName}
         />
       </div>
     </header>

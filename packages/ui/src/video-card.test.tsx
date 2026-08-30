@@ -1,4 +1,5 @@
 import type { Channel, Video } from '@w3ds/types';
+import { NEUTRAL_PUBLIC_CHANNEL_NAME } from '@w3ds/types';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { VideoCard, VideoCardSkeleton } from './video-card';
@@ -114,5 +115,28 @@ describe('VideoCard', () => {
     expect(markup).toContain('Independent source');
     expect(markup).not.toContain('Unknown channel');
     expect(markup).not.toContain('href="/channel/channel-studio"');
+  });
+
+  it('never renders UUID, eName, or local-id channel labels', () => {
+    const opaqueUuid = 'fd10387a-b0d3-5f9c-bf54-7214a491cace';
+    const markup = renderToStaticMarkup(
+      <VideoCard
+        video={{
+          ...video,
+          channel: {
+            id: channel.id,
+            name: opaqueUuid,
+            handle: `w3ds_${opaqueUuid}`,
+          },
+        }}
+      />,
+    );
+    expect(markup).toContain(NEUTRAL_PUBLIC_CHANNEL_NAME);
+    expect(markup).toContain(`aria-label="Visit ${NEUTRAL_PUBLIC_CHANNEL_NAME}"`);
+    expect(markup).toContain('href="/channel/channel-studio"');
+    expect(markup).not.toContain(opaqueUuid);
+    expect(markup).not.toContain('w3ds_');
+    expect(markup).not.toContain('Unknown channel');
+    expect(markup).not.toContain('@fd10387a');
   });
 });

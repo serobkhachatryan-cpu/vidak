@@ -188,4 +188,24 @@ describe('WatchPage', () => {
     expect(markup).toContain('aria-pressed="true"');
     expect(markup).toContain('Subscribed');
   });
+
+  it('never renders UUID or local-id channel labels on the watch page', () => {
+    const opaqueUuid = 'fd10387a-b0d3-5f9c-bf54-7214a491cace';
+    const markup = renderToStaticMarkup(
+      <WatchPage
+        video={{
+          ...video,
+          channel: {
+            id: channel.id,
+            name: opaqueUuid,
+            handle: `w3ds_${opaqueUuid}`,
+          },
+        }}
+      />,
+    );
+    expect(markup).toContain('Vidak channel');
+    expect(markup).not.toContain(opaqueUuid);
+    expect(markup).not.toContain('w3ds_');
+    expect(markup).not.toContain('Unknown channel');
+  });
 });

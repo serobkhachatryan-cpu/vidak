@@ -25,7 +25,6 @@ describe('postgres public view counting', () => {
       eVaultId: 'ev_ada',
       eVaultUri: 'https://evault.example/ada',
     });
-    const session = await ctx.authService.getSession(accessToken);
     const draft = await ctx.videoService.createDraft(accessToken, {
       title: 'Production talk',
       visibility: 'public',
@@ -58,8 +57,12 @@ describe('postgres public view counting', () => {
     const publishedBody = (await published.json()) as { publicVideoId: string };
     const publicVideo = await ctx.videoService.getPublicVideo(publishedBody.publicVideoId);
     expect(publicVideo.channel?.id).toBe(draft.channelId);
-    expect(publicVideo.channel?.name).toBe(session.user.displayName);
+    expect(publicVideo.channel?.name).toBeTruthy();
     expect(publicVideo.channel?.name).not.toBe('Unknown channel');
+    expect(publicVideo.channel?.name).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}/i,
+    );
+    expect(publicVideo.channel?.name).not.toMatch(/w3ds_/i);
     expect(publicVideo.viewCount).toBe(0);
 
     const sameViewer = hashPublicViewerKey({

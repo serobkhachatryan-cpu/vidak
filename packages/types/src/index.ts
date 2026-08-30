@@ -1,5 +1,19 @@
-export type { Channel, ChannelId, PublicChannelProjection } from './channel';
-export { SOURCE_NEUTRAL_CHANNEL_LABEL } from './channel';
+export type {
+  Channel,
+  ChannelId,
+  PublicChannelPresentation,
+  PublicChannelProjection,
+} from './channel';
+export {
+  isReplaceableChannelName,
+  NEUTRAL_PUBLIC_CHANNEL_NAME,
+  presentPublicChannel,
+  publicChannelNameFromOwner,
+  publicHandleOrEmpty,
+  repairedChannelName,
+  SOURCE_NEUTRAL_CHANNEL_LABEL,
+  toSafePublicChannelProjection,
+} from './channel';
 export type {
   ChannelImportProvider,
   ChannelImportProviderStatus,
@@ -18,6 +32,18 @@ export type {
 } from './comment';
 export type { CursorPage, PaginationParams } from './pagination';
 export type { Playlist, PlaylistId, PlaylistItem, PlaylistVisibility } from './playlist';
+export type { PublicDisplayNameIdentity } from './public-display-name';
+export {
+  isChosenPublicDisplayName,
+  isPlatformPlaceholderDisplayName,
+  isPublicHandle,
+  isReplaceableWithVerifiedFullName,
+  isValidPublicDisplayName,
+  isVerifiedFullNameUpgrade,
+  looksLikeTechnicalIdentifier,
+  NEUTRAL_PUBLIC_DISPLAY_NAME,
+  STALE_CREATOR_PLACEHOLDER,
+} from './public-display-name';
 export type { SearchFilters, SearchResultType, SearchSort } from './search';
 export {
   isEphemeralThumbnailUrl,

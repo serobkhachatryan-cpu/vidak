@@ -28,7 +28,6 @@ export async function GET(_request: NextRequest, context: RouteContext) {
     const channel = await getCreatorVideoService().getPublicChannel(channelId);
     return NextResponse.json({
       id: channel.id,
-      ownerId: channel.ownerId,
       handle: channel.handle,
       name: channel.name,
       ...(channel.description ? { description: channel.description } : {}),

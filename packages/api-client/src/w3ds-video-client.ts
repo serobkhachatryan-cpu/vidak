@@ -131,7 +131,12 @@ export class W3dsVideoApiClient implements VideoApiClient {
       const body = await readErrorBody(response);
       throw new Error(body.error?.message ?? `Channel request failed (${response.status})`);
     }
-    return (await response.json()) as Channel;
+    const body = (await response.json()) as Channel & { ownerId?: string };
+    return {
+      ...body,
+      ownerId: typeof body.ownerId === 'string' ? body.ownerId : '',
+      handle: typeof body.handle === 'string' ? body.handle : '',
+    };
   }
 
   listPlaylists(

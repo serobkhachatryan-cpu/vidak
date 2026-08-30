@@ -15,7 +15,7 @@ import type {
   VideoId,
   VideoMediaRendition,
 } from '@w3ds/types';
-import { SOURCE_NEUTRAL_CHANNEL_LABEL } from '@w3ds/types';
+import { presentPublicChannel } from '@w3ds/types';
 import {
   AppShell,
   type AppShellProps,
@@ -567,14 +567,11 @@ function WatchContent({
     | 'onRetry'
   >) {
   const resolvedChannel = channel ?? video.channel;
-  const hasRealChannel = Boolean(resolvedChannel?.id && resolvedChannel.name);
-  const channelName = hasRealChannel
-    ? (resolvedChannel?.name ?? SOURCE_NEUTRAL_CHANNEL_LABEL)
-    : SOURCE_NEUTRAL_CHANNEL_LABEL;
+  const presentation = presentPublicChannel(resolvedChannel);
+  const channelName = presentation.label;
   const date = formatDate(video.publishedAt);
-  const channelHref = hasRealChannel
-    ? `/channel/${resolvedChannel?.id ?? video.channelId}`
-    : undefined;
+  const channelHref = presentation.href;
+  const hasRealChannel = Boolean(presentation.href);
 
   const channelIdentity = (
     <>

@@ -1,7 +1,7 @@
 'use client';
 
 import type { Channel, Video } from '@w3ds/types';
-import { isRenderableThumbnailUrl, SOURCE_NEUTRAL_CHANNEL_LABEL } from '@w3ds/types';
+import { isRenderableThumbnailUrl, presentPublicChannel } from '@w3ds/types';
 import { useState } from 'react';
 import { Avatar, Badge, Skeleton } from './primitives';
 import { cx, focusRing } from './utils';
@@ -75,13 +75,11 @@ export function VideoCard({
     .filter(Boolean)
     .join(' · ');
   const resolvedChannel = channel ?? video.channel;
-  const hasRealChannel = Boolean(resolvedChannel?.id && resolvedChannel.name);
-  const channelName = hasRealChannel
-    ? (resolvedChannel?.name ?? SOURCE_NEUTRAL_CHANNEL_LABEL)
-    : SOURCE_NEUTRAL_CHANNEL_LABEL;
-  const resolvedChannelHref = hasRealChannel
-    ? (channelHref ?? `/channel/${resolvedChannel?.id ?? video.channelId}`)
-    : undefined;
+  const presentation = presentPublicChannel(resolvedChannel, {
+    ...(channelHref ? { href: channelHref } : {}),
+  });
+  const channelName = presentation.label;
+  const resolvedChannelHref = presentation.href;
 
   return (
     <article className={cx('group min-w-0', className)}>

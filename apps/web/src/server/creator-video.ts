@@ -11,7 +11,15 @@ import type {
   VideoLanguage,
   VideoVisibility,
 } from '@w3ds/types';
-import { normalizePersistedThumbnailUrl, videoCategories, videoLanguages } from '@w3ds/types';
+import {
+  isPublicHandle,
+  normalizePersistedThumbnailUrl,
+  publicChannelNameFromOwner,
+  publicHandleOrEmpty,
+  toSafePublicChannelProjection,
+  videoCategories,
+  videoLanguages,
+} from '@w3ds/types';
 import { CreatorVideoError } from './creator-video-errors';
 import { type CreatorVideoStore, PostgresCreatorVideoStore } from './creator-video-store';
 import { getW3dsDatabase } from './db/client';
@@ -237,7 +245,20 @@ export class CreatorVideoService {
     if (!channel) {
       throw new CreatorVideoError('Channel was not found.', 'not_found', 404);
     }
-    return channel;
+    const projection = toSafePublicChannelProjection({
+      id: channel.id,
+      name: channel.name,
+      handle: channel.handle,
+      subscriberCount: channel.subscriberCount,
+      identity: { id: channel.ownerId },
+      ...(channel.avatarUrl ? { avatarUrl: channel.avatarUrl } : {}),
+    });
+    return {
+      ...channel,
+      name: projection.name,
+      handle: publicHandleOrEmpty(channel.handle, { id: channel.ownerId }),
+      ...(projection.avatarUrl ? { avatarUrl: projection.avatarUrl } : {}),
+    };
   }
 
   /**
@@ -289,12 +310,17 @@ export class CreatorVideoService {
   }
 
   private async provisionChannel(user: AuthUser): Promise<Channel> {
+    const identity = {
+      id: user.id,
+      eName: user.eName,
+      eVaultId: user.eVaultId,
+    };
     const handle = channelHandleForUser(user);
     const channel = await this.store.findOrCreateChannel({
       id: this.createId(),
       ownerId: user.id,
       handle,
-      name: user.displayName.trim() || handle,
+      name: publicChannelNameFromOwner(user.displayName, identity),
       ...(user.profile.avatarUrl || user.avatarUrl
         ? { avatarUrl: user.profile.avatarUrl ?? user.avatarUrl }
         : {}),
@@ -359,22 +385,18 @@ export function resetCreatorVideoServiceForTests(): void {
 }
 
 function channelHandleForUser(user: AuthUser): string {
-  // Owner-scoped suffix keeps handles unique under the DB unique constraint while
-  // remaining stable across idempotent find-or-create calls for the same user.
-  const ownerSuffix = user.id.replace(/[^a-zA-Z0-9]/g, '').slice(0, 12) || 'user';
-  const fromProfile = user.profile.handle?.trim().replace(/^@/, '').toLocaleLowerCase();
-  if (fromProfile && /^[a-z0-9._-]{2,32}$/.test(fromProfile)) {
-    return `${fromProfile}-${ownerSuffix}`.slice(0, 48);
+  const identity = { id: user.id, eName: user.eName, eVaultId: user.eVaultId };
+  const fromProfile = user.profile.handle?.trim().replace(/^@/, '');
+  if (fromProfile && isPublicHandle(fromProfile, identity)) {
+    return fromProfile;
   }
-  const fromEName = user.eName
-    .replace(/^@/, '')
-    .replace(/\.w3id$/i, '')
-    .replace(/[^a-zA-Z0-9._-]/g, '')
-    .toLocaleLowerCase();
-  if (fromEName.length >= 2) {
-    return `${fromEName.slice(0, 32)}-${ownerSuffix}`.slice(0, 48);
-  }
-  return `creator-${ownerSuffix}`;
+  return internalChannelHandle(user.id);
+}
+
+/** Durable unique handle that is never a public label. */
+function internalChannelHandle(ownerId: string): string {
+  const normalized = ownerId.trim().replace(/^w3ds_/, '') || 'channel';
+  return `w3ds_ch_${normalized}`.slice(0, 64);
 }
 
 function normalizeCreateDraftInput(input: CreateVideoDraftInput): {

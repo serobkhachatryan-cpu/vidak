@@ -1,4 +1,5 @@
 import type { Channel, Playlist, SearchResultType, SearchSort } from '@w3ds/types';
+import { presentPublicChannel } from '@w3ds/types';
 import { Avatar, Card, Skeleton } from './primitives';
 import { cx, focusRing } from './utils';
 
@@ -65,23 +66,23 @@ export function SearchSortControl({ value, onChange }: SearchSortControlProps) {
 }
 
 export function ChannelSearchResult({ channel }: { channel: Channel }) {
+  const presentation = presentPublicChannel(channel);
+  const channelName = presentation.label;
+  const href = presentation.href ?? `/channel/${channel.id}`;
   return (
     <Card className="flex items-center gap-4">
       <Avatar
         {...(channel.avatarUrl ? { src: channel.avatarUrl } : {})}
-        name={channel.name}
+        name={channelName}
         size="lg"
       />
       <div className="min-w-0">
-        <a
-          href={`/channel/${channel.id}`}
-          className={cx('font-sans font-semibold hover:text-primary', focusRing)}
-        >
-          {channel.name}
+        <a href={href} className={cx('font-sans font-semibold hover:text-primary', focusRing)}>
+          {channelName}
         </a>
         <p className="mt-1 font-sans text-sm text-muted-foreground">
-          @{channel.handle} · {channel.subscriberCount.toLocaleString()} subscribers ·{' '}
-          {channel.videoCount} videos
+          {presentation.handle ? `@${presentation.handle} · ` : ''}
+          {channel.subscriberCount.toLocaleString()} subscribers · {channel.videoCount} videos
         </p>
         {channel.description && (
           <p className="mt-2 line-clamp-2 font-sans text-sm text-muted-foreground">

@@ -1,4 +1,5 @@
 import { createAuthUser } from '@w3ds/auth';
+import { NEUTRAL_PUBLIC_CHANNEL_NAME } from '@w3ds/types';
 import { describe, expect, it } from 'vitest';
 import { CreatorVideoService, InMemoryCreatorVideoStore } from './creator-video';
 import { hashPublicViewerKey, PUBLIC_VIEW_DEDUP_WINDOW_MS } from './public-video-views';
@@ -12,6 +13,19 @@ const owner = createAuthUser({
   handle: 'ada',
 });
 
+const opaqueUuid = 'fd10387a-b0d3-5f9c-bf54-7214a491cace';
+const localId = `w3ds_${opaqueUuid}`;
+const productionHandle = 'fd10387a-b0d3-5f9c-bf54-7214a491-w3ds450ac914';
+
+async function publishPublicTalk(store: InMemoryCreatorVideoStore, service: CreatorVideoService) {
+  const draft = await service.createDraft('token', {
+    title: 'Public talk',
+    visibility: 'public',
+  });
+  store.seedReadyMediaAsset(draft.id);
+  return service.publishVideo('token', draft.id);
+}
+
 describe('public channel attribution and view counting', () => {
   it('joins the real creator channel on public cards and never Unknown channel', async () => {
     const store = new InMemoryCreatorVideoStore();
@@ -22,26 +36,104 @@ describe('public channel attribution and view counting', () => {
       createId: () => `id-${++sequence}`,
     });
 
-    const draft = await service.createDraft('token', {
-      title: 'Public talk',
-      visibility: 'public',
-    });
-    expect(draft.channelId).toBeTruthy();
-    store.seedReadyMediaAsset(draft.id);
-    const published = await service.publishVideo('token', draft.id);
-    expect(published.channelId).toBe(draft.channelId);
+    const published = await publishPublicTalk(store, service);
+    expect(published.channelId).toBeTruthy();
 
     const publicVideo = await service.getPublicVideo(published.publicVideoId ?? '');
     expect(publicVideo.channel).toMatchObject({
-      id: draft.channelId,
+      id: published.channelId,
       name: 'Ada Lovelace',
-      handle: expect.stringContaining('ada'),
+      handle: 'ada',
     });
     expect(JSON.stringify(publicVideo)).not.toMatch(/Unknown channel/i);
     expect(JSON.stringify(publicVideo.channel)).not.toMatch(/eName|evault|jwt|token/i);
 
     const listed = await service.listPublicVideos();
     expect(listed.items[0]?.channel?.name).toBe('Ada Lovelace');
+  });
+
+  it('never publishes UUID, eName, or local-id channel labels', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    const channel = await store.findOrCreateChannel({
+      id: 'channel-technical',
+      ownerId: owner.id,
+      handle: productionHandle,
+      name: opaqueUuid,
+    });
+    store.seedOwnerDisplayName(owner.id, 'Ada Lovelace');
+    const draft = await store.createDraft({
+      id: 'video-technical',
+      channelId: channel.id,
+      ownerId: owner.id,
+      title: 'Hats',
+      description: '',
+      tags: [],
+      visibility: 'public',
+      thumbnailUrl: '',
+    });
+    store.seedReadyMediaAsset(draft.id);
+    const published = await store.publishOwnedVideo(draft.id, owner.id, 'pub_hats');
+    const service = new CreatorVideoService({
+      store,
+      resolveUser: async () => owner,
+      createId: () => 'id-1',
+    });
+
+    const publicVideo = await service.getPublicVideo(published.publicVideoId ?? '');
+    expect(publicVideo.channel?.name).toBe('Ada Lovelace');
+    expect(publicVideo.channel?.handle).toBe('');
+    expect(JSON.stringify(publicVideo)).not.toContain(opaqueUuid);
+    expect(JSON.stringify(publicVideo)).not.toContain(localId);
+    expect(JSON.stringify(publicVideo)).not.toContain(productionHandle);
+    expect(JSON.stringify(publicVideo)).not.toMatch(/Unknown channel/i);
+
+    const publicChannel = await service.getPublicChannel(channel.id);
+    expect(publicChannel.name).toBe('Ada Lovelace');
+    expect(publicChannel.handle).toBe('');
+    expect(publicChannel.name).not.toBe(opaqueUuid);
+  });
+
+  it('uses Vidak channel when the owner has no chosen public name', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    await store.findOrCreateChannel({
+      id: 'channel-ename',
+      ownerId: localId,
+      handle: `@${opaqueUuid}`,
+      name: `@${opaqueUuid}`,
+    });
+    const service = new CreatorVideoService({
+      store,
+      resolveUser: async () =>
+        createAuthUser({
+          id: localId,
+          displayName: '@creator.w3id',
+          roles: ['creator'],
+          eName: `@${opaqueUuid}`,
+          eVaultId: 'evault-creator',
+        }),
+      createId: () => 'id-1',
+    });
+    const publicChannel = await service.getPublicChannel('channel-ename');
+    expect(publicChannel.name).toBe(NEUTRAL_PUBLIC_CHANNEL_NAME);
+    expect(publicChannel.handle).toBe('');
+    expect(publicChannel.name).not.toBe(`@${opaqueUuid}`);
+  });
+
+  it('does not overwrite a genuinely chosen channel name', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    await store.findOrCreateChannel({
+      id: 'channel-chosen',
+      ownerId: owner.id,
+      handle: 'cooking-ada',
+      name: 'Cooking with Ada',
+    });
+    const service = new CreatorVideoService({
+      store,
+      resolveUser: async () => owner,
+      createId: () => 'id-1',
+    });
+    const channel = await service.ensureCreatorChannel('token');
+    expect(channel.name).toBe('Cooking with Ada');
   });
 
   it('counts a meaningful playback once and ignores refresh/replay inside the window', async () => {

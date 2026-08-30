@@ -279,6 +279,10 @@ describe('video publishing and public discovery routes', () => {
     expect(firstBody.video.viewCount).toBe(1);
     expect(firstBody.video.channel?.name).toBeTruthy();
     expect(firstBody.video.channel?.name).not.toBe('Unknown channel');
+    expect(firstBody.video.channel?.name).not.toMatch(/w3ds_/i);
+    expect(firstBody.video.channel?.name).not.toMatch(
+      /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}/i,
+    );
     expect(firstBody.video.visibility).toBe('public');
     expect(JSON.stringify(firstBody)).not.toMatch(/203\.0\.113\.50|eName|evault|jwt/i);
 

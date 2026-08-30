@@ -1,4 +1,5 @@
 import type { Channel, Playlist, Video } from '@w3ds/types';
+import { presentPublicChannel } from '@w3ds/types';
 import {
   EmptyState,
   Grid,
@@ -212,8 +213,9 @@ export function AboutPanel({
   subscriberCount: number;
 }) {
   const joinedAt = formatDate(channel.createdAt);
+  const presentation = presentPublicChannel(channel);
   const details = [
-    { label: 'Handle', value: `@${channel.handle}` },
+    ...(presentation.handle ? [{ label: 'Handle', value: `@${presentation.handle}` }] : []),
     { label: 'Subscribers', value: formatSubscribers(subscriberCount) },
     { label: 'Videos', value: formatVideoCount(channel.videoCount) },
     ...(joinedAt ? [{ label: 'Joined', value: joinedAt }] : []),

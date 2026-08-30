@@ -195,6 +195,7 @@ describe('authenticated video workflow (end-to-end)', () => {
     expect(listed?.title).toBe('Workflow draft saved');
     expect(listed?.channel?.name).toBeTruthy();
     expect(listed?.channel?.name).not.toBe('Unknown channel');
+    expect(listed?.channel?.name).not.toMatch(/w3ds_/i);
 
     const detail = await getPublicVideo(
       new NextRequest(`${appOrigin}/api/videos/public/${publishedBody.publicVideoId}`),
