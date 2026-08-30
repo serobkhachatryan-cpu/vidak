@@ -11,9 +11,9 @@ export function HomeFeed() {
   if (isLoading) {
     return (
       <ApplicationShell currentHref="/">
-        <Page title="Your video space" containerSize="full">
+        <Page title="Home" containerSize="full">
           <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground">
-            <Spinner size="sm" /> Loading your video space…
+            <Spinner size="sm" /> Loading…
           </div>
         </Page>
       </ApplicationShell>
