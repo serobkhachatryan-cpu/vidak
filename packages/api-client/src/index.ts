@@ -33,7 +33,8 @@ export {
   publicThumbnailPath,
   publicVideoWatchPath,
 } from './public-media-path';
-export type { VideoApiClient } from './video-client';
+export type { VideoApiClient, VideoProductSurfaces } from './video-client';
+export { videoProductSurfaceEnabled } from './video-client';
 export type { W3dsAuthClientOptions } from './w3ds-auth-client';
 export { W3dsAuthClient } from './w3ds-auth-client';
 export type { W3dsVideoApiClientOptions } from './w3ds-video-client';

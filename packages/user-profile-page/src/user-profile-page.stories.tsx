@@ -130,7 +130,9 @@ export const Unverified: Story = {
   args: { profile: { ...bannerProfile, isVerified: false } },
 };
 export const WithoutBanner: Story = { args: { profile } };
-export const PlaylistsTab: Story = { args: { activeTab: 'playlists' } };
+export const PlaylistsTab: Story = {
+  args: { activeTab: 'playlists', tabs: ['videos', 'playlists', 'about'] },
+};
 export const AboutTab: Story = { args: { activeTab: 'about' } };
 export const MoreVideosAvailable: Story = {
   args: { hasMoreVideos: true, onLoadMoreVideos: noop },
@@ -142,13 +144,27 @@ export const NoVideos: Story = { args: { videos: [], videosState: 'empty', video
 export const VideosLoading: Story = { args: { videosState: 'loading' } };
 export const VideosError: Story = { args: { videosState: 'error', onRetryVideos: noop } };
 export const NoPlaylists: Story = {
-  args: { activeTab: 'playlists', playlists: [], playlistsState: 'empty' },
+  args: {
+    activeTab: 'playlists',
+    playlists: [],
+    playlistsState: 'empty',
+    tabs: ['videos', 'playlists', 'about'],
+  },
 };
 export const PlaylistsLoading: Story = {
-  args: { activeTab: 'playlists', playlistsState: 'loading' },
+  args: {
+    activeTab: 'playlists',
+    playlistsState: 'loading',
+    tabs: ['videos', 'playlists', 'about'],
+  },
 };
 export const PlaylistsError: Story = {
-  args: { activeTab: 'playlists', playlistsState: 'error', onRetryPlaylists: noop },
+  args: {
+    activeTab: 'playlists',
+    playlistsState: 'error',
+    onRetryPlaylists: noop,
+    tabs: ['videos', 'playlists', 'about'],
+  },
 };
 export const Loading: Story = { args: { state: 'loading' } };
 export const Empty: Story = { args: { state: 'empty' } };

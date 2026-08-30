@@ -154,7 +154,7 @@ export function ApplicationShell({
                 ref={searchRef}
                 name="q"
                 defaultValue={searchValue}
-                placeholder="Search videos, channels, and playlists"
+                placeholder="Search videos and channels"
                 aria-label="Search"
                 shortcut="⌘K"
               />

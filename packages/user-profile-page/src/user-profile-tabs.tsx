@@ -5,6 +5,8 @@ export const userProfileTabOrder = ['videos', 'playlists', 'about'] as const;
 
 export type UserProfileTabId = (typeof userProfileTabOrder)[number];
 
+export const userProfileCatalogueTabOrder = ['videos', 'about'] as const;
+
 export const userProfileTabLabels: Record<UserProfileTabId, string> = {
   videos: 'Videos',
   playlists: 'Playlists',
@@ -27,18 +29,21 @@ export interface UserProfileTabsProps {
   scope: string;
   activeTab: UserProfileTabId;
   onChange: (tab: UserProfileTabId) => void;
+  tabs?: readonly UserProfileTabId[];
 }
 
-export function UserProfileTabs({ scope, activeTab, onChange }: UserProfileTabsProps) {
+export function UserProfileTabs({
+  scope,
+  activeTab,
+  onChange,
+  tabs = userProfileCatalogueTabOrder,
+}: UserProfileTabsProps) {
   const listRef = useRef<HTMLDivElement>(null);
+  const visibleTabs = tabs.length > 0 ? tabs : userProfileCatalogueTabOrder;
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const nextIndex = tabIndexForKey(
-      event.key,
-      userProfileTabOrder.indexOf(activeTab),
-      userProfileTabOrder.length,
-    );
-    const nextTab = nextIndex === undefined ? undefined : userProfileTabOrder[nextIndex];
+    const nextIndex = tabIndexForKey(event.key, visibleTabs.indexOf(activeTab), visibleTabs.length);
+    const nextTab = nextIndex === undefined ? undefined : visibleTabs[nextIndex];
     if (!nextTab) return;
     event.preventDefault();
     onChange(nextTab);
@@ -53,7 +58,7 @@ export function UserProfileTabs({ scope, activeTab, onChange }: UserProfileTabsP
       onKeyDown={onKeyDown}
       className="flex gap-1 overflow-x-auto border-b border-border"
     >
-      {userProfileTabOrder.map((tab) => (
+      {visibleTabs.map((tab) => (
         <button
           key={tab}
           type="button"

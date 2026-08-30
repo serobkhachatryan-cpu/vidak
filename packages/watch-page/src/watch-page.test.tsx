@@ -76,6 +76,17 @@ describe('WatchPage', () => {
     expect(markup).toContain('sm:grid-cols-2 xl:grid-cols-1');
   });
 
+  it('does not offer commenting or playlist save when those surfaces are retired', () => {
+    const markup = renderToStaticMarkup(
+      <WatchPage video={video} channel={channel} commentsState="unavailable" />,
+    );
+    expect(markup).toContain('Comments are not available yet');
+    expect(markup).toContain('Commenting is not part of this Vidak release.');
+    expect(markup).not.toContain('role="textbox"');
+    expect(markup).not.toContain('Comments (3)');
+    expect(markup).not.toContain('＋');
+  });
+
   it('renders loading, empty, and error states with accessible labels', () => {
     expect(renderToStaticMarkup(<WatchPage state="loading" />)).toContain(
       'aria-label="Loading video"',

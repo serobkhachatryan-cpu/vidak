@@ -31,6 +31,7 @@ const requiredTables = [
   'channel_import_sync_jobs',
   'video_preview_assets',
   'video_view_events',
+  'user_preferences',
 ] as const;
 
 const requiredIndexes = [
@@ -139,7 +140,32 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(21);
+    expect(applied.rows).toHaveLength(22);
+
+    const preferenceColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'user_preferences'
+       order by 1`,
+    );
+    expect(preferenceColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'user_id',
+        'appearance',
+        'language',
+        'notifications',
+        'privacy',
+        'updated_at',
+      ]),
+    );
+
+    const userColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'w3ds_platform_users'
+       order by 1`,
+    );
+    expect(userColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining(['avatar_url', 'avatar_storage_key', 'avatar_content_type']),
+    );
 
     // Columns required by the authenticated video workflow.
     const videoColumns = await client.query<{ column_name: string }>(
@@ -362,6 +388,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(21);
+    expect(Number(applied.rows[0]?.count)).toBe(22);
   });
 });

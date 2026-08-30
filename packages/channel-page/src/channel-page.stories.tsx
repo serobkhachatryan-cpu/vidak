@@ -145,7 +145,7 @@ export const ShortsTab: Story = {
 };
 
 export const PlaylistsTab: Story = {
-  args: { activeTab: 'playlists' },
+  args: { activeTab: 'playlists', tabs: ['videos', 'shorts', 'playlists', 'about'] },
 };
 
 export const AboutTab: Story = {
@@ -177,7 +177,12 @@ export const ShortsError: Story = {
 };
 
 export const PlaylistsError: Story = {
-  args: { activeTab: 'playlists', playlistsState: 'error', onRetryPlaylists: noop },
+  args: {
+    activeTab: 'playlists',
+    playlistsState: 'error',
+    onRetryPlaylists: noop,
+    tabs: ['videos', 'shorts', 'playlists', 'about'],
+  },
 };
 
 export const Loading: Story = {

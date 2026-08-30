@@ -8,7 +8,7 @@ import type {
   Video,
   VideoListFilters,
 } from '@w3ds/types';
-import { defaultUserPreferences, isPublicHandle, looksLikeTechnicalIdentifier } from '@w3ds/types';
+import { isPublicHandle, looksLikeTechnicalIdentifier, mergeUserPreferences } from '@w3ds/types';
 import { createCursorPage } from './pagination';
 
 export type ProductionGatewayFeature =
@@ -98,21 +98,7 @@ export function sessionLocalPreferences(
   stored: UserPreferences | undefined,
   patch?: UpdateUserPreferencesInput,
 ): UserPreferences {
-  const base = stored ?? defaultUserPreferences;
-  if (!patch) {
-    return {
-      appearance: base.appearance,
-      language: base.language,
-      notifications: { ...base.notifications },
-      privacy: { ...base.privacy },
-    };
-  }
-  return {
-    appearance: patch.appearance ?? base.appearance,
-    language: patch.language ?? base.language,
-    notifications: { ...base.notifications, ...patch.notifications },
-    privacy: { ...base.privacy, ...patch.privacy },
-  };
+  return mergeUserPreferences(stored, patch);
 }
 
 export function filterPublicVideos(

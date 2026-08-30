@@ -35,7 +35,18 @@ import type {
   VideoListFilters,
 } from '@w3ds/types';
 
+export interface VideoProductSurfaces {
+  comments: boolean;
+  playlists: boolean;
+  connectedAccounts: boolean;
+}
+
 export interface VideoApiClient {
+  /**
+   * Product surfaces this client actually backs.
+   * Omitted means available (development mock). Explicit `false` retires the UI.
+   */
+  readonly productSurfaces?: VideoProductSurfaces;
   getVideo(id: VideoId): Promise<Video | undefined>;
   listVideos(filters?: VideoListFilters, pagination?: PaginationParams): Promise<CursorPage<Video>>;
   listChannels(
@@ -144,4 +155,11 @@ export interface VideoApiClient {
    * to the client (mock store or upload-session cache). Never invents storage keys.
    */
   resolvePublicMediaContentPath(publicVideoId: string): Promise<string | undefined>;
+}
+
+export function videoProductSurfaceEnabled(
+  client: Pick<VideoApiClient, 'productSurfaces'>,
+  surface: keyof VideoProductSurfaces,
+): boolean {
+  return client.productSurfaces?.[surface] !== false;
 }

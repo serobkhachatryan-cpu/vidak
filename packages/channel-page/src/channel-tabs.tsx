@@ -5,6 +5,9 @@ export const channelTabOrder = ['videos', 'shorts', 'playlists', 'about'] as con
 
 export type ChannelTabId = (typeof channelTabOrder)[number];
 
+/** Product channel tabs. Playlists stay available in Storybook when explicitly passed. */
+export const channelCatalogueTabOrder = ['videos', 'shorts', 'about'] as const;
+
 export const channelTabLabels: Record<ChannelTabId, string> = {
   videos: 'Videos',
   shorts: 'Shorts',
@@ -28,20 +31,19 @@ export function ChannelTabs({
   scope,
   activeTab,
   onChange,
+  tabs = channelCatalogueTabOrder,
 }: {
   scope: string;
   activeTab: ChannelTabId;
   onChange: (tab: ChannelTabId) => void;
+  tabs?: readonly ChannelTabId[];
 }) {
   const listRef = useRef<HTMLDivElement>(null);
+  const visibleTabs = tabs.length > 0 ? tabs : channelCatalogueTabOrder;
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const nextIndex = tabIndexForKey(
-      event.key,
-      channelTabOrder.indexOf(activeTab),
-      channelTabOrder.length,
-    );
-    const nextTab = nextIndex === undefined ? undefined : channelTabOrder[nextIndex];
+    const nextIndex = tabIndexForKey(event.key, visibleTabs.indexOf(activeTab), visibleTabs.length);
+    const nextTab = nextIndex === undefined ? undefined : visibleTabs[nextIndex];
     if (!nextTab) return;
     event.preventDefault();
     onChange(nextTab);
@@ -56,7 +58,7 @@ export function ChannelTabs({
       onKeyDown={onKeyDown}
       className="flex gap-1 overflow-x-auto border-b border-border"
     >
-      {channelTabOrder.map((tab) => (
+      {visibleTabs.map((tab) => (
         <button
           key={tab}
           type="button"

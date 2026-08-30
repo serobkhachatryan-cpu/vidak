@@ -128,8 +128,10 @@ export function useInfinitePlaylists(
   client: VideoApiClient,
   filters: SearchFilters = {},
   pageSize = 20,
+  enabled = true,
 ) {
   return useInfiniteQuery({
+    enabled,
     queryKey: videoQueryKeys.playlists(filters),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>
@@ -182,8 +184,10 @@ export function useInfiniteVideoComments(
   videoId: VideoId,
   filters: CommentListFilters = {},
   pageSize = 20,
+  enabled = true,
 ) {
   return useInfiniteQuery({
+    enabled,
     queryKey: videoQueryKeys.comments(videoId, filters),
     initialPageParam: undefined as string | undefined,
     queryFn: ({ pageParam }) =>

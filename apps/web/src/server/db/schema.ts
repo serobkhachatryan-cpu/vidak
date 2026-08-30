@@ -1,6 +1,10 @@
 import type { AuthUserPermissions, Role } from '@w3ds/auth';
 import type {
+  AppearancePreference,
+  AppLanguage,
   ChannelImportProvider,
+  NotificationPreferences,
+  PrivacySettings,
   VideoCategory,
   VideoLanguage,
   VideoStatus,
@@ -35,6 +39,8 @@ export const w3dsPlatformUsers = pgTable('w3ds_platform_users', {
   >(),
   handle: text('handle'),
   avatarUrl: text('avatar_url'),
+  avatarStorageKey: text('avatar_storage_key'),
+  avatarContentType: text('avatar_content_type'),
   bio: text('bio'),
   roles: jsonb('roles').$type<Role[]>().notNull(),
   capabilities: jsonb('capabilities').$type<string[]>().notNull(),
@@ -271,6 +277,20 @@ export const w3dsPlatformSessions = pgTable(
     index('w3ds_platform_sessions_refresh_expires_idx').on(table.refreshExpiresAt),
   ],
 );
+
+/**
+ * Durable Settings preferences for a platform user. Never written to eVault.
+ */
+export const userPreferences = pgTable('user_preferences', {
+  userId: text('user_id')
+    .primaryKey()
+    .references(() => w3dsPlatformUsers.id, { onDelete: 'cascade' }),
+  appearance: text('appearance').$type<AppearancePreference>().notNull(),
+  language: text('language').$type<AppLanguage>().notNull(),
+  notifications: jsonb('notifications').$type<NotificationPreferences>().notNull(),
+  privacy: jsonb('privacy').$type<PrivacySettings>().notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
 
 /**
  * Durable intent + sync state for W3DS resource authorization grants.

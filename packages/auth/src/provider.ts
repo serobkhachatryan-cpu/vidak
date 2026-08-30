@@ -16,6 +16,7 @@ export const authProviderCapabilities = {
     changeEmail: true,
     deleteAccount: true,
     manageSessions: true,
+    connectExternalAccounts: true,
   },
   w3ds: {
     emailPasswordLogin: false,
@@ -25,6 +26,7 @@ export const authProviderCapabilities = {
     changeEmail: false,
     deleteAccount: false,
     manageSessions: true,
+    connectExternalAccounts: false,
   },
 } as const satisfies Record<AuthProviderId, AuthProviderCapabilities>;
 

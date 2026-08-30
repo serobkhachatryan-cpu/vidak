@@ -1,5 +1,7 @@
 import { createAuthUser } from '@w3ds/auth';
+import { maxAvatarFileSizeBytes } from '@w3ds/types';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { MediaStorage } from './media-storage';
 import {
   InMemoryW3dsAuthStore,
   RegistryW3dsIdentityVerifier,
@@ -17,7 +19,34 @@ const verifiedIdentity: VerifiedW3dsIdentity = {
   eVaultUri: 'https://evault.example/creator',
 };
 
-function createService(now = 1_780_000_000_000) {
+function createMemoryMediaStorage(): MediaStorage {
+  const objects = new Map<string, Uint8Array>();
+  return {
+    createStorageKey: () => crypto.randomUUID(),
+    async write(storageKey, data) {
+      objects.set(storageKey, new Uint8Array(data));
+    },
+    async read(storageKey) {
+      const data = objects.get(storageKey);
+      if (!data) throw new Error('Avatar bytes were not found.');
+      return data;
+    },
+    async openUpload() {
+      throw new Error('Upload sessions are not used for avatars.');
+    },
+    async openReadStream() {
+      throw new Error('Avatar reads are buffered.');
+    },
+    async delete(storageKey) {
+      objects.delete(storageKey);
+    },
+    async exists(storageKey) {
+      return objects.has(storageKey);
+    },
+  };
+}
+
+function createService(now = 1_780_000_000_000, mediaStorage?: MediaStorage) {
   const verifier: W3dsIdentityVerifier = {
     verify: vi.fn().mockImplementation(async ({ eName }: { eName: string }) => {
       if (eName === verifiedIdentity.eName) return verifiedIdentity;
@@ -44,6 +73,7 @@ function createService(now = 1_780_000_000_000) {
       store,
       identityVerifier: verifier,
       now: () => clock.value,
+      ...(mediaStorage ? { mediaStorage } : {}),
     }),
   };
 }
@@ -399,6 +429,64 @@ describe('W3dsAuthService', () => {
       code: 'validation_failed',
       status: 400,
     });
+  });
+
+  it('persists preference patches for the signed-in user', async () => {
+    const { service } = createService();
+    const accessToken = await completeLogin(service, '@creator.w3id');
+
+    await expect(service.getPreferences(accessToken)).resolves.toMatchObject({
+      appearance: 'system',
+      language: 'en',
+    });
+    const updated = await service.updatePreferences(accessToken, {
+      appearance: 'dark',
+      language: 'fr',
+      notifications: { emailMarketing: true },
+    });
+    expect(updated).toMatchObject({
+      appearance: 'dark',
+      language: 'fr',
+      notifications: { emailMarketing: true, emailProductUpdates: true },
+    });
+    await expect(service.getPreferences(accessToken)).resolves.toEqual(updated);
+    await expect(
+      service.updatePreferences(accessToken, { appearance: 'neon' as never }),
+    ).rejects.toMatchObject({
+      code: 'validation_failed',
+      status: 400,
+    });
+  });
+
+  it('stores avatar bytes and serves them from the public avatar path', async () => {
+    const { service } = createService(1_780_000_000_000, createMemoryMediaStorage());
+    const accessToken = await completeLogin(service, '@creator.w3id');
+    const bytes = new Uint8Array([137, 80, 78, 71]);
+
+    const user = await service.uploadAvatar(accessToken, {
+      bytes,
+      contentType: 'image/png',
+      filename: 'avatar.png',
+    });
+    expect(user.profile.avatarUrl).toBe(`/api/users/${user.id}/avatar`);
+    await expect(service.readPublicAvatar(user.id)).resolves.toEqual({
+      body: bytes,
+      contentType: 'image/png',
+    });
+    await expect(
+      service.uploadAvatar(accessToken, {
+        bytes: new Uint8Array([1]),
+        contentType: 'image/gif',
+        filename: 'avatar.gif',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed', status: 400 });
+    await expect(
+      service.uploadAvatar(accessToken, {
+        bytes: new Uint8Array(maxAvatarFileSizeBytes + 1),
+        contentType: 'image/png',
+        filename: 'huge.png',
+      }),
+    ).rejects.toMatchObject({ code: 'validation_failed', status: 400 });
   });
 
   it('lists only the caller sessions and rejects foreign or current revocation', async () => {

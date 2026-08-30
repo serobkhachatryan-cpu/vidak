@@ -114,6 +114,7 @@ describe('authentication utilities', () => {
       changeEmail: true,
       deleteAccount: true,
       manageSessions: true,
+      connectExternalAccounts: true,
     });
     expect(getAuthProviderCapabilities('w3ds')).toMatchObject({
       emailPasswordLogin: false,
@@ -123,6 +124,7 @@ describe('authentication utilities', () => {
       changeEmail: false,
       deleteAccount: false,
       manageSessions: true,
+      connectExternalAccounts: false,
     });
   });
 

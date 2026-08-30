@@ -92,6 +92,8 @@ export function settingsSectionsForCapabilities(
         return capabilities.deleteAccount;
       case 'sessions':
         return capabilities.manageSessions;
+      case 'connected':
+        return capabilities.connectExternalAccounts;
       default:
         return true;
     }

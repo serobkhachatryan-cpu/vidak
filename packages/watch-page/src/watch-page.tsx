@@ -1,7 +1,7 @@
 'use client';
 
 import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query';
-import { isPublicVideoId, type VideoApiClient } from '@w3ds/api-client';
+import { isPublicVideoId, type VideoApiClient, videoProductSurfaceEnabled } from '@w3ds/api-client';
 import { useInfiniteVideoComments, usePublicVideo, useVideo, videoQueryKeys } from '@w3ds/hooks';
 import type {
   Channel,
@@ -101,7 +101,7 @@ export interface WatchPageProps {
     >
   >;
   commentReplies?: Readonly<Record<CommentId, readonly Comment[] | undefined>>;
-  commentsState?: 'ready' | 'loading' | 'empty' | 'error';
+  commentsState?: 'ready' | 'loading' | 'empty' | 'error' | 'unavailable';
   commentSort?: CommentSort;
   onCommentSortChange?: (sort: CommentSort) => void;
   onLoadMoreComments?: () => void;
@@ -659,9 +659,11 @@ function WatchContent({
           <Button variant="secondary" size="sm" onClick={actions?.onShare}>
             <span aria-hidden="true">↗</span> Share
           </Button>
-          <Button variant="secondary" size="sm" onClick={actions?.onSave}>
-            <span aria-hidden="true">＋</span> Save
-          </Button>
+          {actions?.onSave ? (
+            <Button variant="secondary" size="sm" onClick={actions.onSave}>
+              <span aria-hidden="true">＋</span> Save
+            </Button>
+          ) : null}
         </fieldset>
 
         <section aria-label="Video description" className="rounded-lg bg-surface-raised p-4">
@@ -686,7 +688,7 @@ function WatchContent({
           authors={commentAuthors}
           repliesByParent={commentReplies}
           state={commentsState}
-          totalCount={video.commentCount}
+          {...(commentsState === 'unavailable' ? {} : { totalCount: video.commentCount })}
           sort={commentSort ?? 'top'}
           onSortChange={onCommentSortChange}
           onSubmit={actions?.onComment}
@@ -826,10 +828,17 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
     }),
     [client, queryClient, publicVideoId],
   );
+  const commentsEnabled = videoProductSurfaceEnabled(client, 'comments');
   const [commentSort, setCommentSort] = useState<CommentSort>('top');
   const [expandedCommentIds, setExpandedCommentIds] = useState<readonly CommentId[]>([]);
   const commentVideoId = video?.id ?? videoId;
-  const commentsQuery = useInfiniteVideoComments(client, commentVideoId, { sort: commentSort }, 10);
+  const commentsQuery = useInfiniteVideoComments(
+    client,
+    commentVideoId,
+    { sort: commentSort },
+    10,
+    commentsEnabled,
+  );
   const comments = commentsQuery.data?.pages.flatMap((page) => page.items) ?? [];
   const replyQueries = useQueries({
     queries: expandedCommentIds.map((parentId) => ({
@@ -906,32 +915,42 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
       onRetryComments={() => void commentsQuery.refetch()}
       actions={{
         ...props.actions,
-        onComment: async (body, richText) => {
-          await client.createComment(commentVideoId, { body, richText });
-          await commentsQuery.refetch();
-          await props.actions?.onComment?.(body, richText);
-        },
-        onReply: async (comment, body, richText) => {
-          await client.createComment(commentVideoId, {
-            body,
-            richText,
-            parentId: comment.id,
-          });
-          await props.actions?.onReply?.(comment, body, richText);
-        },
-        onCommentReaction: (comment, reaction) => {
-          void client.reactToComment(comment.id, reaction);
-          props.actions?.onCommentReaction?.(comment, reaction);
-        },
+        ...(commentsEnabled
+          ? {
+              onComment: async (body: string, richText: readonly CommentRichText[]) => {
+                await client.createComment(commentVideoId, { body, richText });
+                await commentsQuery.refetch();
+                await props.actions?.onComment?.(body, richText);
+              },
+              onReply: async (
+                comment: Comment,
+                body: string,
+                richText: readonly CommentRichText[],
+              ) => {
+                await client.createComment(commentVideoId, {
+                  body,
+                  richText,
+                  parentId: comment.id,
+                });
+                await props.actions?.onReply?.(comment, body, richText);
+              },
+              onCommentReaction: (comment: Comment, reaction: CommentReaction | undefined) => {
+                void client.reactToComment(comment.id, reaction);
+                props.actions?.onCommentReaction?.(comment, reaction);
+              },
+            }
+          : {}),
       }}
       commentsState={
-        commentsQuery.isPending
-          ? 'loading'
-          : commentsQuery.error
-            ? 'error'
-            : comments.length > 0
-              ? 'ready'
-              : 'empty'
+        commentsEnabled
+          ? commentsQuery.isPending
+            ? 'loading'
+            : commentsQuery.error
+              ? 'error'
+              : comments.length > 0
+                ? 'ready'
+                : 'empty'
+          : 'unavailable'
       }
       state={videoQueryPending ? 'loading' : videoQueryError ? 'error' : video ? 'ready' : 'empty'}
       {...(videoQueryError ? { onRetry: () => void refetchVideo() } : {})}

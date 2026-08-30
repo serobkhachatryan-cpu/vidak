@@ -430,7 +430,7 @@ export function CommentList({
   );
 }
 
-export type CommentsState = 'ready' | 'loading' | 'empty' | 'error';
+export type CommentsState = 'ready' | 'loading' | 'empty' | 'error' | 'unavailable';
 
 export interface CommentsProps extends CommentListProps {
   state?: CommentsState;
@@ -463,22 +463,26 @@ export function Comments({
             Comments{totalCount === undefined ? '' : ` (${compactNumber.format(totalCount)})`}
           </h2>
           <Text size="xs" tone="muted" className="mt-1">
-            Use arrow keys to move between comments.
+            {state === 'unavailable'
+              ? 'Commenting is not part of this Vidak release.'
+              : 'Use arrow keys to move between comments.'}
           </Text>
         </div>
-        <label className="flex items-center gap-2 font-sans text-sm text-foreground">
-          Sort by
-          <select
-            value={sort}
-            onChange={(event) => onSortChange?.(event.target.value as CommentSort)}
-            className="h-9 rounded-md border border-border bg-surface px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
-          >
-            <option value="top">Top</option>
-            <option value="newest">Newest</option>
-          </select>
-        </label>
+        {state !== 'unavailable' && (
+          <label className="flex items-center gap-2 font-sans text-sm text-foreground">
+            Sort by
+            <select
+              value={sort}
+              onChange={(event) => onSortChange?.(event.target.value as CommentSort)}
+              className="h-9 rounded-md border border-border bg-surface px-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+            >
+              <option value="top">Top</option>
+              <option value="newest">Newest</option>
+            </select>
+          </label>
+        )}
       </div>
-      {onSubmit && <CommentEditor onSubmit={onSubmit} />}
+      {state !== 'unavailable' && onSubmit && <CommentEditor onSubmit={onSubmit} />}
       {state === 'loading' ? (
         <CommentListSkeleton />
       ) : state === 'error' ? (
@@ -486,6 +490,12 @@ export function Comments({
           title="Could not load comments"
           description="Please try again."
           retry={onRetry}
+        />
+      ) : state === 'unavailable' ? (
+        <EmptyState
+          icon="◌"
+          title="Comments are not available yet"
+          description="You can still watch and share this video. Commenting will return when a durable comments service is ready."
         />
       ) : state === 'empty' ? (
         <EmptyState icon="◌" title="No comments yet" description="Start the conversation." />

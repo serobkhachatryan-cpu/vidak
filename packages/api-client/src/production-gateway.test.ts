@@ -88,7 +88,7 @@ describe('production gateway helpers', () => {
     expect(emptyCursorPage().items).toEqual([]);
   });
 
-  it('keeps preferences session-local without a mock user catalogue', () => {
+  it('merges preference patches without inventing mock catalogue rows', () => {
     const next = sessionLocalPreferences(undefined, { appearance: 'dark' });
     expect(next.appearance).toBe('dark');
     expect(next.language).toBe('en');

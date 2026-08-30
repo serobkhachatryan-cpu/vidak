@@ -9,6 +9,7 @@ import type {
   UserPreferences,
   UserProfileId,
 } from '@w3ds/types';
+import { mergeUserPreferences as mergeUserPreferencesFromTypes } from '@w3ds/types';
 import { videoQueryKeys } from './video-queries';
 
 export const settingsQueryKeys = {
@@ -23,12 +24,7 @@ export function mergeUserPreferences(
   previous: UserPreferences,
   input: UpdateUserPreferencesInput,
 ): UserPreferences {
-  return {
-    appearance: input.appearance ?? previous.appearance,
-    language: input.language ?? previous.language,
-    notifications: { ...previous.notifications, ...input.notifications },
-    privacy: { ...previous.privacy, ...input.privacy },
-  };
+  return mergeUserPreferencesFromTypes(previous, input);
 }
 
 export function useUserPreferences(

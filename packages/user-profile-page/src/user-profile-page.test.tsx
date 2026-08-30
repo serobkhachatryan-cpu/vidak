@@ -127,14 +127,8 @@ describe('UserProfilePage', () => {
     const tabs = readTabs(markup);
 
     expect(markup).toContain('aria-label="Profile sections"');
-    expect(tabs.map((tab) => tab.label)).toEqual([
-      'Videos',
-      'Playlists',
-      'About',
-      'Videos',
-      'Playlists',
-      'About',
-    ]);
+    expect(tabs.map((tab) => tab.label)).toEqual(['Videos', 'About', 'Videos', 'About']);
+    expect(markup).not.toContain('>Playlists<');
     expect(new Set(tabs.map((tab) => tab.id)).size).toBe(tabs.length);
     expect(new Set(tabs.map((tab) => tab.controls)).size).toBe(tabs.length);
 
@@ -180,6 +174,7 @@ describe('UserProfilePage', () => {
         profile={profile}
         playlists={[playlist, placeholderPlaylist]}
         activeTab="playlists"
+        tabs={['videos', 'playlists', 'about']}
       />,
     );
     expect(playlistsMarkup).toContain('href="/playlist/playlist-foundations"');
@@ -233,12 +228,22 @@ describe('UserProfilePage', () => {
 
     expect(
       renderToStaticMarkup(
-        <UserProfilePage profile={profile} activeTab="playlists" playlistsState="loading" />,
+        <UserProfilePage
+          profile={profile}
+          activeTab="playlists"
+          playlistsState="loading"
+          tabs={['videos', 'playlists', 'about']}
+        />,
       ),
     ).toContain('aria-label="Loading playlists"');
     expect(
       renderToStaticMarkup(
-        <UserProfilePage profile={profile} activeTab="playlists" playlists={[]} />,
+        <UserProfilePage
+          profile={profile}
+          activeTab="playlists"
+          playlists={[]}
+          tabs={['videos', 'playlists', 'about']}
+        />,
       ),
     ).toContain('No playlists yet');
     expect(
@@ -248,6 +253,7 @@ describe('UserProfilePage', () => {
           activeTab="playlists"
           playlistsState="error"
           onRetryPlaylists={() => undefined}
+          tabs={['videos', 'playlists', 'about']}
         />,
       ),
     ).toContain('Could not load playlists');

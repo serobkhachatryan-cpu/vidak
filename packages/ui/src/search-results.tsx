@@ -9,15 +9,22 @@ export const searchResultLabels: Record<SearchResultType, string> = {
   playlists: 'Playlists',
 };
 
+export const defaultSearchResultTypes: readonly SearchResultType[] = ['videos', 'channels'];
+
 export interface SearchFiltersProps {
   value: SearchResultType;
   onChange: (value: SearchResultType) => void;
+  types?: readonly SearchResultType[];
 }
 
-export function SearchFilters({ value, onChange }: SearchFiltersProps) {
+export function SearchFilters({
+  value,
+  onChange,
+  types = defaultSearchResultTypes,
+}: SearchFiltersProps) {
   return (
     <div role="tablist" aria-label="Result type" className="flex gap-2 overflow-x-auto pb-1">
-      {(Object.keys(searchResultLabels) as SearchResultType[]).map((type) => (
+      {types.map((type) => (
         <button
           key={type}
           type="button"

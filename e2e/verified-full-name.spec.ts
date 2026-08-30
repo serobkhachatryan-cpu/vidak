@@ -53,15 +53,14 @@ test('verified-name import is an explicit Profile action', async ({ page }) => {
   await expect.poll(() => pathnameOf(page.url())).toBe('/settings');
   await expectNoVerifiedNameOverlay(page);
 
-  const headerCta = page.getByRole('link', { name: 'Use verified name from eID' });
-  await expect(headerCta).toBeVisible();
-  await expect(headerCta).toHaveAttribute('href', '/settings?section=profile');
-
-  await page.goto('/settings?section=profile');
+  await page.getByRole('link', { name: 'Use verified name from eID' }).click();
+  await expect.poll(() => page.url()).toContain('/settings?section=profile');
   await expectNoVerifiedNameOverlay(page);
+  await expect(page.getByRole('tab', { name: 'Profile' })).toHaveAttribute('aria-selected', 'true');
   const profileAction = page.getByRole('button', { name: 'Use verified name from eID' });
   await expect(profileAction).toBeVisible();
   await expect(page.getByText(/will not overwrite a name you already chose/i)).toBeVisible();
+  await expect(page.getByLabel('Display name')).toBeVisible();
 
   await profileAction.click();
   await expect(page.getByRole('button', { name: 'Ada Lovelace' })).toBeVisible();

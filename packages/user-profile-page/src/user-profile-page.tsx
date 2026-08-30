@@ -20,6 +20,7 @@ import { LoadingRegion, skeletonKeys, type UserProfileSectionState } from './use
 import {
   type UserProfileTabId,
   UserProfileTabs,
+  userProfileCatalogueTabOrder,
   userProfilePanelId,
   userProfileTabId,
 } from './user-profile-tabs';
@@ -39,6 +40,7 @@ export interface UserProfilePageProps {
   playlistsState?: UserProfileSectionState;
   activeTab?: UserProfileTabId;
   defaultTab?: UserProfileTabId;
+  tabs?: readonly UserProfileTabId[];
   onTabChange?: (tab: UserProfileTabId) => void;
   following?: boolean;
   defaultFollowing?: boolean;
@@ -99,6 +101,7 @@ export function UserProfilePage({
   playlistsState = 'ready',
   activeTab,
   defaultTab = 'videos',
+  tabs = userProfileCatalogueTabOrder,
   onTabChange,
   following,
   defaultFollowing = false,
@@ -119,7 +122,8 @@ export function UserProfilePage({
   const scope = useId();
   const [selectedTab, setSelectedTab] = useState<UserProfileTabId>(defaultTab);
   const [ownFollowing, setOwnFollowing] = useState(defaultFollowing);
-  const currentTab = activeTab ?? selectedTab;
+  const currentTab =
+    (tabs.includes(activeTab ?? selectedTab) ? (activeTab ?? selectedTab) : tabs[0]) ?? 'videos';
   const isFollowing = following ?? ownFollowing;
 
   const changeTab = (tab: UserProfileTabId) => {
@@ -186,7 +190,7 @@ export function UserProfilePage({
           onFollowToggle={toggleFollowing}
           onShare={shareProfile}
         />
-        <UserProfileTabs scope={scope} activeTab={currentTab} onChange={changeTab} />
+        <UserProfileTabs scope={scope} activeTab={currentTab} onChange={changeTab} tabs={tabs} />
         <div
           role="tabpanel"
           id={userProfilePanelId(scope, currentTab)}

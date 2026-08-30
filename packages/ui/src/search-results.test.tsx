@@ -40,6 +40,9 @@ describe('search result UI', () => {
 
     expect(markup).toContain('role="tablist"');
     expect(markup).toContain('aria-selected="true"');
+    expect(markup).toContain('Videos');
+    expect(markup).toContain('Channels');
+    expect(markup).not.toContain('Playlists');
     expect(markup).toContain('Sort by');
   });
 

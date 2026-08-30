@@ -1,7 +1,14 @@
 import { type AuthUser, type AuthUserPermissions, createAuthUser, type Role } from '@w3ds/auth';
+import type { UserPreferences } from '@w3ds/types';
+import { mergeUserPreferences } from '@w3ds/types';
 import { and, eq, gt, inArray } from 'drizzle-orm';
 import type { W3dsDatabase } from './db/client';
-import { w3dsLoginOffers, w3dsPlatformSessions, w3dsPlatformUsers } from './db/schema';
+import {
+  userPreferences,
+  w3dsLoginOffers,
+  w3dsPlatformSessions,
+  w3dsPlatformUsers,
+} from './db/schema';
 import { W3dsAuthError } from './w3ds-auth-errors';
 
 export type OfferStatus = 'pending' | 'verifying' | 'completed' | 'expired' | 'failed';
@@ -28,6 +35,11 @@ export interface StoredPlatformSession {
 }
 
 export type VerifiedFullNameDecision = 'granted' | 'declined';
+
+export interface StoredAvatarMedia {
+  storageKey: string;
+  contentType: string;
+}
 
 export interface UpdateUserProfileRecordInput {
   userId: string;
@@ -87,6 +99,13 @@ export interface W3dsAuthStore {
   updateUserProfile(input: UpdateUserProfileRecordInput): Promise<AuthUser>;
   getVerifiedFullNameDecision(userId: string): Promise<VerifiedFullNameDecision | undefined>;
   setVerifiedFullNameDecision(userId: string, decision: VerifiedFullNameDecision): Promise<void>;
+  getUserPreferences(userId: string): Promise<UserPreferences | undefined>;
+  upsertUserPreferences(userId: string, preferences: UserPreferences): Promise<UserPreferences>;
+  getAvatarMedia(userId: string): Promise<StoredAvatarMedia | undefined>;
+  setAvatarMedia(
+    userId: string,
+    media: StoredAvatarMedia & { avatarUrl: string },
+  ): Promise<AuthUser>;
 
   createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession>;
   getSessionById(sessionId: string): Promise<StoredPlatformSession | undefined>;
@@ -164,6 +183,8 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
   private readonly usersById = new Map<string, AuthUser>();
   private readonly sessionsById = new Map<string, StoredPlatformSession>();
   private readonly verifiedFullNameDecisions = new Map<string, VerifiedFullNameDecision>();
+  private readonly preferencesByUserId = new Map<string, UserPreferences>();
+  private readonly avatarMediaByUserId = new Map<string, StoredAvatarMedia>();
   /** Serializes claim operations to emulate atomic DB updates in tests. */
   private claimChain: Promise<unknown> = Promise.resolve();
 
@@ -297,6 +318,44 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     this.verifiedFullNameDecisions.set(userId, decision);
   }
 
+  async getUserPreferences(userId: string): Promise<UserPreferences | undefined> {
+    const stored = this.preferencesByUserId.get(userId);
+    return stored ? mergeUserPreferences(stored) : undefined;
+  }
+
+  async upsertUserPreferences(
+    userId: string,
+    preferences: UserPreferences,
+  ): Promise<UserPreferences> {
+    const next = mergeUserPreferences(preferences);
+    this.preferencesByUserId.set(userId, next);
+    return mergeUserPreferences(next);
+  }
+
+  async getAvatarMedia(userId: string): Promise<StoredAvatarMedia | undefined> {
+    const media = this.avatarMediaByUserId.get(userId);
+    return media ? { ...media } : undefined;
+  }
+
+  async setAvatarMedia(
+    userId: string,
+    media: StoredAvatarMedia & { avatarUrl: string },
+  ): Promise<AuthUser> {
+    this.avatarMediaByUserId.set(userId, {
+      storageKey: media.storageKey,
+      contentType: media.contentType,
+    });
+    const existing = this.usersById.get(userId);
+    if (!existing) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+    return this.updateUserProfile({
+      userId,
+      displayName: existing.displayName,
+      avatarUrl: media.avatarUrl,
+    });
+  }
+
   async createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession> {
     const now = Date.now();
     const session: StoredPlatformSession = {
@@ -356,12 +415,23 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     users: AuthUser[];
     sessions: StoredPlatformSession[];
     verifiedFullNameDecisions: Record<string, VerifiedFullNameDecision>;
+    preferences: Record<string, UserPreferences>;
+    avatarMedia: Record<string, StoredAvatarMedia>;
   } {
     return {
       offers: [...this.offersById.values()].map((offer) => ({ ...offer })),
       users: [...this.usersById.values()].map(cloneUser),
       sessions: [...this.sessionsById.values()].map(cloneSession),
       verifiedFullNameDecisions: Object.fromEntries(this.verifiedFullNameDecisions),
+      preferences: Object.fromEntries(
+        [...this.preferencesByUserId.entries()].map(([id, value]) => [
+          id,
+          mergeUserPreferences(value),
+        ]),
+      ),
+      avatarMedia: Object.fromEntries(
+        [...this.avatarMediaByUserId.entries()].map(([id, value]) => [id, { ...value }]),
+      ),
     };
   }
 
@@ -371,6 +441,8 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     users: AuthUser[];
     sessions: StoredPlatformSession[];
     verifiedFullNameDecisions?: Record<string, VerifiedFullNameDecision>;
+    preferences?: Record<string, UserPreferences>;
+    avatarMedia?: Record<string, StoredAvatarMedia>;
   }): void {
     this.offersById.clear();
     this.offersBySessionId.clear();
@@ -378,6 +450,8 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     this.usersById.clear();
     this.sessionsById.clear();
     this.verifiedFullNameDecisions.clear();
+    this.preferencesByUserId.clear();
+    this.avatarMediaByUserId.clear();
     for (const offer of snapshot.offers) {
       const copy = { ...offer };
       this.offersById.set(copy.id, copy);
@@ -393,6 +467,12 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
     }
     for (const [userId, decision] of Object.entries(snapshot.verifiedFullNameDecisions ?? {})) {
       this.verifiedFullNameDecisions.set(userId, decision);
+    }
+    for (const [userId, value] of Object.entries(snapshot.preferences ?? {})) {
+      this.preferencesByUserId.set(userId, mergeUserPreferences(value));
+    }
+    for (const [userId, media] of Object.entries(snapshot.avatarMedia ?? {})) {
+      this.avatarMediaByUserId.set(userId, { ...media });
     }
   }
 }
@@ -615,6 +695,88 @@ export class PostgresW3dsAuthStore implements W3dsAuthStore {
     if (!row) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     }
+  }
+
+  async getUserPreferences(userId: string): Promise<UserPreferences | undefined> {
+    const [row] = await this.db
+      .select()
+      .from(userPreferences)
+      .where(eq(userPreferences.userId, userId))
+      .limit(1);
+    if (!row) return undefined;
+    return mergeUserPreferences({
+      appearance: row.appearance,
+      language: row.language,
+      notifications: row.notifications,
+      privacy: row.privacy,
+    });
+  }
+
+  async upsertUserPreferences(
+    userId: string,
+    preferences: UserPreferences,
+  ): Promise<UserPreferences> {
+    const now = new Date();
+    const next = mergeUserPreferences(preferences);
+    await this.db
+      .insert(userPreferences)
+      .values({
+        userId,
+        appearance: next.appearance,
+        language: next.language,
+        notifications: next.notifications,
+        privacy: next.privacy,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: userPreferences.userId,
+        set: {
+          appearance: next.appearance,
+          language: next.language,
+          notifications: next.notifications,
+          privacy: next.privacy,
+          updatedAt: now,
+        },
+      });
+    return next;
+  }
+
+  async getAvatarMedia(userId: string): Promise<StoredAvatarMedia | undefined> {
+    const [row] = await this.db
+      .select({
+        storageKey: w3dsPlatformUsers.avatarStorageKey,
+        contentType: w3dsPlatformUsers.avatarContentType,
+      })
+      .from(w3dsPlatformUsers)
+      .where(eq(w3dsPlatformUsers.id, userId))
+      .limit(1);
+    if (!row?.storageKey || !row.contentType) return undefined;
+    return { storageKey: row.storageKey, contentType: row.contentType };
+  }
+
+  async setAvatarMedia(
+    userId: string,
+    media: StoredAvatarMedia & { avatarUrl: string },
+  ): Promise<AuthUser> {
+    const existing = await this.findUserById(userId);
+    if (!existing) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+    const now = new Date();
+    const [row] = await this.db
+      .update(w3dsPlatformUsers)
+      .set({
+        avatarUrl: media.avatarUrl,
+        avatarStorageKey: media.storageKey,
+        avatarContentType: media.contentType,
+        updatedAt: now,
+      })
+      .where(eq(w3dsPlatformUsers.id, userId))
+      .returning();
+    if (!row) {
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    }
+    return toAuthUser(row);
   }
 
   async createSession(input: CreateSessionRecordInput): Promise<StoredPlatformSession> {

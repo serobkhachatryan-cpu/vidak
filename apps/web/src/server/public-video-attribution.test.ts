@@ -50,6 +50,27 @@ describe('public channel attribution and view counting', () => {
 
     const listed = await service.listPublicVideos();
     expect(listed.items[0]?.channel?.name).toBe('Ada Lovelace');
+
+    const channels = await service.listPublicChannels({ query: 'Ada' });
+    expect(channels.items).toEqual([
+      expect.objectContaining({ name: 'Ada Lovelace', handle: 'ada' }),
+    ]);
+  });
+
+  it('omits channels that only have unpublished drafts from public discovery', async () => {
+    const store = new InMemoryCreatorVideoStore();
+    let sequence = 0;
+    const service = new CreatorVideoService({
+      store,
+      resolveUser: async () => owner,
+      createId: () => `id-${++sequence}`,
+    });
+
+    await service.createDraft('token', {
+      title: 'Unpublished draft',
+      visibility: 'public',
+    });
+    await expect(service.listPublicChannels()).resolves.toEqual({ items: [] });
   });
 
   it('never publishes UUID, eName, or local-id channel labels', async () => {

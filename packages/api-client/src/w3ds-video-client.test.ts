@@ -80,14 +80,39 @@ class FakeXMLHttpRequest {
 describe('W3dsVideoApiClient', () => {
   it('loads the signed-in profile from /api/auth/me instead of a mock catalogue', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      expect(String(input)).toContain('/api/auth/me');
-      return jsonResponse({
-        id: 'w3ds_first-load-user',
-        displayName: 'New Vidak member',
-        eName: '@ada.w3id',
-        eVaultId: 'evault-ada',
-        profile: { displayName: 'New Vidak member' },
-      });
+      const url = String(input);
+      if (url.includes('/api/auth/me')) {
+        return jsonResponse({
+          id: 'w3ds_first-load-user',
+          displayName: 'New Vidak member',
+          eName: '@ada.w3id',
+          eVaultId: 'evault-ada',
+          profile: { displayName: 'New Vidak member' },
+        });
+      }
+      if (url.includes('/api/auth/preferences')) {
+        return jsonResponse({
+          appearance: 'system',
+          language: 'en',
+          notifications: {
+            emailMarketing: false,
+            emailProductUpdates: true,
+            emailComments: true,
+            emailMentions: true,
+            pushComments: true,
+            pushMentions: true,
+            pushSubscriptions: true,
+          },
+          privacy: {
+            showActivityStatus: true,
+            allowMentions: true,
+            showSubscriptions: true,
+            personalizedRecommendations: true,
+            searchableByEmail: false,
+          },
+        });
+      }
+      throw new Error(`unexpected ${url}`);
     });
     const client = new W3dsVideoApiClient({ fetch: fetchMock });
     const userId = 'w3ds_first-load-user';
@@ -117,12 +142,11 @@ describe('W3dsVideoApiClient', () => {
     await expect(client.getUserProfile('w3ds_someone-else')).resolves.toBeUndefined();
   });
 
-  it('returns empty comments and search channels instead of mock catalogue rows', async () => {
+  it('returns empty comments instead of mock catalogue rows', async () => {
     const client = new W3dsVideoApiClient({
       fetch: async () => jsonResponse({ items: [], nextCursor: undefined }),
     });
     await expect(client.listComments('video-1')).resolves.toEqual({ items: [] });
-    await expect(client.listChannels()).resolves.toEqual({ items: [] });
     await expect(client.listPlaylists()).resolves.toEqual({ items: [] });
     await expect(client.createComment('video-1', { body: 'Hi' })).rejects.toMatchObject({
       code: 'feature_unavailable',
@@ -591,6 +615,120 @@ describe('W3dsVideoApiClient', () => {
     });
     await expect(client.getChannel('missing')).resolves.toBeUndefined();
     expect(String(fetchMock.mock.calls[0]?.[0])).toContain('/api/channels/public/channel-real');
+  });
+
+  it('lists public channels from the platform discovery route', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain('/api/channels/public?q=Ada');
+      return jsonResponse({
+        items: [
+          {
+            id: 'channel-ada',
+            ownerId: 'user-ada',
+            handle: 'ada',
+            name: 'Ada Lovelace',
+            subscriberCount: 2,
+            videoCount: 1,
+            createdAt: '2026-08-01T00:00:00.000Z',
+          },
+        ],
+      });
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    const page = await client.listChannels({ query: 'Ada' });
+    expect(page.items).toEqual([
+      expect.objectContaining({ id: 'channel-ada', name: 'Ada Lovelace' }),
+    ]);
+  });
+
+  it('loads and patches preferences through the auth preferences route', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.endsWith('/api/auth/preferences') && (!init?.method || init.method === 'GET')) {
+        return jsonResponse({
+          appearance: 'system',
+          language: 'en',
+          notifications: {
+            emailMarketing: false,
+            emailProductUpdates: true,
+            emailComments: true,
+            emailMentions: true,
+            pushComments: true,
+            pushMentions: true,
+            pushSubscriptions: true,
+          },
+          privacy: {
+            showActivityStatus: true,
+            allowMentions: true,
+            showSubscriptions: true,
+            personalizedRecommendations: true,
+            searchableByEmail: false,
+          },
+        });
+      }
+      if (url.endsWith('/api/auth/preferences') && init?.method === 'PATCH') {
+        const body = JSON.parse(String(init.body)) as { appearance?: string };
+        expect(body.appearance).toBe('dark');
+        return jsonResponse({
+          appearance: 'dark',
+          language: 'en',
+          notifications: {
+            emailMarketing: false,
+            emailProductUpdates: true,
+            emailComments: true,
+            emailMentions: true,
+            pushComments: true,
+            pushMentions: true,
+            pushSubscriptions: true,
+          },
+          privacy: {
+            showActivityStatus: true,
+            allowMentions: true,
+            showSubscriptions: true,
+            personalizedRecommendations: true,
+            searchableByEmail: false,
+          },
+        });
+      }
+      throw new Error(`unexpected ${url}`);
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    await expect(client.getUserPreferences('user-1')).resolves.toMatchObject({
+      appearance: 'system',
+    });
+    await expect(
+      client.updateUserPreferences('user-1', { appearance: 'dark' }),
+    ).resolves.toMatchObject({
+      appearance: 'dark',
+    });
+  });
+
+  it('uploads avatar bytes as multipart form data', async () => {
+    const file = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toContain('/api/auth/avatar');
+      expect(init?.method).toBe('POST');
+      expect(init?.body).toBeInstanceOf(FormData);
+      return jsonResponse({
+        id: 'user-1',
+        displayName: 'Ada Lovelace',
+        avatarUrl: '/api/users/user-1/avatar',
+        profile: { displayName: 'Ada Lovelace', avatarUrl: '/api/users/user-1/avatar' },
+      });
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    await expect(
+      client.uploadUserAvatar('user-1', {
+        name: 'avatar.png',
+        size: 3,
+        type: 'image/png',
+        previewUrl: 'blob:preview',
+        file,
+      }),
+    ).resolves.toMatchObject({
+      id: 'user-1',
+      avatarUrl: '/api/users/user-1/avatar',
+    });
   });
 
   it('records a public view through the anonymous views route', async () => {

@@ -92,6 +92,7 @@ export {
 export type { SearchFiltersProps, SearchSortControlProps } from './search-results';
 export {
   ChannelSearchResult,
+  defaultSearchResultTypes,
   PlaylistSearchResult,
   SearchFilters,
   SearchResultSkeleton,

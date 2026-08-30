@@ -52,6 +52,16 @@ describe('Comments', () => {
     expect(renderToStaticMarkup(<Comments state="error" comments={[]} />)).toContain(
       'Could not load comments',
     );
+    expect(
+      renderToStaticMarkup(
+        <Comments state="unavailable" comments={[]} onSubmit={() => undefined} />,
+      ),
+    ).toContain('Comments are not available yet');
+    expect(
+      renderToStaticMarkup(
+        <Comments state="unavailable" comments={[]} onSubmit={() => undefined} />,
+      ),
+    ).not.toContain('role="textbox"');
   });
 
   it('renders a keyboard-accessible rich text editor', () => {

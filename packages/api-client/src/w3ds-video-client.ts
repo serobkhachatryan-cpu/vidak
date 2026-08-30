@@ -45,7 +45,6 @@ import {
   emptyCursorPage,
   filterPublicVideos,
   ProductionFeatureUnavailableError,
-  sessionLocalPreferences,
   unavailableFeature,
   userProfileFromAuthUser,
 } from './production-gateway';
@@ -83,13 +82,16 @@ interface ApiErrorBody {
  * {@link ProductionFeatureUnavailableError} — never mock catalogue data.
  */
 export class W3dsVideoApiClient implements VideoApiClient {
+  readonly productSurfaces = {
+    comments: false,
+    playlists: false,
+    connectedAccounts: false,
+  } as const;
   private readonly baseUrl: string;
   private readonly configuredFetch: typeof fetch | undefined;
   private readonly createXHR: () => XMLHttpRequest;
   /** Upload-session cache: internal video id → latest ready asset id. */
   private readonly readyAssetByVideoId = new Map<string, string>();
-  /** Session-local preferences until a durable settings API exists. */
-  private readonly localPreferences = new Map<string, UserPreferences>();
 
   constructor(options: W3dsVideoApiClientOptions = {}) {
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? '');
@@ -118,10 +120,15 @@ export class W3dsVideoApiClient implements VideoApiClient {
   }
 
   listChannels(
-    _filters?: SearchFilters,
-    _pagination?: PaginationParams,
+    filters?: SearchFilters,
+    pagination?: PaginationParams,
   ): Promise<CursorPage<Channel>> {
-    return Promise.resolve(emptyCursorPage());
+    const params = new URLSearchParams();
+    if (filters?.query?.trim()) params.set('q', filters.query.trim());
+    if (pagination?.cursor) params.set('cursor', pagination.cursor);
+    if (pagination?.limit !== undefined) params.set('limit', String(pagination.limit));
+    const query = params.toString();
+    return this.requestJson<CursorPage<Channel>>(`/api/channels/public${query ? `?${query}` : ''}`);
   }
 
   async getChannel(id: ChannelId): Promise<Channel | undefined> {
@@ -202,21 +209,37 @@ export class W3dsVideoApiClient implements VideoApiClient {
     };
   }
 
-  uploadUserAvatar(_id: UserProfileId, _input: UploadAvatarInput): Promise<UserProfile> {
-    return unavailableFeature('avatar', 'Avatar uploads are not available yet.');
+  uploadUserAvatar(id: UserProfileId, input: UploadAvatarInput): Promise<UserProfile> {
+    if (!input.file) {
+      return unavailableFeature('avatar', 'Avatar image bytes are required.');
+    }
+    const body = new FormData();
+    body.append('file', input.file, input.name);
+    return this.requestJson<Parameters<typeof userProfileFromAuthUser>[0]>('/api/auth/avatar', {
+      method: 'POST',
+      body,
+    }).then((user) => {
+      const profile = userProfileFromAuthUser(user, id);
+      if (!profile) {
+        throw new Error('Avatar upload did not return the signed-in profile.');
+      }
+      return profile;
+    });
   }
 
-  getUserPreferences(id: UserProfileId): Promise<UserPreferences> {
-    return Promise.resolve(sessionLocalPreferences(this.localPreferences.get(id)));
+  getUserPreferences(_id: UserProfileId): Promise<UserPreferences> {
+    return this.requestJson<UserPreferences>('/api/auth/preferences');
   }
 
   updateUserPreferences(
-    id: UserProfileId,
+    _id: UserProfileId,
     input: UpdateUserPreferencesInput,
   ): Promise<UserPreferences> {
-    const next = sessionLocalPreferences(this.localPreferences.get(id), input);
-    this.localPreferences.set(id, next);
-    return Promise.resolve(next);
+    return this.requestJson<UserPreferences>('/api/auth/preferences', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
   }
 
   listConnectedAccounts(_id: UserProfileId): Promise<readonly ConnectedAccount[]> {
