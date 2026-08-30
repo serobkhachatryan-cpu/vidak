@@ -6,6 +6,7 @@ import {
   ownedItemsForTab,
   previewFallbackCopy,
   shareChangeConfirmation,
+  sharedInventoryBanner,
   videoSpaceEmptyCopy,
   videoSpaceTabs,
   type VideoSpaceLibraryItem,
@@ -70,6 +71,21 @@ describe('video space home model', () => {
     expect(previewFallbackCopy('processing').description).toBe('');
     expect(previewFallbackCopy('unavailable').label).toBe('Preview unavailable');
     expect(previewFallbackCopy('unsupported').description).toBe('');
+  });
+
+  it('shows counts-only completeness copy and keeps Shared with you separate', () => {
+    expect(evaultItemsForTab([ownVideo, sharedVideo], 'shared')).toEqual([sharedVideo]);
+    expect(evaultItemsForTab([ownVideo, sharedVideo], 'yours')).toEqual([ownVideo]);
+    expect(evaultItemsForTab([ownVideo, sharedVideo], 'explore')).toEqual([]);
+    const banner = sharedInventoryBanner({
+      indexed: 12,
+      expected: 15,
+      complete: false,
+      retryNeeded: true,
+    });
+    expect(banner).toBe('12 of 15 shared spaces indexed; retry needed.');
+    expect(banner).not.toMatch(/@|[a-f0-9-]{8,}|messenger|meshenger|group|chat|title/i);
+    expect(sharedInventoryBanner({ indexed: 2, expected: 2, complete: true, retryNeeded: false })).toBeUndefined();
   });
 
   it('confirms that a share action changes only that video', () => {

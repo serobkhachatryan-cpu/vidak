@@ -101,7 +101,10 @@ export function discoverFileRecordVideos(
     const contentType =
       optionalString(file.parsed.contentType) ?? optionalString(file.parsed.mimeType);
     if (!contentType?.toLowerCase().startsWith('video/')) continue;
-    const fileUri = optionalString(file.parsed.uri) ?? `w3ds://file?id=${ownerEName}/${file.id}`;
+    const fileUri =
+      optionalW3dsFileUri(file.parsed.uri) ??
+      optionalW3dsFileUri(file.parsed.url) ??
+      `w3ds://file?id=${ownerEName}/${file.id}`;
     if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
     discovered.push({
       key: `file:${ownerEName}:${file.id}:${fileUri}`,
@@ -174,6 +177,7 @@ export function discoverVideoMessageVideos(
       title:
         optionalString(file?.name) ??
         optionalString(file?.filename) ??
+        optionalString(file?.displayName) ??
         optionalString(message.parsed.content) ??
         'Video',
       ...(number(message.parsed.durationSec) !== undefined
@@ -203,30 +207,45 @@ export function orderedRecordingFileUris(recording: Record<string, unknown>): st
   return mediaUri && parseW3dsFileUri(mediaUri) ? [mediaUri] : [];
 }
 
+/**
+ * Documented Message attachment URIs that can identify an authorized video.
+ * Official Message.type is text | image | file | system with mediaUrl on
+ * image/file. This repo also already stores video/circle on the same ontology.
+ */
 export function messageVideoFileUris(message: Record<string, unknown>): string[] {
+  if (!isDocumentedVideoAttachment(message)) return [];
+
+  const file = record(message.file);
+  const candidates = [
+    ...asArray(message.mediaSegments),
+    message.fileId,
+    message.mediaUri,
+    message.mediaUrl,
+    file?.uri,
+    file?.fileUri,
+    file?.url,
+  ];
+  const unique = new Set<string>();
+  for (const value of candidates) {
+    const fileUri = optionalW3dsFileUri(value);
+    if (fileUri) unique.add(fileUri);
+  }
+  return [...unique];
+}
+
+export function isDocumentedVideoAttachment(message: Record<string, unknown>): boolean {
   const type = optionalString(message.type)?.toLowerCase();
   const file = record(message.file);
   const contentType =
     optionalString(file?.contentType) ??
     optionalString(file?.mimeType) ??
-    optionalString(message.contentType);
-  const hasVideoType = type === 'video' || type === 'circle';
-  const hasVideoFile = contentType?.toLowerCase().startsWith('video/') === true;
-  if (!hasVideoType && !hasVideoFile) return [];
-
-  const candidates = [
-    ...asArray(message.mediaSegments),
-    message.fileId,
-    message.mediaUri,
-    file?.uri,
-    file?.fileUri,
-  ];
-  const unique = new Set<string>();
-  for (const value of candidates) {
-    const fileUri = optionalString(value);
-    if (fileUri && parseW3dsFileUri(fileUri)) unique.add(fileUri);
-  }
-  return [...unique];
+    optionalString(message.contentType) ??
+    optionalString(message.mimeType);
+  const mime = contentType?.toLowerCase();
+  if (isExplicitlyNonVideoMime(mime)) return false;
+  if (type === 'video' || type === 'circle' || type === 'file') return true;
+  if (mime?.startsWith('video/') === true) return true;
+  return false;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -245,4 +264,19 @@ function number(value: unknown): number | undefined {
 
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
+}
+
+function optionalW3dsFileUri(value: unknown): string | undefined {
+  const fileUri = optionalString(value);
+  return fileUri && parseW3dsFileUri(fileUri) ? fileUri : undefined;
+}
+
+function isExplicitlyNonVideoMime(mime: string | undefined): boolean {
+  if (!mime) return false;
+  return (
+    mime.startsWith('image/') ||
+    mime.startsWith('audio/') ||
+    mime.startsWith('text/') ||
+    mime === 'application/pdf'
+  );
 }

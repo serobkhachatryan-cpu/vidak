@@ -11,9 +11,15 @@ import {
   discoverW3dsFileVideos,
 } from './video-space/adapters';
 import {
+  type InventoryCompleteness,
+  createInventoryCompletenessTracker,
+  type InventoryCompletenessTracker,
+} from './video-space/completeness';
+import {
   documentedAuthorizationOntologies,
   documentedOntologyId,
 } from './video-space/documented-sources';
+import { collectPaginatedEnvelopes } from './video-space/pagination';
 import {
   type VideoSpaceAccessScope,
   type VideoSpaceVisibility,
@@ -84,6 +90,7 @@ export interface MeshengerLibrary {
   items: MeshengerVideo[];
   conversations: MeshengerConversation[];
   messages: MeshengerMessage[];
+  completeness: InventoryCompleteness;
 }
 
 export class MeshengerVideoLibraryError extends Error {
@@ -135,15 +142,16 @@ interface GroupDiscovery {
   videos: DiscoveredVideo[];
   conversations: MeshengerConversation[];
   messages: MeshengerMessage[];
+  complete: boolean;
 }
 
-const listQuery = `query MeshengerVideos($ontologyId: ID!, $first: Int!, $after: String) {
+const listQuery = `query AuthorizedMedia($ontologyId: ID!, $first: Int!, $after: String) {
   metaEnvelopes(filter: { ontologyId: $ontologyId }, first: $first, after: $after) {
     edges { node { id ontology parsed } }
     pageInfo { hasNextPage endCursor }
   }
 }`;
-const chatMessagesQuery = `query MeshengerChatMessages($ontologyId: ID!, $chatId: String!, $first: Int!, $after: String) {
+const chatMessagesQuery = `query AuthorizedChatMessages($ontologyId: ID!, $chatId: String!, $first: Int!, $after: String) {
   metaEnvelopes(filter: { ontologyId: $ontologyId, search: { term: $chatId, fields: ["chatId"], mode: EXACT } }, first: $first, after: $after) {
     edges { node { id ontology parsed } }
     pageInfo { hasNextPage endCursor }
@@ -166,22 +174,25 @@ export class MeshengerVideoLibrary {
   }
 
   /**
-   * A private, read-only view of Meshenger records the current person can
-   * discover. Group data is returned only after current membership is checked
-   * against the group manifest on that group's eVault.
+   * A private, read-only inventory of authorized video records the current
+   * person can discover. Historical chat/media references are followed even
+   * when current group membership is missing; eVault ACL still fail-closes
+   * unauthorized records. Source failures never silently shrink the list.
    */
   async listWithContext(user: Pick<AuthUser, 'eName' | 'eVaultUri'>): Promise<MeshengerLibrary> {
     const eName = requireEName(user.eName);
     const eVaultUri = user.eVaultUri ? httpUrl(user.eVaultUri) : await this.resolveEVault(eName);
+    const completeness = createInventoryCompletenessTracker();
     // eVaults throttle bursts. Scan each source in order so a first historical
     // import does not turn three independent reads into a simultaneous spike.
-    const calls = await this.listEnvelopes(eName, eVaultUri, callSessionOntology);
-    const chatEnvelopes = await this.listEnvelopes(eName, eVaultUri, chatOntology);
+    const calls = await this.listEnvelopes(eName, eVaultUri, callSessionOntology, completeness);
+    const chatEnvelopes = await this.listEnvelopes(eName, eVaultUri, chatOntology, completeness);
     const chatReferences = chatReferencesFromEnvelopes(chatEnvelopes);
-    const messages = await this.listEnvelopes(eName, eVaultUri, messageOntology);
-    const files = await this.listEnvelopes(eName, eVaultUri, fileOntology);
-    const rawFiles = await this.listEnvelopes(eName, eVaultUri, w3dsFileOntology);
+    const messages = await this.listEnvelopes(eName, eVaultUri, messageOntology, completeness);
+    const files = await this.listEnvelopes(eName, eVaultUri, fileOntology, completeness);
+    const rawFiles = await this.listEnvelopes(eName, eVaultUri, w3dsFileOntology, completeness);
     const referenced = new Set<string>();
+    const historicalAuthors = authorsFromMessages(messages);
     const found = await this.discoverCallVideos({
       viewerEName: eName,
       sourceEName: eName,
@@ -192,9 +203,20 @@ export class MeshengerVideoLibrary {
     found.push(...this.discoverMessageVideos(messages, referenced, 'personal'));
     found.push(...this.discoverFileVideos(eName, files, referenced, 'personal'));
     found.push(...this.discoverRawFileVideos(eName, rawFiles, referenced, 'personal'));
-    const group = await this.discoverGroupVideos(eName, chatReferences, referenced);
+    const group = await this.discoverGroupVideos(
+      eName,
+      chatReferences,
+      referenced,
+      historicalAuthors,
+      completeness,
+    );
     found.push(...group.videos);
-    const direct = await this.discoverDirectChatMedia(eName, chatReferences, referenced);
+    const direct = await this.discoverDirectChatMedia(
+      eName,
+      chatReferences,
+      referenced,
+      completeness,
+    );
     found.push(...direct.videos);
 
     const unique = dedupeDiscoveredVideos(found);
@@ -230,6 +252,7 @@ export class MeshengerVideoLibrary {
         ...group.messages,
         ...direct.messages,
       ]).sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
+      completeness: completeness.snapshot(),
     };
   }
 
@@ -309,16 +332,22 @@ export class MeshengerVideoLibrary {
 
   /**
    * A trusted chat-reference chain can grant access to that group's video
-   * messages, call recordings, and ordinary video File envelopes. Read each
-   * group once so multiple references cannot multiply eVault traffic or cards.
+   * messages, call recordings, and ordinary video File envelopes. Historical
+   * message authors are followed even when they are no longer current members.
+   * Bulk group-file listing stays membership-gated so unauthorized vault files
+   * are never enumerated. Read each group once so multiple references cannot
+   * multiply eVault traffic or cards.
    */
   private async discoverGroupVideos(
     viewerEName: string,
     chatReferences: ChatReference[],
     referenced: Set<string>,
+    historicalAuthors: ReadonlyMap<string, ReadonlySet<string>>,
+    completeness: InventoryCompletenessTracker,
   ): Promise<GroupDiscovery> {
     const chatsByGroup = new Map<string, Set<string>>();
     for (const reference of chatReferences) {
+      if (reference.type && reference.type !== 'group') continue;
       const chatIds = chatsByGroup.get(reference.groupEName) ?? new Set<string>();
       chatIds.add(reference.chatId);
       chatsByGroup.set(reference.groupEName, chatIds);
@@ -328,24 +357,57 @@ export class MeshengerVideoLibrary {
     const conversations: MeshengerConversation[] = [];
     const messageRecords: MeshengerMessage[] = [];
     for (const [groupEName, chatIds] of chatsByGroup) {
-      try {
-        const groupEVaultUri = await this.resolveEVault(groupEName);
-        const manifests = await this.listEnvelopes(
-          groupEName,
-          groupEVaultUri,
-          groupManifestOntology,
-        );
-        const manifest = manifests.find((item) => isCurrentGroupMember(item.parsed, viewerEName));
-        if (!manifest) {
-          continue;
-        }
+      completeness.expectSpace();
+      const space = await this.readGroupSpace({
+        viewerEName,
+        groupEName,
+        chatIds,
+        referenced,
+        historicalAuthors,
+        completeness,
+      });
+      videos.push(...space.videos);
+      conversations.push(...space.conversations);
+      messageRecords.push(...space.messages);
+      if (space.complete) completeness.indexSpace();
+      else completeness.markRetry();
+    }
+    return { videos, conversations, messages: messageRecords, complete: true };
+  }
+
+  private async readGroupSpace(input: {
+    viewerEName: string;
+    groupEName: string;
+    chatIds: ReadonlySet<string>;
+    referenced: Set<string>;
+    historicalAuthors: ReadonlyMap<string, ReadonlySet<string>>;
+    completeness: InventoryCompletenessTracker;
+  }): Promise<GroupDiscovery> {
+    const videos: DiscoveredVideo[] = [];
+    const conversations: MeshengerConversation[] = [];
+    const messageRecords: MeshengerMessage[] = [];
+    let complete = true;
+    try {
+      const groupEVaultUri = await this.resolveEVault(input.groupEName);
+      const manifests = await this.listEnvelopes(
+        input.groupEName,
+        groupEVaultUri,
+        groupManifestOntology,
+        input.completeness,
+      );
+      const currentManifest = manifests.find((item) =>
+        isCurrentGroupMember(item.parsed, input.viewerEName),
+      );
+      const manifest = currentManifest ?? manifests[0];
+      const currentMember = Boolean(currentManifest);
+      if (manifest && currentMember) {
         const participantCount = groupParticipantCount(manifest.parsed);
-        const role = groupRole(manifest.parsed, viewerEName);
+        const role = groupRole(manifest.parsed, input.viewerEName);
         const updatedAt = optionalString(manifest.parsed.updatedAt);
-        for (const chatId of chatIds) {
+        for (const chatId of input.chatIds) {
           conversations.push({
-            id: `${groupEName}:${chatId}`,
-            ownerEName: groupEName,
+            id: `${input.groupEName}:${chatId}`,
+            ownerEName: input.groupEName,
             chatId,
             kind: 'group',
             title: optionalString(manifest.parsed.name) ?? 'Group',
@@ -354,51 +416,109 @@ export class MeshengerVideoLibrary {
             ...(updatedAt ? { updatedAt } : {}),
           });
         }
-        const calls = await this.listEnvelopes(groupEName, groupEVaultUri, callSessionOntology);
-        videos.push(
-          ...(await this.discoverCallVideos({
-            viewerEName,
-            sourceEName: groupEName,
-            sourceEVaultUri: groupEVaultUri,
-            calls,
-            chatIds,
-            referenced,
-          })),
+      }
+
+      const groupChats = await this.listEnvelopes(
+        input.groupEName,
+        groupEVaultUri,
+        chatOntology,
+        input.completeness,
+      );
+      const messageSources = new Set<string>([input.groupEName]);
+      if (currentManifest) {
+        for (const member of groupMemberENames(currentManifest.parsed)) messageSources.add(member);
+      }
+      for (const chat of groupChats) {
+        const chatId = optionalString(chat.parsed.id) ?? chat.id;
+        if (!input.chatIds.has(chatId)) continue;
+        for (const participant of asArray(chat.parsed.participantIds)) {
+          if (typeof participant === 'string' && isEName(participant)) messageSources.add(participant);
+        }
+      }
+      for (const chatId of input.chatIds) {
+        for (const author of input.historicalAuthors.get(chatId) ?? []) messageSources.add(author);
+      }
+
+      const calls = await this.listEnvelopes(
+        input.groupEName,
+        groupEVaultUri,
+        callSessionOntology,
+        input.completeness,
+      );
+      videos.push(
+        ...(await this.discoverCallVideos({
+          viewerEName: input.viewerEName,
+          sourceEName: input.groupEName,
+          sourceEVaultUri: groupEVaultUri,
+          calls,
+          chatIds: input.chatIds,
+          referenced: input.referenced,
+        })),
+      );
+
+      for (const chatId of input.chatIds) {
+        const groupMessages = await this.listMessagesForChat(
+          input.groupEName,
+          groupEVaultUri,
+          chatId,
+          input.completeness,
         );
-        // Messages live on their authors' vaults. The group vault is retained
-        // as a source for older/system records, while GroupManifest provides
-        // the current member eNames needed for the authoritative fan-in.
-        const messageSources = new Set([...groupMemberENames(manifest.parsed), groupEName]);
-        for (const chatId of chatIds) {
-          for (const authorEName of messageSources) {
-            try {
-              const authorEVaultUri =
-                authorEName === groupEName ? groupEVaultUri : await this.resolveEVault(authorEName);
-              const authorMessages = await this.listMessagesForChat(
-                authorEName,
-                authorEVaultUri,
-                chatId,
-              );
-              videos.push(...this.discoverMessageVideos(authorMessages, referenced, 'shared'));
-              messageRecords.push(
-                ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
-              );
-            } catch {
-              // Membership can change while a library refresh is in flight.
-              // One unavailable author must not hide other chat sources.
-            }
+        videos.push(...this.discoverMessageVideos(groupMessages, input.referenced, 'shared'));
+        messageRecords.push(
+          ...groupMessages.map((message) => toMeshengerMessage(input.groupEName, message)),
+        );
+        for (const author of authorsFromMessages(groupMessages).get(chatId) ?? []) {
+          messageSources.add(author);
+        }
+      }
+
+      for (const chatId of input.chatIds) {
+        for (const authorEName of messageSources) {
+          if (authorEName === input.groupEName || authorEName === input.viewerEName) continue;
+          try {
+            const authorEVaultUri = await this.resolveEVault(authorEName);
+            const authorMessages = await this.listMessagesForChat(
+              authorEName,
+              authorEVaultUri,
+              chatId,
+              input.completeness,
+            );
+            videos.push(...this.discoverMessageVideos(authorMessages, input.referenced, 'shared'));
+            messageRecords.push(
+              ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
+            );
+          } catch {
+            complete = false;
+            input.completeness.markRetry();
           }
         }
-        const files = await this.listEnvelopes(groupEName, groupEVaultUri, fileOntology);
-        videos.push(...this.discoverFileVideos(groupEName, files, referenced, 'shared'));
-        const rawFiles = await this.listEnvelopes(groupEName, groupEVaultUri, w3dsFileOntology);
-        videos.push(...this.discoverRawFileVideos(groupEName, rawFiles, referenced, 'shared'));
-      } catch {
-        // A stale chat reference or a group that no longer grants access must
-        // not hide the rest of a person's authorised video library.
       }
+
+      if (currentMember) {
+        const files = await this.listEnvelopes(
+          input.groupEName,
+          groupEVaultUri,
+          fileOntology,
+          input.completeness,
+        );
+        videos.push(
+          ...this.discoverFileVideos(input.groupEName, files, input.referenced, 'shared'),
+        );
+        const rawFiles = await this.listEnvelopes(
+          input.groupEName,
+          groupEVaultUri,
+          w3dsFileOntology,
+          input.completeness,
+        );
+        videos.push(
+          ...this.discoverRawFileVideos(input.groupEName, rawFiles, input.referenced, 'shared'),
+        );
+      }
+    } catch {
+      complete = false;
+      input.completeness.markRetry();
     }
-    return { videos, conversations, messages: messageRecords };
+    return { videos, conversations, messages: messageRecords, complete };
   }
 
   /**
@@ -411,10 +531,12 @@ export class MeshengerVideoLibrary {
     viewerEName: string,
     references: ChatReference[],
     referenced: Set<string>,
+    completeness: InventoryCompletenessTracker,
   ): Promise<GroupDiscovery> {
     const byOwner = new Map<string, Set<string>>();
     for (const reference of references) {
       if (reference.groupEName === viewerEName) continue;
+      if (reference.type === 'group') continue;
       const chatIds = byOwner.get(reference.groupEName) ?? new Set<string>();
       chatIds.add(reference.chatId);
       byOwner.set(reference.groupEName, chatIds);
@@ -424,9 +546,16 @@ export class MeshengerVideoLibrary {
     const conversations: MeshengerConversation[] = [];
     const messages: MeshengerMessage[] = [];
     for (const [ownerEName, chatIds] of byOwner) {
+      completeness.expectSpace();
+      let complete = true;
       try {
         const eVaultUri = await this.resolveEVault(ownerEName);
-        const chats = await this.listEnvelopes(ownerEName, eVaultUri, chatOntology);
+        const chats = await this.listEnvelopes(
+          ownerEName,
+          eVaultUri,
+          chatOntology,
+          completeness,
+        );
         const canonicalChats = new Map<string, Envelope>();
         for (const chat of chats) {
           if (chat.parsed.isReference === true) continue;
@@ -434,7 +563,10 @@ export class MeshengerVideoLibrary {
           const chatId = optionalString(chat.parsed.id) ?? chat.id;
           if (chatIds.has(chatId)) canonicalChats.set(chatId, chat);
         }
-        if (!canonicalChats.size) continue;
+        if (!canonicalChats.size) {
+          complete = false;
+          completeness.markRetry();
+        }
 
         for (const [chatId, chat] of canonicalChats) {
           const participants = asArray(chat.parsed.participantIds).filter(
@@ -453,14 +585,24 @@ export class MeshengerVideoLibrary {
         }
 
         for (const chatId of canonicalChats.keys()) {
-          const authorMessages = await this.listMessagesForChat(ownerEName, eVaultUri, chatId);
+          const authorMessages = await this.listMessagesForChat(
+            ownerEName,
+            eVaultUri,
+            chatId,
+            completeness,
+          );
           videos.push(...this.discoverMessageVideos(authorMessages, referenced, 'shared'));
           messages.push(
             ...authorMessages.map((message) => toMeshengerMessage(ownerEName, message)),
           );
         }
 
-        const calls = await this.listEnvelopes(ownerEName, eVaultUri, callSessionOntology);
+        const calls = await this.listEnvelopes(
+          ownerEName,
+          eVaultUri,
+          callSessionOntology,
+          completeness,
+        );
         videos.push(
           ...(await this.discoverCallVideos({
             viewerEName,
@@ -472,11 +614,13 @@ export class MeshengerVideoLibrary {
           })),
         );
       } catch {
-        // A stale direct-chat reference must not leak any other source or
-        // prevent the rest of the signed-in person's library from loading.
+        complete = false;
+        completeness.markRetry();
       }
+      if (complete) completeness.indexSpace();
+      else completeness.markRetry();
     }
-    return { videos, conversations, messages };
+    return { videos, conversations, messages, complete: true };
   }
 
   private async discoverCallVideos({
@@ -542,38 +686,22 @@ export class MeshengerVideoLibrary {
     owner: string,
     eVaultUri: string,
     ontologyId: string,
+    completeness?: InventoryCompletenessTracker,
   ): Promise<Envelope[]> {
-    const results: Envelope[] = [];
-    let after: string | null = null;
-    for (let page = 0; page < maxPages; page += 1) {
-      const data = await this.graphql(owner, eVaultUri, listQuery, {
-        ontologyId,
-        first: pageSize,
-        after,
-      });
-      const connection = record(data.metaEnvelopes);
-      for (const edge of asArray(connection?.edges)) {
-        const node = record(record(edge)?.node);
-        const id = optionalString(node?.id);
-        const ontology = optionalString(node?.ontology);
-        const parsed = parsePayload(node?.parsed);
-        if (id && ontology && parsed) results.push({ id, ontology, parsed });
-      }
-      const info = record(connection?.pageInfo);
-      if (info?.hasNextPage !== true) return results;
-      after = optionalString(info.endCursor) ?? null;
-      if (!after)
-        throw new MeshengerVideoLibraryError(
-          'The eVault returned an invalid page.',
-          'remote_rejected',
-          502,
-        );
-    }
-    throw new MeshengerVideoLibraryError(
-      'The video library is too large to read safely in one request.',
-      'rate_limited',
-      429,
-    );
+    const page = await collectPaginatedEnvelopes({
+      maxPages,
+      readPage: async (after) => {
+        const data = await this.graphql(owner, eVaultUri, listQuery, {
+          ontologyId,
+          first: pageSize,
+          after,
+        });
+        return record(data.metaEnvelopes);
+      },
+      mapEdge: envelopeFromEdge,
+    });
+    if (!page.complete) completeness?.markRetry();
+    return page.items;
   }
 
   /** Query a single chat on one author vault; never enumerate that vault's unrelated messages. */
@@ -581,39 +709,23 @@ export class MeshengerVideoLibrary {
     owner: string,
     eVaultUri: string,
     chatId: string,
+    completeness?: InventoryCompletenessTracker,
   ): Promise<Envelope[]> {
-    const results: Envelope[] = [];
-    let after: string | null = null;
-    for (let page = 0; page < maxPages; page += 1) {
-      const data = await this.graphql(owner, eVaultUri, chatMessagesQuery, {
-        ontologyId: messageOntology,
-        chatId,
-        first: pageSize,
-        after,
-      });
-      const connection = record(data.metaEnvelopes);
-      for (const edge of asArray(connection?.edges)) {
-        const node = record(record(edge)?.node);
-        const id = optionalString(node?.id);
-        const ontology = optionalString(node?.ontology);
-        const parsed = parsePayload(node?.parsed);
-        if (id && ontology && parsed) results.push({ id, ontology, parsed });
-      }
-      const info = record(connection?.pageInfo);
-      if (info?.hasNextPage !== true) return results;
-      after = optionalString(info.endCursor) ?? null;
-      if (!after)
-        throw new MeshengerVideoLibraryError(
-          'The eVault returned an invalid page.',
-          'remote_rejected',
-          502,
-        );
-    }
-    throw new MeshengerVideoLibraryError(
-      'The authorised chat is too large to read safely in one request.',
-      'rate_limited',
-      429,
-    );
+    const page = await collectPaginatedEnvelopes({
+      maxPages,
+      readPage: async (after) => {
+        const data = await this.graphql(owner, eVaultUri, chatMessagesQuery, {
+          ontologyId: messageOntology,
+          chatId,
+          first: pageSize,
+          after,
+        });
+        return record(data.metaEnvelopes);
+      },
+      mapEdge: envelopeFromEdge,
+    });
+    if (!page.complete) completeness?.markRetry();
+    return page.items;
   }
 
   private async readEnvelope(owner: string, eVaultUri: string, id: string): Promise<Envelope> {
@@ -933,6 +1045,29 @@ function groupParticipantCount(payload: RecordValue): number {
   }
   return people.size;
 }
+function envelopeFromEdge(edge: unknown): Envelope | undefined {
+  const node = record(record(edge)?.node);
+  const id = optionalString(node?.id);
+  const ontology = optionalString(node?.ontology);
+  const parsed = parsePayload(node?.parsed);
+  if (!id || !ontology || !parsed) return undefined;
+  return { id, ontology, parsed };
+}
+
+function authorsFromMessages(envelopes: readonly Envelope[]): Map<string, Set<string>> {
+  const authors = new Map<string, Set<string>>();
+  for (const envelope of envelopes) {
+    const chatId = optionalString(envelope.parsed.chatId);
+    const sender =
+      optionalString(envelope.parsed.senderEName) ?? optionalString(envelope.parsed.senderId);
+    if (!chatId || !sender || !isEName(sender)) continue;
+    const existing = authors.get(chatId) ?? new Set<string>();
+    existing.add(sender);
+    authors.set(chatId, existing);
+  }
+  return authors;
+}
+
 function groupMemberENames(payload: RecordValue): string[] {
   const people = new Set<string>();
   const owner = optionalString(payload.owner);

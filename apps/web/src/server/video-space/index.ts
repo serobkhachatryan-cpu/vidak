@@ -12,10 +12,16 @@ export {
 } from './adapters';
 export {
   documentedAuthorizationOntologies,
+  documentedMessageTypes,
   documentedOntologyId,
+  documentedVideoMessageTypes,
   documentedVideoSourceIds,
   documentedVideoSources,
 } from './documented-sources';
+export {
+  inventoryCompletenessCopy,
+  type InventoryCompleteness,
+} from './completeness';
 export {
   videoSpaceVisibilityLabels,
   visibilityForEVaultVideo,

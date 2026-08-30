@@ -1,10 +1,14 @@
 /**
  * Adapter registry for video-like records already documented in this repository.
  *
- * Official W3DS table: File ontology + w3ds-file-v1.
- * Also listed: application records this repo already reads through eVault
- * `metaEnvelopes(filter: { ontologyId })` — call sessions, chats, messages,
- * and group membership. Those are source adapters, not product categories.
+ * Official W3DS Ontology: File, Chat, Message, GroupManifest, plus `w3ds-file-v1`.
+ * Also listed: call-session records this repo already reads through eVault
+ * `metaEnvelopes(filter: { ontologyId })`. Those are source adapters, not
+ * product categories.
+ *
+ * Official Message.type is text | image | file | system, with mediaUrl on
+ * image/file. This repo also already reads Meshenger video/circle messages
+ * through the same Message ontology. Adapters must inventory both.
  */
 export const documentedVideoSourceIds = [
   'w3ds-file',
@@ -12,6 +16,12 @@ export const documentedVideoSourceIds = [
   'call-recording',
   'video-message',
 ] as const;
+
+/** Official Message.type values from Ontology schema 550e8400-e29b-41d4-a716-446655440004. */
+export const documentedMessageTypes = ['text', 'image', 'file', 'system'] as const;
+
+/** Message types this repo already reads on the same Message ontology. */
+export const documentedVideoMessageTypes = ['video', 'circle'] as const;
 
 export type DocumentedVideoSourceId = (typeof documentedVideoSourceIds)[number];
 
@@ -26,7 +36,7 @@ export const documentedVideoSources: ReadonlyArray<{
   { id: 'video-message', ontologyId: '550e8400-e29b-41d4-a716-446655440004', kind: 'video-message' },
 ];
 
-/** Chat / group records used only to prove current authorization, never as UI categories. */
+/** Chat / group records used to follow authorized and historical references, never as UI categories. */
 export const documentedAuthorizationOntologies = {
   chat: '550e8400-e29b-41d4-a716-446655440003',
   groupManifest: 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e',

@@ -26,6 +26,8 @@ import {
   ownedItemsForTab,
   ownedVideoSpaceVisibility,
   shareChangeConfirmation,
+  sharedInventoryBanner,
+  type InventoryCompleteness,
   type VideoSpaceLibraryItem,
   type VideoSpaceTab,
   videoSpaceEmptyCopy,
@@ -35,7 +37,7 @@ import {
 
 type LibraryState =
   | { status: 'loading' }
-  | { status: 'ready'; items: VideoSpaceLibraryItem[] }
+  | { status: 'ready'; items: VideoSpaceLibraryItem[]; completeness?: InventoryCompleteness }
   | { status: 'error' };
 
 type OwnedState =
@@ -68,7 +70,10 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
       .catch(() => setOwned({ status: 'error' }));
     try {
       const response = await fetch('/api/evault/videos', { cache: 'no-store' });
-      const body = (await response.json()) as { items?: VideoSpaceLibraryItem[] };
+      const body = (await response.json()) as {
+        items?: VideoSpaceLibraryItem[];
+        completeness?: InventoryCompleteness;
+      };
       if (!response.ok || !Array.isArray(body.items)) throw new Error();
       setLibrary({
         status: 'ready',
@@ -77,6 +82,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
           visibility:
             item.visibility ?? (item.accessScope === 'shared' ? 'shared-with-me' : 'private'),
         })),
+        ...(body.completeness ? { completeness: body.completeness } : {}),
       });
     } catch {
       setLibrary({ status: 'error' });
@@ -215,6 +221,10 @@ function PrivateLibraryPanel({
 }) {
   const libraryItems = library.status === 'ready' ? evaultItemsForTab(library.items, tab) : [];
   const ownedItems = owned.status === 'ready' ? ownedItemsForTab(owned.items, tab) : [];
+  const completenessBanner =
+    tab === 'shared' && library.status === 'ready'
+      ? sharedInventoryBanner(library.completeness)
+      : undefined;
   const loading = library.status === 'loading' || (tab === 'yours' && owned.status === 'loading');
 
   if (loading) {
@@ -236,7 +246,7 @@ function PrivateLibraryPanel({
     );
   }
 
-  if (libraryItems.length === 0 && ownedItems.length === 0) {
+  if (libraryItems.length === 0 && ownedItems.length === 0 && !completenessBanner) {
     return (
       <EmptyState
         title={
@@ -280,6 +290,11 @@ function PrivateLibraryPanel({
               ? 'Videos other people have authorized you to view. Finding them never changes their sharing rules.'
               : 'Every video you own or drafted in your W3DS space. Finding them never changes their sharing rules.'}
           </Text>
+          {completenessBanner ? (
+            <Text size="sm" tone="muted" role="status">
+              {completenessBanner}
+            </Text>
+          ) : null}
         </div>
         <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
           {ownedItems.map((video) => (

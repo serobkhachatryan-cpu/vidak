@@ -140,4 +140,60 @@ describe('video space adapters', () => {
       ),
     ).toEqual([]);
   });
+
+  it('inventories an official Message type=file attachment with mediaUrl when authorized', () => {
+    expect(
+      discoverVideoMessageVideos(
+        [
+          {
+            id: 'file-message-1',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'file',
+              mediaUrl: fileUri,
+              file: { name: 'Shared briefing.mp4' },
+            },
+          },
+        ],
+        new Set(),
+        'shared',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        sourceId: 'video-message',
+        accessScope: 'shared',
+        title: 'Shared briefing.mp4',
+        fileUris: [fileUri],
+      }),
+    ]);
+  });
+
+  it('does not inventory an official image or pdf attachment as video', () => {
+    expect(
+      discoverVideoMessageVideos(
+        [
+          {
+            id: 'photo-message',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'image',
+              mediaUrl: 'w3ds://file?id=@owner.w3id/photo-1',
+              mimeType: 'image/jpeg',
+            },
+          },
+          {
+            id: 'pdf-message',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'file',
+              mediaUrl: 'w3ds://file?id=@owner.w3id/doc-1',
+              mimeType: 'application/pdf',
+            },
+          },
+        ],
+        new Set(),
+        'shared',
+      ),
+    ).toEqual([]);
+  });
 });
