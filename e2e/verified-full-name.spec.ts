@@ -10,7 +10,8 @@ test('auth and upload stay free of a verified-name overlay', async ({ page }) =>
   await expect.poll(() => pathnameOf(page.url())).toBe('/');
   await expectNoVerifiedNameOverlay(page);
 
-  await page.getByRole('button', { name: 'Upload', exact: true }).click();
+  // Home also has an in-page Upload CTA; exercise the header control that the overlay used to intercept.
+  await page.getByRole('banner').getByRole('button', { name: 'Upload', exact: true }).click();
   await expect.poll(() => pathnameOf(page.url())).toBe('/upload');
   await expectNoVerifiedNameOverlay(page);
   await expect(page.locator('input[type="file"][accept*="video"]')).toBeVisible();
