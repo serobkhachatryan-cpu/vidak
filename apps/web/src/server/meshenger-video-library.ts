@@ -4,12 +4,12 @@ import 'server-only';
 import type { AuthUser } from '@w3ds/auth';
 import {
   type DiscoveredVideoRecord,
-  dedupeDiscoveredVideos,
   discoverCallRecordingVideos,
   discoverFileRecordVideos,
   discoverVideoMessageVideos,
   discoverW3dsFileVideos,
 } from './video-space/adapters';
+import { assembleVideoSpaceCatalogue } from './video-space/catalogue';
 import {
   createInventoryCompletenessTracker,
   type InventoryCompleteness,
@@ -21,11 +21,7 @@ import {
   documentedOntologyId,
 } from './video-space/documented-sources';
 import { collectPaginatedEnvelopes } from './video-space/pagination';
-import {
-  type VideoSpaceAccessScope,
-  type VideoSpaceVisibility,
-  visibilityForEVaultVideo,
-} from './video-space/visibility';
+import type { VideoSpaceAccessScope, VideoSpaceVisibility } from './video-space/visibility';
 import { parseW3dsFileUri } from './w3ds-official-file-client';
 
 const callSessionOntology = documentedOntologyId('call-recording');
@@ -268,35 +264,24 @@ export class MeshengerVideoLibrary {
     );
     found.push(...direct.videos);
 
-    const unique = dedupeDiscoveredVideos(found);
     const completenessState = completeness.snapshot();
     if (completenessState.expected > 0) {
       console.info(
         `video-space-inventory ${inventoryCompletenessCopy(completenessState)} unavailable=${completenessState.retryUnavailable} rejected=${completenessState.retryRejected} rate_limited=${completenessState.retryRateLimited}`,
       );
     }
+    const catalogue = assembleVideoSpaceCatalogue({
+      records: found,
+      completeness: completenessState,
+      viewerEName: eName,
+      toStreamId: (fileUri) =>
+        createMeshengerVideoStreamId(
+          { eName, fileUri, expiresAt: Date.now() + streamLifetimeMs },
+          this.config.signingSecret,
+        ),
+    });
     return {
-      items: unique
-        .map((item) => ({
-          id: item.key,
-          kind: item.kind,
-          title: item.title,
-          ...(item.durationSeconds !== undefined ? { durationSeconds: item.durationSeconds } : {}),
-          ...(item.shape ? { shape: item.shape } : {}),
-          ...(item.createdAt ? { createdAt: item.createdAt } : {}),
-          accessScope: item.accessScope,
-          visibility: visibilityForEVaultVideo({
-            accessScope: item.accessScope,
-            viewerEName: eName,
-          }),
-          streamIds: item.fileUris.map((fileUri) =>
-            createMeshengerVideoStreamId(
-              { eName, fileUri, expiresAt: Date.now() + streamLifetimeMs },
-              this.config.signingSecret,
-            ),
-          ),
-        }))
-        .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
+      items: catalogue.items,
       conversations: uniqueConversations([
         ...chatEnvelopesToConversations(eName, chatReferences, chatEnvelopes),
         ...group.conversations,

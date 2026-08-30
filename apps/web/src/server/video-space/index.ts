@@ -11,6 +11,13 @@ export {
   videoSpaceFileIdentity,
 } from './adapters';
 export {
+  assembleVideoSpaceCatalogue,
+  type VideoSpaceCatalogueItem,
+  type VideoSpaceCatalogueSnapshot,
+  videoSpaceSourceAdapters,
+  videoSpaceSourceIds,
+} from './catalogue';
+export {
   type InventoryCompleteness,
   inventoryCompletenessCopy,
 } from './completeness';
