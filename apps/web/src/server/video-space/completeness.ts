@@ -9,6 +9,9 @@ export interface InventoryCompleteness {
   missing: number;
   complete: boolean;
   retryNeeded: boolean;
+  retryUnavailable: number;
+  retryRejected: number;
+  retryRateLimited: number;
 }
 
 export const completeInventory: InventoryCompleteness = {
@@ -18,6 +21,9 @@ export const completeInventory: InventoryCompleteness = {
   missing: 0,
   complete: true,
   retryNeeded: false,
+  retryUnavailable: 0,
+  retryRejected: 0,
+  retryRateLimited: 0,
 };
 
 export function inventoryCompletenessCopy(state: InventoryCompleteness): string {
@@ -35,6 +41,9 @@ export function createInventoryCompletenessTracker() {
   let denied = 0;
   let missing = 0;
   let retryNeeded = false;
+  let retryUnavailable = 0;
+  let retryRejected = 0;
+  let retryRateLimited = 0;
 
   return {
     expectSpace() {
@@ -52,6 +61,12 @@ export function createInventoryCompletenessTracker() {
     markRetry() {
       retryNeeded = true;
     },
+    markRetryClass(kind: 'unavailable' | 'rejected' | 'rate_limited') {
+      retryNeeded = true;
+      if (kind === 'unavailable') retryUnavailable += 1;
+      else if (kind === 'rejected') retryRejected += 1;
+      else retryRateLimited += 1;
+    },
     snapshot(): InventoryCompleteness {
       const classified = indexed + denied + missing;
       const complete = classified === expected && !retryNeeded;
@@ -62,6 +77,9 @@ export function createInventoryCompletenessTracker() {
         missing,
         complete,
         retryNeeded: retryNeeded || classified < expected,
+        retryUnavailable,
+        retryRejected,
+        retryRateLimited,
       };
     },
   };

@@ -1179,6 +1179,9 @@ describe('Meshenger video library', () => {
         missing: 1,
         complete: true,
         retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
       });
       const serialized = JSON.stringify(workspace.completeness);
       expect(serialized).not.toMatch(/@missing|@group|chat-ok|Indexed clip/i);
@@ -1339,6 +1342,9 @@ describe('Meshenger video library', () => {
         missing: 0,
         complete: true,
         retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
       });
     } finally {
       vi.unstubAllGlobals();
@@ -1532,6 +1538,9 @@ describe('Meshenger video library', () => {
         missing: 0,
         complete: true,
         retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
       });
       expect(
         fetcher.mock.calls.some(
@@ -1656,6 +1665,9 @@ describe('Meshenger video library', () => {
         missing: 0,
         complete: true,
         retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
       });
     } finally {
       vi.unstubAllGlobals();

@@ -36,7 +36,7 @@ const fileOntology = documentedOntologyId('file-record');
 const w3dsFileOntology = documentedOntologyId('w3ds-file');
 const pageSize = 100;
 const maxPages = 30;
-const retryBudgetMs = 20_000;
+const retryBudgetMs = 30_000;
 const requestTimeoutMs = 12_000;
 // Call recordings are stored as ~45-second files. A multi-hour recording must
 // remain playable through its final segment, while the authenticated stream
@@ -141,6 +141,7 @@ interface ChatReference {
   chatId: string;
   type?: string | undefined;
 }
+type SourceFailure = 'denied' | 'missing' | 'unavailable' | 'rate_limited' | 'rejected';
 type SharedSpaceOutcome = 'indexed' | 'denied' | 'missing' | 'retry';
 interface GroupDiscovery {
   videos: DiscoveredVideo[];
@@ -229,6 +230,16 @@ export class MeshengerVideoLibrary {
       w3dsFileOntology,
       completeness,
     );
+    if (
+      completeness.snapshot().retryRateLimited > 0 &&
+      calls.length + chatEnvelopes.length + messages.length + files.length + rawFiles.length === 0
+    ) {
+      throw new MeshengerVideoLibraryError(
+        'The W3DS video source is busy. Please try again shortly.',
+        'rate_limited',
+        429,
+      );
+    }
     const referenced = new Set<string>();
     const historicalAuthors = authorsFromMessages(messages);
     const found = await this.discoverCallVideos({
@@ -260,7 +271,9 @@ export class MeshengerVideoLibrary {
     const unique = dedupeDiscoveredVideos(found);
     const completenessState = completeness.snapshot();
     if (completenessState.expected > 0) {
-      console.info(`video-space-inventory ${inventoryCompletenessCopy(completenessState)}`);
+      console.info(
+        `video-space-inventory ${inventoryCompletenessCopy(completenessState)} unavailable=${completenessState.retryUnavailable} rejected=${completenessState.retryRejected} rate_limited=${completenessState.retryRateLimited}`,
+      );
     }
     return {
       items: unique
@@ -430,7 +443,11 @@ export class MeshengerVideoLibrary {
     const videos: DiscoveredVideo[] = [];
     const conversations: MeshengerConversation[] = [];
     const messageRecords: MeshengerMessage[] = [];
-    const vaultRead = await this.readSource(() => this.resolveEVault(input.groupEName), undefined);
+    const vaultRead = await this.readSource(
+      () => this.resolveEVault(input.groupEName),
+      undefined,
+      input.completeness,
+    );
     if (!vaultRead.value) {
       return emptySpace(vaultRead.failure === 'denied' ? 'denied' : vaultRead.failure === 'missing' ? 'missing' : 'retry');
     }
@@ -493,13 +510,14 @@ export class MeshengerVideoLibrary {
     const callsRead = await this.readSource(
       () => this.listEnvelopes(owner, groupEVaultUri, callSessionOntology, input.completeness),
       [] as Envelope[],
+      input.completeness,
     );
     let retryNeeded = false;
     let scopedDenied = false;
     let scopedMissing = false;
-    if (callsRead.failure === 'retry') retryNeeded = true;
-    else if (callsRead.failure === 'denied') scopedDenied = true;
+    if (callsRead.failure === 'denied') scopedDenied = true;
     else if (callsRead.failure === 'missing') scopedMissing = true;
+    else if (isRetryFailure(callsRead.failure)) retryNeeded = true;
     else {
       videos.push(
         ...(await this.discoverCallVideos({
@@ -518,10 +536,11 @@ export class MeshengerVideoLibrary {
       const messageRead = await this.readSource(
         () => this.listMessagesForChat(owner, groupEVaultUri, chatId, input.completeness),
         [] as Envelope[],
+        input.completeness,
       );
-      if (messageRead.failure === 'retry') retryNeeded = true;
-      else if (messageRead.failure === 'denied') scopedDenied = true;
+      if (messageRead.failure === 'denied') scopedDenied = true;
       else if (messageRead.failure === 'missing') scopedMissing = true;
+      else if (isRetryFailure(messageRead.failure)) retryNeeded = true;
       else {
         messagesOk += 1;
         videos.push(...this.discoverMessageVideos(messageRead.value, input.referenced, 'shared'));
@@ -557,8 +576,8 @@ export class MeshengerVideoLibrary {
           messageRecords.push(
             ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
           );
-        }, undefined);
-        if (authorRead.failure === 'retry') retryNeeded = true;
+        }, undefined, input.completeness);
+        if (isRetryFailure(authorRead.failure)) retryNeeded = true;
       }
     }
 
@@ -650,7 +669,7 @@ export class MeshengerVideoLibrary {
     );
     if (chatsRead.failure === 'denied') return emptySpace('denied');
     if (chatsRead.failure === 'missing') return emptySpace('missing');
-    if (chatsRead.failure === 'retry') return emptySpace('retry');
+    if (isRetryFailure(chatsRead.failure)) return emptySpace('retry');
 
     const canonicalChats = new Map<string, Envelope>();
     for (const chat of chatsRead.value) {
@@ -683,7 +702,7 @@ export class MeshengerVideoLibrary {
         () => this.listMessagesForChat(owner, eVaultUri, chatId, input.completeness),
         [] as Envelope[],
       );
-      if (messageRead.failure === 'retry') retryNeeded = true;
+      if (isRetryFailure(messageRead.failure)) retryNeeded = true;
       if (messageRead.failure === 'denied' || messageRead.failure === 'missing') continue;
       videos.push(...this.discoverMessageVideos(messageRead.value, input.referenced, 'shared'));
       messages.push(...messageRead.value.map((message) => toMeshengerMessage(input.ownerEName, message)));
@@ -693,7 +712,7 @@ export class MeshengerVideoLibrary {
       () => this.listEnvelopes(owner, eVaultUri, callSessionOntology, input.completeness),
       [] as Envelope[],
     );
-    if (callsRead.failure === 'retry') retryNeeded = true;
+    if (isRetryFailure(callsRead.failure)) retryNeeded = true;
     else if (!callsRead.failure) {
       videos.push(
         ...(await this.discoverCallVideos({
@@ -790,6 +809,7 @@ export class MeshengerVideoLibrary {
       await this.readSource(
         () => this.listEnvelopes(owner, eVaultUri, ontologyId, completeness),
         [] as Envelope[],
+        completeness,
       )
     ).value;
   }
@@ -797,12 +817,14 @@ export class MeshengerVideoLibrary {
   private async readSource<T>(
     read: () => Promise<T>,
     fallback: T,
-  ): Promise<{ value: T; failure?: 'denied' | 'missing' | 'retry' }> {
+    completeness?: InventoryCompletenessTracker,
+  ): Promise<{ value: T; failure?: SourceFailure }> {
     try {
       return { value: await read() };
     } catch (error) {
       const kind = sourceFailureClass(error);
       if (kind === 'fatal') throw error;
+      if (isRetryFailure(kind)) completeness?.markRetryClass(retryClassFromFailure(kind));
       return { value: fallback, failure: kind };
     }
   }
@@ -973,7 +995,7 @@ export class MeshengerVideoLibrary {
         );
       }
       if (response.status === 429) {
-        const retryAfter = retryAfterMs(response.headers.get('retry-after')) ?? 1_000;
+        const retryAfter = Math.min(retryAfterMs(response.headers.get('retry-after')) ?? 1_000, 5_000);
         if (Date.now() + retryAfter <= deadline) {
           await delay(retryAfter);
           continue;
@@ -1093,14 +1115,26 @@ function emptySpace(outcome: SharedSpaceOutcome): GroupDiscovery {
     retryNeeded: outcome === 'retry',
   };
 }
-function sourceFailureClass(error: unknown): 'denied' | 'missing' | 'retry' | 'fatal' {
+function sourceFailureClass(error: unknown): SourceFailure | 'fatal' {
   if (error instanceof MeshengerVideoLibraryError) {
     if (error.code === 'authentication_required' || error.code === 'not_configured') return 'fatal';
     if (error.code === 'authorization_denied') return 'denied';
     if (error.code === 'not_found') return 'missing';
-    return 'retry';
+    if (error.code === 'remote_unavailable') return 'unavailable';
+    if (error.code === 'rate_limited') return 'rate_limited';
+    return 'rejected';
   }
-  return 'retry';
+  return 'rejected';
+}
+function isRetryFailure(
+  kind: SourceFailure | undefined,
+): kind is 'unavailable' | 'rate_limited' | 'rejected' {
+  return kind === 'unavailable' || kind === 'rate_limited' || kind === 'rejected';
+}
+function retryClassFromFailure(
+  kind: 'unavailable' | 'rate_limited' | 'rejected',
+): 'unavailable' | 'rejected' | 'rate_limited' {
+  return kind;
 }
 function graphqlErrorsToLibraryError(errors: unknown[]): MeshengerVideoLibraryError {
   if (errors.some((error) => isAuthorizationGraphqlError(error))) {

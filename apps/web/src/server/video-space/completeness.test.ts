@@ -19,6 +19,9 @@ describe('inventory completeness', () => {
       missing: 0,
       complete: false,
       retryNeeded: true,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 0,
     });
     expect(inventoryCompletenessCopy(state)).toBe(
       '1 of 2 shared spaces indexed; retry needed.',
@@ -42,6 +45,9 @@ describe('inventory completeness', () => {
       missing: 1,
       complete: true,
       retryNeeded: false,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 0,
     });
     expect(inventoryCompletenessCopy(state)).toBe(
       '1 of 3 shared spaces indexed; 1 denied by current access; 1 not found.',

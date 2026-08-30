@@ -57,6 +57,9 @@ describe('eVault video library route', () => {
         missing: 0,
         complete: true,
         retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
       },
     });
     mocks.createLibrary.mockReturnValue({ listWithContext });
@@ -85,6 +88,9 @@ describe('eVault video library route', () => {
         missing: 0,
         complete: true,
         retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
       },
     });
     expect(listWithContext).toHaveBeenCalledWith({ eName: '@person.w3id' });

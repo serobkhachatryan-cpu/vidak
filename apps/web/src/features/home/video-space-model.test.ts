@@ -95,6 +95,9 @@ describe('video space home model', () => {
         missing: 0,
         complete: true,
         retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
       }),
     ).toBeUndefined();
     expect(
@@ -105,6 +108,9 @@ describe('video space home model', () => {
         missing: 0,
         complete: true,
         retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
       }),
     ).toBe('0 of 7 shared spaces indexed; 7 denied by current access.');
   });
