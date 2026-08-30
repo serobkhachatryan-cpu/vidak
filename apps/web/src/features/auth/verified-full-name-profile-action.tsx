@@ -30,7 +30,9 @@ export function VerifiedFullNameProfileAction() {
       const result = await fetchVerifiedFullNameConsent();
       if (result.kind === 'unavailable') {
         setVisible(true);
-        setError(result.message);
+        setError(
+          result.reason ? `${result.message} (${result.reason})` : result.message,
+        );
         return;
       }
       setError(undefined);
@@ -51,15 +53,9 @@ export function VerifiedFullNameProfileAction() {
     setSaving(true);
     setError(undefined);
     try {
-      const consent = await fetchVerifiedFullNameConsent();
-      if (consent.kind === 'unavailable' || consent.kind === 'hidden') {
-        setError(consent.message ?? 'Your verified name is not available right now.');
-        if (consent.kind === 'hidden') setVisible(false);
-        return;
-      }
       const result = await submitVerifiedFullNameGrant(true);
       if (!result.ok) {
-        setError(result.message);
+        setError(result.reason ? `${result.message} (${result.reason})` : result.message);
         return;
       }
       if (user && result.user) updateSessionUser({ ...user, ...result.user });

@@ -56,6 +56,7 @@ describe('verified full name consent route', () => {
       prompt: true,
       sourceReady: true,
       decision: null,
+      reason: 'ready',
     });
 
     const refused = await POST(
@@ -126,7 +127,7 @@ describe('verified full name consent route', () => {
     );
     expect(response.status).toBe(403);
     await expect(response.json()).resolves.toMatchObject({
-      error: { code: 'identity_mismatch' },
+      error: { code: 'identity_mismatch', reason: 'identity_mismatch' },
     });
   });
 });

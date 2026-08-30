@@ -3,6 +3,7 @@ export class W3dsAuthError extends Error {
     message: string,
     public readonly code: string,
     public readonly status: number,
+    public readonly reason?: string,
   ) {
     super(message);
     this.name = 'W3dsAuthError';

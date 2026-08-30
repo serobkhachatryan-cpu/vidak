@@ -373,6 +373,7 @@ export class W3dsAuthService {
     prompt: boolean;
     sourceReady: boolean;
     decision: VerifiedFullNameDecision | null;
+    reason: 'ready' | 'source_unconfigured';
   }> {
     const platformSession = await this.getActiveSession(accessToken, 'access');
     const decision = await this.store.getVerifiedFullNameDecision(platformSession.user.id);
@@ -389,12 +390,15 @@ export class W3dsAuthService {
       prompt: eligible && !decision,
       sourceReady,
       decision: decision ?? null,
+      reason: sourceReady ? 'ready' : 'source_unconfigured',
     };
   }
 
   /**
-   * Reads `id_document.data.name` only after an explicit grant. Login never
-   * performs this read. A chosen public name is never overwritten.
+   * Reads the eID `fetchNameFromVault` path only after an explicit grant.
+   * Login never performs this read. A chosen public name is never overwritten.
+   * Missing stored eVaultUri is not treated as "no name"; the reader resolves
+   * the vault from the Registry at read time.
    */
   async applyVerifiedFullName(accessToken: string, input: { grant: boolean }): Promise<AuthUser> {
     if (input.grant !== true) {
@@ -402,6 +406,7 @@ export class W3dsAuthService {
         'Permission to use the verified full name is required.',
         'consent_required',
         400,
+        'consent_required',
       );
     }
     const platformSession = await this.getActiveSession(accessToken, 'access');
@@ -420,21 +425,16 @@ export class W3dsAuthService {
         'Verified full name is not configured for this Vidak deployment.',
         'not_configured',
         503,
-      );
-    }
-    const eVaultUri = platformSession.user.eVaultUri?.trim();
-    if (!eVaultUri) {
-      throw new W3dsAuthError(
-        'No verified identity document name is available.',
-        'name_unavailable',
-        404,
+        'source_unconfigured',
       );
     }
     let record: Awaited<ReturnType<VerifiedFullNameReader['readVerifiedFullName']>>;
     try {
       record = await reader.readVerifiedFullName({
         eName: platformSession.user.eName,
-        eVaultUri,
+        ...(platformSession.user.eVaultUri?.trim()
+          ? { eVaultUri: platformSession.user.eVaultUri.trim() }
+          : {}),
       });
     } catch (error) {
       throw toAuthError(error);
@@ -444,6 +444,7 @@ export class W3dsAuthService {
         'The identity document does not belong to this eName.',
         'identity_mismatch',
         403,
+        'identity_mismatch',
       );
     }
     const user = await this.store.updateUserProfile({
@@ -818,12 +819,13 @@ function isHttpUrl(value: string): boolean {
 function toAuthError(error: unknown): W3dsAuthError {
   if (error instanceof W3dsAuthError) return error;
   if (error instanceof VerifiedFullNameError) {
-    return new W3dsAuthError(error.message, error.code, error.status);
+    return new W3dsAuthError(error.message, error.code, error.status, error.reason);
   }
   return new W3dsAuthError(
-    'No verified identity document name is available.',
-    'name_unavailable',
-    404,
+    'The W3DS identity source is unavailable.',
+    'remote_unavailable',
+    503,
+    'source_unavailable',
   );
 }
 

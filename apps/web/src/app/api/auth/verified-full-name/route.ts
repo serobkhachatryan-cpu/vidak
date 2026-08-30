@@ -21,12 +21,24 @@ function accessTokenFrom(request: NextRequest): string {
 function authErrorResponse(error: unknown): NextResponse {
   if (error instanceof W3dsAuthError) {
     return NextResponse.json(
-      { error: { code: error.code, message: error.message } },
+      {
+        error: {
+          code: error.code,
+          message: error.message,
+          reason: error.reason ?? error.code,
+        },
+      },
       { status: error.status },
     );
   }
   return NextResponse.json(
-    { error: { code: 'internal_error', message: 'Authentication is unavailable.' } },
+    {
+      error: {
+        code: 'internal_error',
+        message: 'Authentication is unavailable.',
+        reason: 'source_unavailable',
+      },
+    },
     { status: 500 },
   );
 }
