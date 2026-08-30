@@ -11,7 +11,7 @@ import {
   VideoCard,
   VideoCardSkeleton,
 } from '@w3ds/ui';
-import { formatFollowers, formatFollowing, formatJoinDate, formatVideoCount } from './format';
+import { formatFollowers, formatFollowing, formatJoinDate, formatVideoCount, isPublicProfileHandle } from './format';
 import { ProfileWebsiteLink } from './profile-website-link';
 import {
   LoadingRegion,
@@ -147,7 +147,9 @@ export function AboutPanel({
 }: AboutPanelProps) {
   const joinedAt = formatJoinDate(profile.joinedAt);
   const details = [
-    { label: 'Username', value: `@${profile.handle}` },
+    ...(isPublicProfileHandle(profile.handle)
+      ? [{ label: 'Username', value: `@${profile.handle}` }]
+      : []),
     { label: 'Followers', value: formatFollowers(followerCount) },
     { label: 'Following', value: formatFollowing(followingCount) },
     { label: 'Videos', value: formatVideoCount(videoCount) },

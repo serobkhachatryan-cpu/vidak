@@ -200,9 +200,11 @@ export class MockVideoApiClient implements VideoApiClient {
   async updateUserProfile(id: UserProfileId, input: UpdateProfileInput): Promise<UserProfile> {
     await this.wait();
     const profile = this.requireProfile(id);
-    const handle = normalizeHandle(input.handle);
-    if (!handle) throw new Error('Username is required.');
+    const requestedHandle =
+      input.handle === undefined ? profile.handle : normalizeHandle(input.handle);
+    const handle = requestedHandle.startsWith('w3ds_') ? '' : requestedHandle;
     if (
+      handle &&
       this.userProfiles.some(
         (candidate) => candidate.id !== id && candidate.handle.toLocaleLowerCase() === handle,
       )
@@ -927,8 +929,8 @@ export class MockVideoApiClient implements VideoApiClient {
     if (profile) return profile;
     const created: UserProfile = {
       id,
-      handle: id.replace(/^user-/, ''),
-      displayName: 'Creator',
+      handle: '',
+      displayName: '',
       joinedAt: new Date().toISOString(),
       subscriberCount: 0,
       followingCount: 0,

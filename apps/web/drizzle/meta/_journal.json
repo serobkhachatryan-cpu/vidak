@@ -127,6 +127,13 @@
       "when": 1786300200000,
       "tag": "0017_verified_full_name_decision",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786390000000,
+      "tag": "0018_stale_creator_public_profile",
+      "breakpoints": true
     }
   ]
 }

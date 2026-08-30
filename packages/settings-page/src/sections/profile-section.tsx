@@ -96,7 +96,7 @@ export function ProfileSection({
           value={value.displayName}
           invalid={Boolean(errors?.displayName)}
           aria-describedby={errors?.displayName ? `${displayNameId}-error` : undefined}
-          autoComplete="nickname"
+          autoComplete="name"
           maxLength={50}
           onChange={(event) => onChange({ displayName: event.target.value })}
         />
@@ -108,23 +108,25 @@ export function ProfileSection({
         {extras}
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor={handleId}>Username</Label>
-        <Input
-          id={handleId}
-          value={value.handle}
-          invalid={Boolean(errors?.handle)}
-          aria-describedby={errors?.handle ? `${handleId}-error` : undefined}
-          autoComplete="username"
-          maxLength={30}
-          onChange={(event) => onChange({ handle: event.target.value })}
-        />
-        {errors?.handle && (
-          <Text id={`${handleId}-error`} size="sm" tone="danger" role="alert">
-            {errors.handle}
-          </Text>
-        )}
-      </div>
+      {value.handle ? (
+        <div className="space-y-2">
+          <Label htmlFor={handleId}>Username</Label>
+          <Input
+            id={handleId}
+            value={value.handle}
+            invalid={Boolean(errors?.handle)}
+            aria-describedby={errors?.handle ? `${handleId}-error` : undefined}
+            autoComplete="username"
+            maxLength={30}
+            onChange={(event) => onChange({ handle: event.target.value })}
+          />
+          {errors?.handle && (
+            <Text id={`${handleId}-error`} size="sm" tone="danger" role="alert">
+              {errors.handle}
+            </Text>
+          )}
+        </div>
+      ) : null}
 
       <div className="space-y-2">
         <Label htmlFor={bioId}>Bio</Label>

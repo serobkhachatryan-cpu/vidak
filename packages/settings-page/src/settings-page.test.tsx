@@ -31,6 +31,18 @@ describe('SettingsPage', () => {
     expect(markup).toContain('Bio');
   });
 
+  it('hides Username when the person has no public handle', () => {
+    const markup = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@vidak.video"
+        profile={{ displayName: 'Serob Kachatryan', handle: '', bio: '' }}
+        activeSection="profile"
+      />,
+    );
+    expect(markup).toContain('Serob Kachatryan');
+    expect(markup).not.toContain('Username');
+  });
+
   it('opens the Profile panel from defaultSection so /settings?section=profile can land there', () => {
     const markup = renderToStaticMarkup(
       <SettingsPage email="demo@vidak.video" profile={profile} defaultSection="profile" />,
@@ -59,14 +71,13 @@ describe('SettingsPage', () => {
         profile={{ displayName: '', handle: '', bio: '' }}
         profileErrors={{
           displayName: 'Display name is required.',
-          handle: 'Username is required.',
         }}
         activeSection="profile"
       />,
     );
     expect(markup).toContain('role="alert"');
     expect(markup).toContain('Display name is required.');
-    expect(markup).toContain('Username is required.');
+    expect(markup).not.toContain('Username is required.');
     expect(markup).toContain('aria-invalid="true"');
   });
 

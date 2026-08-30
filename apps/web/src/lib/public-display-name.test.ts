@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   headerAccountCta,
+  isPublicHandle,
   isReplaceableWithVerifiedFullName,
   isValidPublicDisplayName,
+  isVerifiedFullNameUpgrade,
   NEUTRAL_PUBLIC_DISPLAY_NAME,
   SET_PUBLIC_NAME_LABEL,
   SETTINGS_PROFILE_HREF,
@@ -31,10 +33,34 @@ describe('isValidPublicDisplayName', () => {
     expect(isValidPublicDisplayName('@creator.w3id', { eName: '@creator.w3id' })).toBe(false);
   });
 
+  it('rejects the stale Creator placeholder', () => {
+    expect(isValidPublicDisplayName('Creator')).toBe(false);
+    expect(isValidPublicDisplayName('creator')).toBe(false);
+    expect(isReplaceableWithVerifiedFullName('Creator')).toBe(true);
+  });
+
   it('accepts chosen public names, including the neutral default', () => {
     expect(isValidPublicDisplayName('Ada Lovelace')).toBe(true);
     expect(isValidPublicDisplayName(NEUTRAL_PUBLIC_DISPLAY_NAME)).toBe(true);
-    expect(isValidPublicDisplayName('creator')).toBe(true);
+    expect(isValidPublicDisplayName('Ada')).toBe(true);
+  });
+});
+
+describe('isPublicHandle', () => {
+  it('rejects local ids, UUIDs, and eNames as usernames', () => {
+    expect(isPublicHandle(`w3ds_${opaqueUuid}`)).toBe(false);
+    expect(isPublicHandle(opaqueUuid)).toBe(false);
+    expect(isPublicHandle('@ada.w3id')).toBe(false);
+    expect(isPublicHandle('ada-lovelace')).toBe(true);
+    expect(isPublicHandle('')).toBe(false);
+  });
+});
+
+describe('isVerifiedFullNameUpgrade', () => {
+  it('allows completing a first-name grant to the document full name', () => {
+    expect(isVerifiedFullNameUpgrade('Serob', 'Serob Kachatryan')).toBe(true);
+    expect(isVerifiedFullNameUpgrade('Ada Chosen', 'Ada Lovelace')).toBe(false);
+    expect(isVerifiedFullNameUpgrade('Ada Lovelace', 'Ada Lovelace')).toBe(false);
   });
 });
 

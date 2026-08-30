@@ -64,10 +64,13 @@ export function validateProfile(input: ProfileFormInput): ProfileFormErrors {
     errors.displayName = 'Display name must be 50 characters or fewer.';
 
   const handle = input.handle.trim().replace(/^@/, '').toLocaleLowerCase();
-  if (!handle) errors.handle = 'Username is required.';
-  else if (!handlePattern.test(handle)) {
-    errors.handle =
-      'Username must be 3–30 characters and use letters, numbers, underscores, or hyphens.';
+  if (handle) {
+    if (handle.startsWith('w3ds_')) {
+      errors.handle = 'That value is a private identifier, not a public username.';
+    } else if (!handlePattern.test(handle)) {
+      errors.handle =
+        'Username must be 3–30 characters and use letters, numbers, underscores, or hyphens.';
+    }
   }
 
   if (input.bio.length > 280) errors.bio = 'Bio must be 280 characters or fewer.';

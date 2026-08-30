@@ -18,7 +18,12 @@ export function formatJoinDate(value: string): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : joinDate.format(date);
 }
 
-/** Drops the scheme and any trailing slash so a long website URL stays readable inline. */
+export function isPublicProfileHandle(handle: string | null | undefined): boolean {
+  const value = handle?.trim().replace(/^@/, '') ?? '';
+  if (!value || value.startsWith('w3ds_')) return false;
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) return false;
+  return /^[a-z0-9][a-z0-9_-]{2,29}$/i.test(value);
+}
 export function formatWebsiteLabel(url: string): string {
   return url.replace(/^https?:\/\//i, '').replace(/\/$/, '');
 }

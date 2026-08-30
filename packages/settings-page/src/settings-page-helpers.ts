@@ -14,11 +14,56 @@ export function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LOCAL_PLATFORM_ID_PATTERN =
+  /^w3ds_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isStaleOrIdentifierDisplayName(value: string): boolean {
+  const name = value.trim();
+  if (!name) return true;
+  if (name.toLocaleLowerCase() === 'creator') return true;
+  if (name.startsWith('@')) return true;
+  if (UUID_PATTERN.test(name) || LOCAL_PLATFORM_ID_PATTERN.test(name)) return true;
+  return false;
+}
+
+export function publicHandleOrEmpty(value: string | null | undefined, userId?: string): string {
+  const handle = value?.trim().replace(/^@/, '') ?? '';
+  if (!handle) return '';
+  if (handle.startsWith('w3ds_') || LOCAL_PLATFORM_ID_PATTERN.test(handle) || UUID_PATTERN.test(handle)) {
+    return '';
+  }
+  if (userId && (handle === userId || handle === userId.replace(/^w3ds_/, ''))) return '';
+  if (!/^[a-z0-9][a-z0-9_-]{2,29}$/i.test(handle)) return '';
+  return handle;
+}
+
 export function profileFormFromProfile(profile: UserProfile): ProfileFormInput {
+  return profileFormFromCanonical({
+    authDisplayName: profile.displayName,
+    authHandle: profile.handle,
+    authUserId: profile.id,
+    product: profile,
+  });
+}
+
+export function profileFormFromCanonical(input: {
+  authDisplayName: string;
+  authHandle?: string;
+  authUserId?: string;
+  product?: UserProfile;
+}): ProfileFormInput {
+  const authName = input.authDisplayName.trim();
+  const productName = input.product?.displayName?.trim() ?? '';
+  const displayName = !isStaleOrIdentifierDisplayName(authName)
+    ? authName
+    : !isStaleOrIdentifierDisplayName(productName)
+      ? productName
+      : authName;
   return {
-    displayName: profile.displayName,
-    handle: profile.handle,
-    bio: profile.bio ?? '',
+    displayName,
+    handle: publicHandleOrEmpty(input.product?.handle ?? input.authHandle, input.authUserId),
+    bio: input.product?.bio ?? '',
   };
 }
 

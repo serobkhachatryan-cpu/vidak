@@ -95,7 +95,7 @@ describe('extractVerifiedFullNameFromBindingDocuments', () => {
     });
   });
 
-  it('prefers id_document over self', () => {
+  it('prefers id_document over self and keeps the full document name', () => {
     expect(
       extractVerifiedFullNameFromBindingDocuments({
         authenticatedEName: '@creator.w3id',
@@ -421,9 +421,23 @@ describe('verified full name consent and persistence', () => {
         status: 409,
       },
     );
-    expect(reader.readVerifiedFullName).not.toHaveBeenCalled();
+    expect(reader.readVerifiedFullName).toHaveBeenCalled();
     const session = await service.getSession(accessToken);
     expect(session.user.displayName).toBe('Ada Chosen');
+  });
+
+  it('upgrades a first-name grant to the full verified document name', async () => {
+    const reader: VerifiedFullNameReader = {
+      readVerifiedFullName: vi.fn().mockResolvedValue({
+        name: 'Ada Lovelace',
+        subject: '@creator.w3id',
+        type: 'id_document',
+      }),
+    };
+    const { service, accessToken } = await authenticatedService(reader);
+    await service.updateProfile(accessToken, { displayName: 'Ada' });
+    const user = await service.applyVerifiedFullName(accessToken, { grant: true });
+    expect(user.displayName).toBe('Ada Lovelace');
   });
 
   it('records a decline without reading or changing the name', async () => {

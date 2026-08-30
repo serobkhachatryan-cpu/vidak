@@ -49,7 +49,7 @@ export interface AuthDeviceSession {
 
 export interface UpdateProfileInput {
   displayName: string;
-  handle: string;
+  handle?: string;
   bio?: string;
 }
 

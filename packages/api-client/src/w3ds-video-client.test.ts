@@ -88,7 +88,9 @@ describe('W3dsVideoApiClient', () => {
       client.listConnectedAccounts(userId),
     ]);
 
-    expect(profile).toMatchObject({ id: userId, displayName: 'Creator' });
+    expect(profile).toMatchObject({ id: userId });
+    expect(profile?.displayName).not.toBe('Creator');
+    expect(profile?.handle.startsWith('w3ds_')).toBe(false);
     expect(preferences).toBeDefined();
     expect(connectedAccounts).toEqual(expect.any(Array));
   });

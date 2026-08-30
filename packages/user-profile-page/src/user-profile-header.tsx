@@ -1,7 +1,7 @@
 import type { UserProfile } from '@w3ds/types';
 import { Avatar, Badge, Button, Heading, IconButton, Text } from '@w3ds/ui';
 import { useEffect, useId, useRef, useState } from 'react';
-import { formatFollowers, formatFollowing, formatJoinDate, formatVideoCount } from './format';
+import { formatFollowers, formatFollowing, formatJoinDate, formatVideoCount, isPublicProfileHandle } from './format';
 import { ProfileWebsiteLink } from './profile-website-link';
 import { cx, focusRing } from './styles';
 
@@ -171,9 +171,11 @@ export function UserProfileHeader({
                 </Badge>
               )}
             </div>
-            <Text size="sm" tone="muted" className="mt-1">
-              @{profile.handle}
-            </Text>
+            {isPublicProfileHandle(profile.handle) ? (
+              <Text size="sm" tone="muted" className="mt-1">
+                @{profile.handle}
+              </Text>
+            ) : null}
             <Text size="sm" tone="muted" className="mt-1">
               {summary}
             </Text>

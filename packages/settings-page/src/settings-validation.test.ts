@@ -14,9 +14,17 @@ import {
 describe('settings validation', () => {
   it('validates profile fields', () => {
     expect(hasProfileErrors(validateProfile({ displayName: '', handle: '', bio: '' }))).toBe(true);
+    expect(validateProfile({ displayName: 'Ada', handle: '', bio: 'Hello' })).toEqual({});
     expect(validateProfile({ displayName: 'Ada', handle: 'ada-lovelace', bio: 'Hello' })).toEqual(
       {},
     );
+    expect(
+      validateProfile({
+        displayName: 'Ada',
+        handle: 'w3ds_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        bio: '',
+      }).handle,
+    ).toMatch(/private identifier/);
     expect(validateProfile({ displayName: 'Ada', handle: 'ab', bio: 'x'.repeat(281) }).bio).toMatch(
       /280/,
     );

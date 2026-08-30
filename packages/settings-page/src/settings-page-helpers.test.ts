@@ -8,6 +8,7 @@ import {
   isAppLanguage,
   nextSettingsSection,
   parseSettingsSectionParam,
+  profileFormFromCanonical,
   profileFormFromProfile,
   resolveActiveSettingsSection,
   resolveSettingsPageState,
@@ -36,13 +37,28 @@ describe('errorMessage', () => {
 });
 
 describe('profileFormFromProfile', () => {
-  it('maps profile fields and defaults missing bios', () => {
+  it('maps profile fields and prefers a real auth name over a stale Creator placeholder', () => {
     expect(profileFormFromProfile(profile({ bio: 'Hello' }))).toEqual({
       displayName: 'Ada Lovelace',
       handle: 'ada-lovelace',
       bio: 'Hello',
     });
     expect(profileFormFromProfile(profile()).bio).toBe('');
+    expect(
+      profileFormFromCanonical({
+        authDisplayName: 'Serob Kachatryan',
+        authUserId: 'w3ds_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        product: profile({
+          id: 'w3ds_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+          displayName: 'Creator',
+          handle: 'w3ds_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        }),
+      }),
+    ).toEqual({
+      displayName: 'Serob Kachatryan',
+      handle: '',
+      bio: '',
+    });
   });
 });
 

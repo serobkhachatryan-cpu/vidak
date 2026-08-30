@@ -10,6 +10,7 @@ import type { AuthDeviceSession } from '@w3ds/types';
 import {
   isReplaceableWithVerifiedFullName,
   isValidPublicDisplayName,
+  isVerifiedFullNameUpgrade,
   NEUTRAL_PUBLIC_DISPLAY_NAME,
 } from '../lib/public-display-name';
 import { getW3dsDatabase } from './db/client';
@@ -31,7 +32,6 @@ import {
   type W3dsAuthStore,
 } from './w3ds-auth-store';
 import {
-  assertReplaceablePublicName,
   createVerifiedFullNameReader,
   normalizeEName,
   VerifiedFullNameError,
@@ -378,13 +378,17 @@ export class W3dsAuthService {
     const platformSession = await this.getActiveSession(accessToken, 'access');
     const decision = await this.store.getVerifiedFullNameDecision(platformSession.user.id);
     const sourceReady = Boolean(this.verifiedFullNameReader);
-    const replaceable = isReplaceableWithVerifiedFullName(platformSession.user.displayName, {
+    const identity = {
       id: platformSession.user.id,
       eName: platformSession.user.eName,
       eVaultId: platformSession.user.eVaultId,
-    });
-    // "Not now" must not trap the person: they stay eligible for an explicit grant.
-    const eligible = sourceReady && replaceable;
+    };
+    const replaceable = isReplaceableWithVerifiedFullName(platformSession.user.displayName, identity);
+    const givenNameOnly =
+      decision === 'granted' &&
+      isValidPublicDisplayName(platformSession.user.displayName, identity) &&
+      !/\s/.test(platformSession.user.displayName.trim());
+    const eligible = sourceReady && (replaceable || givenNameOnly);
     return {
       eligible,
       prompt: eligible && !decision,
@@ -410,15 +414,13 @@ export class W3dsAuthService {
       );
     }
     const platformSession = await this.getActiveSession(accessToken, 'access');
-    try {
-      assertReplaceablePublicName(platformSession.user.displayName, {
-        id: platformSession.user.id,
-        eName: platformSession.user.eName,
-        eVaultId: platformSession.user.eVaultId,
-      });
-    } catch (error) {
-      throw toAuthError(error);
-    }
+    const identity = {
+      id: platformSession.user.id,
+      eName: platformSession.user.eName,
+      eVaultId: platformSession.user.eVaultId,
+    };
+    const currentName = platformSession.user.displayName;
+    const replaceable = isReplaceableWithVerifiedFullName(currentName, identity);
     const reader = this.verifiedFullNameReader;
     if (!reader) {
       throw new W3dsAuthError(
@@ -445,6 +447,15 @@ export class W3dsAuthService {
         'identity_mismatch',
         403,
         'identity_mismatch',
+      );
+    }
+    if (!replaceable && !isVerifiedFullNameUpgrade(currentName, record.name)) {
+      throw toAuthError(
+        new VerifiedFullNameError(
+          'Your public name was already set and will not be overwritten.',
+          'name_not_replaceable',
+          409,
+        ),
       );
     }
     const user = await this.store.updateUserProfile({

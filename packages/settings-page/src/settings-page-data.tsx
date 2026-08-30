@@ -37,7 +37,8 @@ import {
 import {
   authUserFromProductProfile,
   errorMessage,
-  profileFormFromProfile,
+  profileFormFromCanonical,
+  publicHandleOrEmpty,
   resolveSettingsPageState,
   settingsSectionsForCapabilities,
 } from './settings-page-helpers';
@@ -184,18 +185,22 @@ export function SettingsPageData({
     enabled: capabilities.manageSessions,
   });
 
-  const [profileForm, setProfileForm] = useState<ProfileFormInput>({
-    displayName,
-    handle: '',
-    bio: '',
-  });
+  const [profileForm, setProfileForm] = useState<ProfileFormInput>(() =>
+    profileFormFromCanonical({
+      authDisplayName: displayName,
+      authUserId: authUser.id,
+      ...(authUser.profile.handle ? { authHandle: authUser.profile.handle } : {}),
+    }),
+  );
   const [profileErrors, setProfileErrors] = useState<ProfileFormErrors | undefined>();
   const [profileSuccess, setProfileSuccess] = useState<string | undefined>();
   const [profileFormError, setProfileFormError] = useState<string | undefined>();
+  const [isSavingAuthProfile, setIsSavingAuthProfile] = useState(false);
   const [avatarError, setAvatarError] = useState<string | undefined>();
   const [avatarPreviewUrl, setAvatarPreviewUrl] = useState<string | undefined>();
   const avatarObjectUrlRef = useRef<string | undefined>(undefined);
   const profileHydratedForUserRef = useRef<UserProfileId | undefined>(undefined);
+  const lastAuthDisplayNameRef = useRef(displayName);
   const syncedAppearanceRef = useRef<AppearancePreference | undefined>(undefined);
 
   const [emailForm, setEmailForm] = useState<EmailFormInput>({ email: '', password: '' });
@@ -243,12 +248,25 @@ export function SettingsPageData({
   }, [defaultSection]);
 
   useEffect(() => {
-    const profile = profileQuery.data;
-    if (!profile) return;
-    if (profileHydratedForUserRef.current === userId) return;
-    profileHydratedForUserRef.current = userId;
-    setProfileForm(profileFormFromProfile(profile));
-  }, [profileQuery.data, userId]);
+    const next = profileFormFromCanonical({
+      authDisplayName: displayName,
+      authUserId: authUser.id,
+      ...(authUser.profile.handle ? { authHandle: authUser.profile.handle } : {}),
+      ...(profileQuery.data ? { product: profileQuery.data } : {}),
+    });
+    const authNameChanged = lastAuthDisplayNameRef.current !== displayName;
+    lastAuthDisplayNameRef.current = displayName;
+    if (profileHydratedForUserRef.current !== userId || authNameChanged) {
+      profileHydratedForUserRef.current = userId;
+      setProfileForm(next);
+      return;
+    }
+    setProfileForm((current) => ({
+      ...current,
+      handle: publicHandleOrEmpty(current.handle, authUser.id),
+      bio: current.bio || next.bio,
+    }));
+  }, [authUser.id, authUser.profile.handle, displayName, profileQuery.data, userId]);
 
   useEffect(() => {
     const appearance = preferencesQuery.data?.appearance;
@@ -372,27 +390,42 @@ export function SettingsPageData({
     if (hasProfileErrors(errors)) return;
     setProfileFormError(undefined);
     setProfileSuccess(undefined);
+    setIsSavingAuthProfile(true);
     try {
-      const profile = await updateProfile.mutateAsync({
-        displayName: profileForm.displayName.trim(),
-        handle: profileForm.handle.trim().replace(/^@/, '').toLocaleLowerCase(),
-        bio: profileForm.bio,
+      const displayNameValue = profileForm.displayName.trim();
+      const handle = publicHandleOrEmpty(profileForm.handle, authUser.id);
+      const nextUser = await authClient.updateProfile(accessToken, {
+        displayName: displayNameValue,
       });
-      setProfileForm(profileFormFromProfile(profile));
-      await syncAuthProjection(
-        {
-          displayName: profile.displayName,
-          ...(profile.avatarUrl
-            ? { avatarUrl: profile.avatarUrl }
-            : authAvatarUrl
-              ? { avatarUrl: null }
-              : {}),
-        },
-        profile,
-      );
+      onAuthUserUpdate?.(nextUser);
+      if (profileQuery.data || handle || profileForm.bio.trim()) {
+        const profile = await updateProfile.mutateAsync({
+          displayName: displayNameValue,
+          handle,
+          bio: profileForm.bio,
+        });
+        setProfileForm(
+          profileFormFromCanonical({
+            authDisplayName: nextUser.displayName,
+            authUserId: nextUser.id,
+            ...(nextUser.profile.handle ? { authHandle: nextUser.profile.handle } : {}),
+            product: profile,
+          }),
+        );
+      } else {
+        setProfileForm(
+          profileFormFromCanonical({
+            authDisplayName: nextUser.displayName,
+            authUserId: nextUser.id,
+            ...(nextUser.profile.handle ? { authHandle: nextUser.profile.handle } : {}),
+          }),
+        );
+      }
       setProfileSuccess('Profile saved.');
     } catch (error) {
       setProfileFormError(errorMessage(error, 'Could not save profile.'));
+    } finally {
+      setIsSavingAuthProfile(false);
     }
   };
 
@@ -546,7 +579,7 @@ export function SettingsPageData({
       state={resolveSettingsPageState({
         isPending: profileQuery.isPending || preferencesQuery.isPending,
         error: profileQuery.error ?? preferencesQuery.error,
-        hasProfile: Boolean(profile),
+        hasProfile: Boolean(profile) || Boolean(authUser),
       })}
       email={email}
       profile={profileForm}
@@ -555,7 +588,7 @@ export function SettingsPageData({
       {...(avatarError ? { avatarError } : {})}
       {...(profileSuccess ? { profileSuccess } : {})}
       {...(profileFormError ? { profileFormError } : {})}
-      isSavingProfile={updateProfile.isPending}
+      isSavingProfile={updateProfile.isPending || isSavingAuthProfile}
       isUploadingAvatar={uploadAvatar.isPending}
       onProfileChange={(patch) => {
         setProfileForm((current) => ({ ...current, ...patch }));

@@ -12,6 +12,7 @@ import {
   VideoCardSkeleton,
 } from '@w3ds/ui';
 import { type ReactNode, useId, useState } from 'react';
+import { isPublicProfileHandle } from './format';
 import { cx } from './styles';
 import { UserProfileHeader, userProfileBannerClassName } from './user-profile-header';
 import { AboutPanel, PlaylistsPanel, VideosPanel } from './user-profile-panels';
@@ -141,7 +142,9 @@ export function UserProfilePage({
       void navigator
         .share({
           title: profile.displayName,
-          text: `Check out @${profile.handle} on W3DS`,
+          text: isPublicProfileHandle(profile.handle)
+            ? `Check out @${profile.handle} on Vidak`
+            : `Check out ${profile.displayName} on Vidak`,
           ...(typeof window !== 'undefined' ? { url: window.location.href } : {}),
         })
         .catch(() => undefined);
