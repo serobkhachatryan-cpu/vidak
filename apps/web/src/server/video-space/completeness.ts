@@ -5,6 +5,8 @@
 export interface InventoryCompleteness {
   indexed: number;
   expected: number;
+  denied: number;
+  missing: number;
   complete: boolean;
   retryNeeded: boolean;
 }
@@ -12,18 +14,26 @@ export interface InventoryCompleteness {
 export const completeInventory: InventoryCompleteness = {
   indexed: 0,
   expected: 0,
+  denied: 0,
+  missing: 0,
   complete: true,
   retryNeeded: false,
 };
 
 export function inventoryCompletenessCopy(state: InventoryCompleteness): string {
-  const base = `${state.indexed} of ${state.expected} shared spaces indexed`;
-  return state.complete && !state.retryNeeded ? `${base}.` : `${base}; retry needed.`;
+  const parts = [`${state.indexed} of ${state.expected} shared spaces indexed`];
+  if (state.denied > 0) parts.push(`${state.denied} denied by current access`);
+  if (state.missing > 0) parts.push(`${state.missing} not found`);
+  const classified = `${parts[0]}${parts.length > 1 ? `; ${parts.slice(1).join('; ')}` : ''}`;
+  if (state.complete && !state.retryNeeded) return `${classified}.`;
+  return `${classified}; retry needed.`;
 }
 
 export function createInventoryCompletenessTracker() {
   let expected = 0;
   let indexed = 0;
+  let denied = 0;
+  let missing = 0;
   let retryNeeded = false;
 
   return {
@@ -33,16 +43,25 @@ export function createInventoryCompletenessTracker() {
     indexSpace() {
       indexed += 1;
     },
+    denySpace() {
+      denied += 1;
+    },
+    missSpace() {
+      missing += 1;
+    },
     markRetry() {
       retryNeeded = true;
     },
     snapshot(): InventoryCompleteness {
-      const complete = expected === indexed && !retryNeeded;
+      const classified = indexed + denied + missing;
+      const complete = classified === expected && !retryNeeded;
       return {
         indexed,
         expected,
+        denied,
+        missing,
         complete,
-        retryNeeded: retryNeeded || indexed < expected,
+        retryNeeded: retryNeeded || classified < expected,
       };
     },
   };

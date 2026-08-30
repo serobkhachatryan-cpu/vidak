@@ -13,6 +13,7 @@ import {
 } from '../../../../server/w3ds-auth';
 
 export const runtime = 'nodejs';
+export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   try {

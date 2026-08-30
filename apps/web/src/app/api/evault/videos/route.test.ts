@@ -50,7 +50,14 @@ describe('eVault video library route', () => {
       ],
       conversations: [],
       messages: [],
-      completeness: { indexed: 0, expected: 0, complete: true, retryNeeded: false },
+      completeness: {
+        indexed: 0,
+        expected: 0,
+        denied: 0,
+        missing: 0,
+        complete: true,
+        retryNeeded: false,
+      },
     });
     mocks.createLibrary.mockReturnValue({ listWithContext });
     mocks.getAuthService.mockReturnValue({
@@ -71,7 +78,14 @@ describe('eVault video library route', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store, max-age=0');
     await expect(response.json()).resolves.toMatchObject({
       items: [expect.objectContaining({ title: 'Video from another app.mp4' })],
-      completeness: { indexed: 0, expected: 0, complete: true, retryNeeded: false },
+      completeness: {
+        indexed: 0,
+        expected: 0,
+        denied: 0,
+        missing: 0,
+        complete: true,
+        retryNeeded: false,
+      },
     });
     expect(listWithContext).toHaveBeenCalledWith({ eName: '@person.w3id' });
   });

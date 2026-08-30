@@ -49,9 +49,15 @@ export async function collectPaginatedEnvelopes<T>(input: {
       if (item) items.push(item);
     }
     if (pageData.hasNextPage === false) return { items, complete: true };
-    if (pageData.hasNextPage !== true) return { items, complete: false };
-    if (!pageData.endCursor) return { items, complete: false };
-    after = pageData.endCursor;
+    if (pageData.hasNextPage === true) {
+      if (!pageData.endCursor) return { items, complete: false };
+      after = pageData.endCursor;
+      continue;
+    }
+    // Documented pageInfo includes hasNextPage; some eVaults omit false on the
+    // only page. A missing flag with no cursor is a finished page, not a drop.
+    if (!pageData.endCursor) return { items, complete: true };
+    return { items, complete: false };
   }
   return { items, complete: false };
 }

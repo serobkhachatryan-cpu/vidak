@@ -13,6 +13,7 @@ import {
 import {
   type InventoryCompleteness,
   createInventoryCompletenessTracker,
+  inventoryCompletenessCopy,
   type InventoryCompletenessTracker,
 } from './video-space/completeness';
 import {
@@ -35,7 +36,7 @@ const fileOntology = documentedOntologyId('file-record');
 const w3dsFileOntology = documentedOntologyId('w3ds-file');
 const pageSize = 100;
 const maxPages = 30;
-const retryBudgetMs = 8_000;
+const retryBudgetMs = 20_000;
 const requestTimeoutMs = 12_000;
 // Call recordings are stored as ~45-second files. A multi-hour recording must
 // remain playable through its final segment, while the authenticated stream
@@ -101,6 +102,8 @@ export class MeshengerVideoLibraryError extends Error {
       | 'authentication_required'
       | 'remote_unavailable'
       | 'remote_rejected'
+      | 'authorization_denied'
+      | 'not_found'
       | 'rate_limited'
       | 'invalid_stream'
       | 'stream_expired'
@@ -138,11 +141,17 @@ interface ChatReference {
   chatId: string;
   type?: string | undefined;
 }
+type SharedSpaceOutcome = 'indexed' | 'denied' | 'missing' | 'retry';
 interface GroupDiscovery {
   videos: DiscoveredVideo[];
   conversations: MeshengerConversation[];
   messages: MeshengerMessage[];
-  complete: boolean;
+  outcome: SharedSpaceOutcome;
+  retryNeeded: boolean;
+}
+interface ResolvedVault {
+  ownerEName: string;
+  eVaultUri: string;
 }
 
 const listQuery = `query AuthorizedMedia($ontologyId: ID!, $first: Int!, $after: String) {
@@ -185,12 +194,13 @@ export class MeshengerVideoLibrary {
     const completeness = createInventoryCompletenessTracker();
     // eVaults throttle bursts. Scan each source in order so a first historical
     // import does not turn three independent reads into a simultaneous spike.
-    const calls = await this.listEnvelopes(eName, eVaultUri, callSessionOntology, completeness);
-    const chatEnvelopes = await this.listEnvelopes(eName, eVaultUri, chatOntology, completeness);
+    // Remote failures on one ontology must not 500 the whole library.
+    const calls = await this.tryListEnvelopes(eName, eVaultUri, callSessionOntology, completeness);
+    const chatEnvelopes = await this.tryListEnvelopes(eName, eVaultUri, chatOntology, completeness);
     const chatReferences = chatReferencesFromEnvelopes(chatEnvelopes);
-    const messages = await this.listEnvelopes(eName, eVaultUri, messageOntology, completeness);
-    const files = await this.listEnvelopes(eName, eVaultUri, fileOntology, completeness);
-    const rawFiles = await this.listEnvelopes(eName, eVaultUri, w3dsFileOntology, completeness);
+    const messages = await this.tryListEnvelopes(eName, eVaultUri, messageOntology, completeness);
+    const files = await this.tryListEnvelopes(eName, eVaultUri, fileOntology, completeness);
+    const rawFiles = await this.tryListEnvelopes(eName, eVaultUri, w3dsFileOntology, completeness);
     const referenced = new Set<string>();
     const historicalAuthors = authorsFromMessages(messages);
     const found = await this.discoverCallVideos({
@@ -220,6 +230,10 @@ export class MeshengerVideoLibrary {
     found.push(...direct.videos);
 
     const unique = dedupeDiscoveredVideos(found);
+    const completenessState = completeness.snapshot();
+    if (completenessState.expected > 0) {
+      console.info(`video-space-inventory ${inventoryCompletenessCopy(completenessState)}`);
+    }
     return {
       items: unique
         .map((item) => ({
@@ -252,7 +266,7 @@ export class MeshengerVideoLibrary {
         ...group.messages,
         ...direct.messages,
       ]).sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
-      completeness: completeness.snapshot(),
+      completeness: completenessState,
     };
   }
 
@@ -271,8 +285,8 @@ export class MeshengerVideoLibrary {
     if (cached) cachedMediaUrls.delete(cacheKey);
     const file = parseW3dsFileUri(grant.fileUri);
     if (!file) invalidStream();
-    const eVaultUri = await this.resolveEVault(file.ownerEName);
-    const envelope = await this.readEnvelope(file.ownerEName, eVaultUri, file.metaEnvelopeId);
+    const vault = await this.resolveEVault(file.ownerEName);
+    const envelope = await this.readEnvelope(vault.ownerEName, vault.eVaultUri, file.metaEnvelopeId);
     const url = optionalString(envelope.parsed.publicUrl) ?? optionalString(envelope.parsed.url);
     if (!url)
       throw new MeshengerVideoLibraryError(
@@ -326,8 +340,11 @@ export class MeshengerVideoLibrary {
     const owner = optionalString(source.parsed.canonicalOwnerEName);
     const id = optionalString(source.parsed.canonicalEnvelopeId);
     if (!owner || !id || !isEName(owner)) return undefined;
-    const eVaultUri = owner === sourceEName ? sourceEVaultUri : await this.resolveEVault(owner);
-    return this.readEnvelope(owner, eVaultUri, id);
+    const vault =
+      owner === sourceEName
+        ? { ownerEName: sourceEName, eVaultUri: sourceEVaultUri }
+        : await this.resolveEVault(owner);
+    return this.readEnvelope(vault.ownerEName, vault.eVaultUri, id);
   }
 
   /**
@@ -369,10 +386,9 @@ export class MeshengerVideoLibrary {
       videos.push(...space.videos);
       conversations.push(...space.conversations);
       messageRecords.push(...space.messages);
-      if (space.complete) completeness.indexSpace();
-      else completeness.markRetry();
+      this.recordSpaceOutcome(completeness, space);
     }
-    return { videos, conversations, messages: messageRecords, complete: true };
+    return { videos, conversations, messages: messageRecords, outcome: 'indexed', retryNeeded: false };
   }
 
   private async readGroupSpace(input: {
@@ -386,139 +402,155 @@ export class MeshengerVideoLibrary {
     const videos: DiscoveredVideo[] = [];
     const conversations: MeshengerConversation[] = [];
     const messageRecords: MeshengerMessage[] = [];
-    let complete = true;
-    try {
-      const groupEVaultUri = await this.resolveEVault(input.groupEName);
-      const manifests = await this.listEnvelopes(
-        input.groupEName,
-        groupEVaultUri,
-        groupManifestOntology,
-        input.completeness,
-      );
-      const currentManifest = manifests.find((item) =>
-        isCurrentGroupMember(item.parsed, input.viewerEName),
-      );
-      const manifest = currentManifest ?? manifests[0];
-      const currentMember = Boolean(currentManifest);
-      if (manifest && currentMember) {
-        const participantCount = groupParticipantCount(manifest.parsed);
-        const role = groupRole(manifest.parsed, input.viewerEName);
-        const updatedAt = optionalString(manifest.parsed.updatedAt);
-        for (const chatId of input.chatIds) {
-          conversations.push({
-            id: `${input.groupEName}:${chatId}`,
-            ownerEName: input.groupEName,
-            chatId,
-            kind: 'group',
-            title: optionalString(manifest.parsed.name) ?? 'Group',
-            ...(participantCount ? { participantCount } : {}),
-            ...(role ? { role } : {}),
-            ...(updatedAt ? { updatedAt } : {}),
-          });
-        }
-      }
+    const vaultRead = await this.readSource(() => this.resolveEVault(input.groupEName), undefined);
+    if (!vaultRead.value) {
+      return emptySpace(vaultRead.failure === 'denied' ? 'denied' : vaultRead.failure === 'missing' ? 'missing' : 'retry');
+    }
+    const vault = vaultRead.value;
+    const owner = vault.ownerEName;
+    const groupEVaultUri = vault.eVaultUri;
 
-      const groupChats = await this.listEnvelopes(
-        input.groupEName,
-        groupEVaultUri,
-        chatOntology,
-        input.completeness,
-      );
-      const messageSources = new Set<string>([input.groupEName]);
-      if (currentManifest) {
-        for (const member of groupMemberENames(currentManifest.parsed)) messageSources.add(member);
-      }
-      for (const chat of groupChats) {
-        const chatId = optionalString(chat.parsed.id) ?? chat.id;
-        if (!input.chatIds.has(chatId)) continue;
-        for (const participant of asArray(chat.parsed.participantIds)) {
-          if (typeof participant === 'string' && isEName(participant)) messageSources.add(participant);
-        }
-      }
+    const manifests = await this.tryListEnvelopes(
+      owner,
+      groupEVaultUri,
+      groupManifestOntology,
+      input.completeness,
+    );
+    const currentManifest = manifests.find((item) =>
+      isCurrentGroupMember(item.parsed, input.viewerEName),
+    );
+    const manifest = currentManifest ?? manifests[0];
+    const currentMember = Boolean(currentManifest);
+    if (manifest && currentMember) {
+      const participantCount = groupParticipantCount(manifest.parsed);
+      const role = groupRole(manifest.parsed, input.viewerEName);
+      const updatedAt = optionalString(manifest.parsed.updatedAt);
       for (const chatId of input.chatIds) {
-        for (const author of input.historicalAuthors.get(chatId) ?? []) messageSources.add(author);
+        conversations.push({
+          id: `${input.groupEName}:${chatId}`,
+          ownerEName: input.groupEName,
+          chatId,
+          kind: 'group',
+          title: optionalString(manifest.parsed.name) ?? 'Group',
+          ...(participantCount ? { participantCount } : {}),
+          ...(role ? { role } : {}),
+          ...(updatedAt ? { updatedAt } : {}),
+        });
       }
+    }
 
-      const calls = await this.listEnvelopes(
-        input.groupEName,
-        groupEVaultUri,
-        callSessionOntology,
-        input.completeness,
-      );
+    const groupChats = await this.tryListEnvelopes(
+      owner,
+      groupEVaultUri,
+      chatOntology,
+      input.completeness,
+    );
+    const messageSources = new Set<string>([input.groupEName, owner]);
+    if (currentManifest) {
+      for (const member of groupMemberENames(currentManifest.parsed)) messageSources.add(member);
+    }
+    for (const chat of groupChats) {
+      const chatId = optionalString(chat.parsed.id) ?? chat.id;
+      if (!input.chatIds.has(chatId)) continue;
+      for (const participant of asArray(chat.parsed.participantIds)) {
+        if (typeof participant !== 'string') continue;
+        const participantEName = normalizeEName(participant);
+        if (isEName(participantEName)) messageSources.add(participantEName);
+      }
+    }
+    for (const chatId of input.chatIds) {
+      for (const author of input.historicalAuthors.get(chatId) ?? []) messageSources.add(author);
+    }
+
+    const callsRead = await this.readSource(
+      () => this.listEnvelopes(owner, groupEVaultUri, callSessionOntology, input.completeness),
+      [] as Envelope[],
+    );
+    let retryNeeded = false;
+    let scopedDenied = false;
+    let scopedMissing = false;
+    if (callsRead.failure === 'retry') retryNeeded = true;
+    else if (callsRead.failure === 'denied') scopedDenied = true;
+    else if (callsRead.failure === 'missing') scopedMissing = true;
+    else {
       videos.push(
         ...(await this.discoverCallVideos({
           viewerEName: input.viewerEName,
           sourceEName: input.groupEName,
           sourceEVaultUri: groupEVaultUri,
-          calls,
+          calls: callsRead.value,
           chatIds: input.chatIds,
           referenced: input.referenced,
         })),
       );
+    }
 
-      for (const chatId of input.chatIds) {
-        const groupMessages = await this.listMessagesForChat(
-          input.groupEName,
-          groupEVaultUri,
-          chatId,
-          input.completeness,
-        );
-        videos.push(...this.discoverMessageVideos(groupMessages, input.referenced, 'shared'));
+    let messagesOk = 0;
+    for (const chatId of input.chatIds) {
+      const messageRead = await this.readSource(
+        () => this.listMessagesForChat(owner, groupEVaultUri, chatId, input.completeness),
+        [] as Envelope[],
+      );
+      if (messageRead.failure === 'retry') retryNeeded = true;
+      else if (messageRead.failure === 'denied') scopedDenied = true;
+      else if (messageRead.failure === 'missing') scopedMissing = true;
+      else {
+        messagesOk += 1;
+        videos.push(...this.discoverMessageVideos(messageRead.value, input.referenced, 'shared'));
         messageRecords.push(
-          ...groupMessages.map((message) => toMeshengerMessage(input.groupEName, message)),
+          ...messageRead.value.map((message) => toMeshengerMessage(input.groupEName, message)),
         );
-        for (const author of authorsFromMessages(groupMessages).get(chatId) ?? []) {
+        for (const author of authorsFromMessages(messageRead.value).get(chatId) ?? []) {
           messageSources.add(author);
         }
       }
-
-      for (const chatId of input.chatIds) {
-        for (const authorEName of messageSources) {
-          if (authorEName === input.groupEName || authorEName === input.viewerEName) continue;
-          try {
-            const authorEVaultUri = await this.resolveEVault(authorEName);
-            const authorMessages = await this.listMessagesForChat(
-              authorEName,
-              authorEVaultUri,
-              chatId,
-              input.completeness,
-            );
-            videos.push(...this.discoverMessageVideos(authorMessages, input.referenced, 'shared'));
-            messageRecords.push(
-              ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
-            );
-          } catch {
-            complete = false;
-            input.completeness.markRetry();
-          }
-        }
-      }
-
-      if (currentMember) {
-        const files = await this.listEnvelopes(
-          input.groupEName,
-          groupEVaultUri,
-          fileOntology,
-          input.completeness,
-        );
-        videos.push(
-          ...this.discoverFileVideos(input.groupEName, files, input.referenced, 'shared'),
-        );
-        const rawFiles = await this.listEnvelopes(
-          input.groupEName,
-          groupEVaultUri,
-          w3dsFileOntology,
-          input.completeness,
-        );
-        videos.push(
-          ...this.discoverRawFileVideos(input.groupEName, rawFiles, input.referenced, 'shared'),
-        );
-      }
-    } catch {
-      complete = false;
-      input.completeness.markRetry();
     }
-    return { videos, conversations, messages: messageRecords, complete };
+
+    let outcome: SharedSpaceOutcome = 'indexed';
+    const callOk = !callsRead.failure;
+    if (callOk || messagesOk > 0) outcome = 'indexed';
+    else if (retryNeeded) outcome = 'retry';
+    else if (scopedDenied) outcome = 'denied';
+    else if (scopedMissing) outcome = 'missing';
+
+    for (const chatId of input.chatIds) {
+      for (const authorEName of messageSources) {
+        if (sameEName(authorEName, input.groupEName) || sameEName(authorEName, owner)) continue;
+        if (sameEName(authorEName, input.viewerEName)) continue;
+        const authorRead = await this.readSource(async () => {
+          const authorVault = await this.resolveEVault(authorEName);
+          const authorMessages = await this.listMessagesForChat(
+            authorVault.ownerEName,
+            authorVault.eVaultUri,
+            chatId,
+            input.completeness,
+          );
+          videos.push(...this.discoverMessageVideos(authorMessages, input.referenced, 'shared'));
+          messageRecords.push(
+            ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
+          );
+        }, undefined);
+        if (authorRead.failure === 'retry') retryNeeded = true;
+      }
+    }
+
+    if (currentMember) {
+      const files = await this.tryListEnvelopes(
+        owner,
+        groupEVaultUri,
+        fileOntology,
+        input.completeness,
+      );
+      videos.push(...this.discoverFileVideos(owner, files, input.referenced, 'shared'));
+      const rawFiles = await this.tryListEnvelopes(
+        owner,
+        groupEVaultUri,
+        w3dsFileOntology,
+        input.completeness,
+      );
+      videos.push(...this.discoverRawFileVideos(owner, rawFiles, input.referenced, 'shared'));
+    }
+    return { videos, conversations, messages: messageRecords, outcome, retryNeeded };
   }
 
   /**
@@ -547,80 +579,107 @@ export class MeshengerVideoLibrary {
     const messages: MeshengerMessage[] = [];
     for (const [ownerEName, chatIds] of byOwner) {
       completeness.expectSpace();
-      let complete = true;
-      try {
-        const eVaultUri = await this.resolveEVault(ownerEName);
-        const chats = await this.listEnvelopes(
-          ownerEName,
-          eVaultUri,
-          chatOntology,
-          completeness,
-        );
-        const canonicalChats = new Map<string, Envelope>();
-        for (const chat of chats) {
-          if (chat.parsed.isReference === true) continue;
-          if (optionalString(chat.parsed.type)?.toLowerCase() === 'group') continue;
-          const chatId = optionalString(chat.parsed.id) ?? chat.id;
-          if (chatIds.has(chatId)) canonicalChats.set(chatId, chat);
-        }
-        if (!canonicalChats.size) {
-          complete = false;
-          completeness.markRetry();
-        }
-
-        for (const [chatId, chat] of canonicalChats) {
-          const participants = asArray(chat.parsed.participantIds).filter(
-            (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0,
-          );
-          const updatedAt = optionalString(chat.parsed.updatedAt);
-          conversations.push({
-            id: `${ownerEName}:${chatId}`,
-            ownerEName,
-            chatId,
-            kind: 'personal',
-            title: optionalString(chat.parsed.name) ?? 'Conversation',
-            ...(participants.length ? { participantCount: participants.length } : {}),
-            ...(updatedAt ? { updatedAt } : {}),
-          });
-        }
-
-        for (const chatId of canonicalChats.keys()) {
-          const authorMessages = await this.listMessagesForChat(
-            ownerEName,
-            eVaultUri,
-            chatId,
-            completeness,
-          );
-          videos.push(...this.discoverMessageVideos(authorMessages, referenced, 'shared'));
-          messages.push(
-            ...authorMessages.map((message) => toMeshengerMessage(ownerEName, message)),
-          );
-        }
-
-        const calls = await this.listEnvelopes(
-          ownerEName,
-          eVaultUri,
-          callSessionOntology,
-          completeness,
-        );
-        videos.push(
-          ...(await this.discoverCallVideos({
-            viewerEName,
-            sourceEName: ownerEName,
-            sourceEVaultUri: eVaultUri,
-            calls,
-            chatIds,
-            referenced,
-          })),
-        );
-      } catch {
-        complete = false;
-        completeness.markRetry();
-      }
-      if (complete) completeness.indexSpace();
-      else completeness.markRetry();
+      const space = await this.readDirectSpace({
+        viewerEName,
+        ownerEName,
+        chatIds,
+        referenced,
+        completeness,
+      });
+      videos.push(...space.videos);
+      conversations.push(...space.conversations);
+      messages.push(...space.messages);
+      this.recordSpaceOutcome(completeness, space);
     }
-    return { videos, conversations, messages, complete: true };
+    return { videos, conversations, messages, outcome: 'indexed', retryNeeded: false };
+  }
+
+  private async readDirectSpace(input: {
+    viewerEName: string;
+    ownerEName: string;
+    chatIds: ReadonlySet<string>;
+    referenced: Set<string>;
+    completeness: InventoryCompletenessTracker;
+  }): Promise<GroupDiscovery> {
+    const videos: DiscoveredVideo[] = [];
+    const conversations: MeshengerConversation[] = [];
+    const messages: MeshengerMessage[] = [];
+    const vaultRead = await this.readSource(() => this.resolveEVault(input.ownerEName), undefined);
+    if (!vaultRead.value) {
+      return emptySpace(
+        vaultRead.failure === 'denied'
+          ? 'denied'
+          : vaultRead.failure === 'missing'
+            ? 'missing'
+            : 'retry',
+      );
+    }
+    const owner = vaultRead.value.ownerEName;
+    const eVaultUri = vaultRead.value.eVaultUri;
+    const chatsRead = await this.readSource(
+      () => this.listEnvelopes(owner, eVaultUri, chatOntology, input.completeness),
+      [] as Envelope[],
+    );
+    if (chatsRead.failure === 'denied') return emptySpace('denied');
+    if (chatsRead.failure === 'missing') return emptySpace('missing');
+    if (chatsRead.failure === 'retry') return emptySpace('retry');
+
+    const canonicalChats = new Map<string, Envelope>();
+    for (const chat of chatsRead.value) {
+      if (chat.parsed.isReference === true) continue;
+      if (optionalString(chat.parsed.type)?.toLowerCase() === 'group') continue;
+      const chatId = optionalString(chat.parsed.id) ?? chat.id;
+      if (input.chatIds.has(chatId)) canonicalChats.set(chatId, chat);
+    }
+    if (!canonicalChats.size) return emptySpace('denied');
+
+    for (const [chatId, chat] of canonicalChats) {
+      const participants = asArray(chat.parsed.participantIds).filter(
+        (entry): entry is string => typeof entry === 'string' && entry.trim().length > 0,
+      );
+      const updatedAt = optionalString(chat.parsed.updatedAt);
+      conversations.push({
+        id: `${input.ownerEName}:${chatId}`,
+        ownerEName: input.ownerEName,
+        chatId,
+        kind: 'personal',
+        title: optionalString(chat.parsed.name) ?? 'Conversation',
+        ...(participants.length ? { participantCount: participants.length } : {}),
+        ...(updatedAt ? { updatedAt } : {}),
+      });
+    }
+
+    let retryNeeded = false;
+    for (const chatId of canonicalChats.keys()) {
+      const messageRead = await this.readSource(
+        () => this.listMessagesForChat(owner, eVaultUri, chatId, input.completeness),
+        [] as Envelope[],
+      );
+      if (messageRead.failure === 'retry') retryNeeded = true;
+      if (messageRead.failure === 'denied' || messageRead.failure === 'missing') continue;
+      videos.push(...this.discoverMessageVideos(messageRead.value, input.referenced, 'shared'));
+      messages.push(...messageRead.value.map((message) => toMeshengerMessage(input.ownerEName, message)));
+    }
+
+    const callsRead = await this.readSource(
+      () => this.listEnvelopes(owner, eVaultUri, callSessionOntology, input.completeness),
+      [] as Envelope[],
+    );
+    if (callsRead.failure === 'retry') retryNeeded = true;
+    else if (!callsRead.failure) {
+      videos.push(
+        ...(await this.discoverCallVideos({
+          viewerEName: input.viewerEName,
+          sourceEName: input.ownerEName,
+          sourceEVaultUri: eVaultUri,
+          calls: callsRead.value,
+          chatIds: input.chatIds,
+          referenced: input.referenced,
+        })),
+      );
+    }
+
+    return { videos, conversations, messages, outcome: 'indexed', retryNeeded };
   }
 
   private async discoverCallVideos({
@@ -642,8 +701,11 @@ export class MeshengerVideoLibrary {
   }): Promise<DiscoveredVideo[]> {
     const resolved: Envelope[] = [];
     for (const source of calls) {
-      const call = await this.resolveCall(sourceEName, sourceEVaultUri, source);
-      if (call) resolved.push(call);
+      const callRead = await this.readSource(
+        () => this.resolveCall(sourceEName, sourceEVaultUri, source),
+        undefined,
+      );
+      if (callRead.value) resolved.push(callRead.value);
     }
     return discoverCallRecordingVideos({
       viewerEName,
@@ -680,6 +742,41 @@ export class MeshengerVideoLibrary {
     accessScope: EVaultVideoAccessScope,
   ): DiscoveredVideo[] {
     return discoverW3dsFileVideos(ownerEName, files, referenced, accessScope);
+  }
+
+  private recordSpaceOutcome(completeness: InventoryCompletenessTracker, space: GroupDiscovery) {
+    if (space.outcome === 'indexed') completeness.indexSpace();
+    else if (space.outcome === 'denied') completeness.denySpace();
+    else if (space.outcome === 'missing') completeness.missSpace();
+    else completeness.markRetry();
+    if (space.retryNeeded) completeness.markRetry();
+  }
+
+  private async tryListEnvelopes(
+    owner: string,
+    eVaultUri: string,
+    ontologyId: string,
+    completeness?: InventoryCompletenessTracker,
+  ): Promise<Envelope[]> {
+    return (
+      await this.readSource(
+        () => this.listEnvelopes(owner, eVaultUri, ontologyId, completeness),
+        [] as Envelope[],
+      )
+    ).value;
+  }
+
+  private async readSource<T>(
+    read: () => Promise<T>,
+    fallback: T,
+  ): Promise<{ value: T; failure?: 'denied' | 'missing' | 'retry' }> {
+    try {
+      return { value: await read() };
+    } catch (error) {
+      const kind = sourceFailureClass(error);
+      if (kind === 'fatal') throw error;
+      return { value: fallback, failure: kind };
+    }
   }
 
   private async listEnvelopes(
@@ -743,19 +840,29 @@ export class MeshengerVideoLibrary {
     return { id: envelopeId, ontology, parsed };
   }
 
-  private async resolveEVault(eName: string): Promise<string> {
+  private async resolveEVault(eName: string): Promise<ResolvedVault> {
+    const requested = normalizeEName(eName);
     const url = new URL('/resolve', this.config.registryBaseUrl);
-    url.searchParams.set('w3id', eName);
+    url.searchParams.set('w3id', requested);
     const resolved = record(await this.requestJson(url, { method: 'GET' }));
     const uri = optionalString(resolved?.uri);
-    if (optionalString(resolved?.ename) !== eName || !uri) {
+    if (!uri) {
       throw new MeshengerVideoLibraryError(
         'The W3DS registry could not resolve this video source.',
         'remote_rejected',
         502,
       );
     }
-    return httpUrl(uri);
+    const resolvedEName = optionalString(resolved?.ename);
+    const ownerEName = resolvedEName ? normalizeEName(resolvedEName) : requested;
+    if (!isEName(ownerEName)) {
+      throw new MeshengerVideoLibraryError(
+        'The W3DS registry could not resolve this video source.',
+        'remote_rejected',
+        502,
+      );
+    }
+    return { ownerEName, eVaultUri: httpUrl(uri) };
   }
 
   private async graphql(
@@ -776,13 +883,9 @@ export class MeshengerVideoLibrary {
         body: JSON.stringify({ query, variables }),
       }),
     );
-    if (Array.isArray(body?.errors) && body.errors.length)
-      throw new MeshengerVideoLibraryError(
-        'The eVault rejected the video-library request.',
-        'remote_rejected',
-        502,
-      );
     const data = record(body?.data);
+    const errors = Array.isArray(body?.errors) ? body.errors : [];
+    if (errors.length && !data) throw graphqlErrorsToLibraryError(errors);
     if (!data)
       throw new MeshengerVideoLibraryError(
         'The eVault returned invalid data.',
@@ -842,8 +945,8 @@ export class MeshengerVideoLibrary {
         );
       }
       if (response.status === 429) {
-        const retryAfter = retryAfterMs(response.headers.get('retry-after'));
-        if (retryAfter !== undefined && Date.now() + retryAfter <= deadline) {
+        const retryAfter = retryAfterMs(response.headers.get('retry-after')) ?? 1_000;
+        if (Date.now() + retryAfter <= deadline) {
           await delay(retryAfter);
           continue;
         }
@@ -851,6 +954,20 @@ export class MeshengerVideoLibrary {
           'The W3DS video source is busy. Please try again shortly.',
           'rate_limited',
           429,
+        );
+      }
+      if (response.status === 401 || response.status === 403) {
+        throw new MeshengerVideoLibraryError(
+          'This video source is not available to this account.',
+          'authorization_denied',
+          403,
+        );
+      }
+      if (response.status === 404) {
+        throw new MeshengerVideoLibraryError(
+          'The video source was not found.',
+          'not_found',
+          404,
         );
       }
       if (!response.ok)
@@ -938,6 +1055,61 @@ function record(value: unknown): RecordValue | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? (value as RecordValue)
     : undefined;
+}
+function emptySpace(outcome: SharedSpaceOutcome): GroupDiscovery {
+  return {
+    videos: [],
+    conversations: [],
+    messages: [],
+    outcome,
+    retryNeeded: outcome === 'retry',
+  };
+}
+function sourceFailureClass(error: unknown): 'denied' | 'missing' | 'retry' | 'fatal' {
+  if (error instanceof MeshengerVideoLibraryError) {
+    if (error.code === 'authentication_required' || error.code === 'not_configured') return 'fatal';
+    if (error.code === 'authorization_denied') return 'denied';
+    if (error.code === 'not_found') return 'missing';
+    return 'retry';
+  }
+  return 'retry';
+}
+function graphqlErrorsToLibraryError(errors: unknown[]): MeshengerVideoLibraryError {
+  if (errors.some((error) => isAuthorizationGraphqlError(error))) {
+    return new MeshengerVideoLibraryError(
+      'This video source is not available to this account.',
+      'authorization_denied',
+      403,
+    );
+  }
+  return new MeshengerVideoLibraryError(
+    'The eVault rejected the video-library request.',
+    'remote_rejected',
+    502,
+  );
+}
+function isAuthorizationGraphqlError(error: unknown): boolean {
+  const value = record(error);
+  const code = String(value?.code ?? record(value?.extensions)?.code ?? '').toUpperCase();
+  const message = String(value?.message ?? '').toLowerCase();
+  return (
+    code.includes('FORBIDDEN') ||
+    code.includes('UNAUTHENTICATED') ||
+    code.includes('UNAUTHORIZED') ||
+    code.includes('ACL') ||
+    message.includes('forbidden') ||
+    message.includes('unauthorized') ||
+    message.includes('unauthenticated') ||
+    message.includes('access denied')
+  );
+}
+function normalizeEName(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+  return trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+}
+function sameEName(left: string, right: string): boolean {
+  return normalizeEName(left) === normalizeEName(right);
 }
 function optionalString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
@@ -1060,9 +1232,11 @@ function authorsFromMessages(envelopes: readonly Envelope[]): Map<string, Set<st
     const chatId = optionalString(envelope.parsed.chatId);
     const sender =
       optionalString(envelope.parsed.senderEName) ?? optionalString(envelope.parsed.senderId);
-    if (!chatId || !sender || !isEName(sender)) continue;
+    if (!chatId || !sender) continue;
+    const senderEName = normalizeEName(sender);
+    if (!isEName(senderEName)) continue;
     const existing = authors.get(chatId) ?? new Set<string>();
-    existing.add(sender);
+    existing.add(senderEName);
     authors.set(chatId, existing);
   }
   return authors;

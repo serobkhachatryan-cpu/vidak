@@ -26,6 +26,18 @@ describe('envelope pagination', () => {
     expect(calls).toBe(2);
   });
 
+  it('treats an omitted hasNextPage with no cursor as a finished page', async () => {
+    const result = await collectPaginatedEnvelopes({
+      maxPages: 30,
+      readPage: async () => ({
+        edges: [{ node: { id: 'only' } }],
+        pageInfo: {},
+      }),
+      mapEdge: (edge) => (edge as { node?: { id?: string } }).node?.id,
+    });
+    expect(result).toEqual({ items: ['only'], complete: true });
+  });
+
   it('marks a truncated page as incomplete instead of pretending the list is finished', async () => {
     const result = await collectPaginatedEnvelopes({
       maxPages: 1,

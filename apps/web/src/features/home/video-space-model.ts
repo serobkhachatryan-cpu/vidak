@@ -65,7 +65,15 @@ export function isVideoSpaceEmpty(
 }
 
 export function sharedInventoryBanner(completeness: InventoryCompleteness | undefined): string | undefined {
-  if (!completeness || (completeness.complete && !completeness.retryNeeded)) return undefined;
+  if (!completeness) return undefined;
+  if (
+    completeness.complete &&
+    !completeness.retryNeeded &&
+    completeness.denied === 0 &&
+    completeness.missing === 0
+  ) {
+    return undefined;
+  }
   return inventoryCompletenessCopy(completeness);
 }
 

@@ -80,12 +80,33 @@ describe('video space home model', () => {
     const banner = sharedInventoryBanner({
       indexed: 12,
       expected: 15,
+      denied: 0,
+      missing: 0,
       complete: false,
       retryNeeded: true,
     });
     expect(banner).toBe('12 of 15 shared spaces indexed; retry needed.');
     expect(banner).not.toMatch(/@|[a-f0-9-]{8,}|messenger|meshenger|group|chat|title/i);
-    expect(sharedInventoryBanner({ indexed: 2, expected: 2, complete: true, retryNeeded: false })).toBeUndefined();
+    expect(
+      sharedInventoryBanner({
+        indexed: 2,
+        expected: 2,
+        denied: 0,
+        missing: 0,
+        complete: true,
+        retryNeeded: false,
+      }),
+    ).toBeUndefined();
+    expect(
+      sharedInventoryBanner({
+        indexed: 0,
+        expected: 7,
+        denied: 7,
+        missing: 0,
+        complete: true,
+        retryNeeded: false,
+      }),
+    ).toBe('0 of 7 shared spaces indexed; 7 denied by current access.');
   });
 
   it('confirms that a share action changes only that video', () => {
