@@ -19,8 +19,13 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
-  reporter: process.env.CI ? 'github' : 'list',
-  use: { baseURL: 'http://127.0.0.1:3000', trace: 'on-first-retry' },
+  reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
+  use: {
+    baseURL: 'http://127.0.0.1:3000',
+    trace: 'retain-on-failure',
+    screenshot: 'only-on-failure',
+    video: 'retain-on-failure',
+  },
   webServer: {
     command:
       'rm -rf apps/web/.next apps/web/.data/w3ds-e2e-auth-state.json && pnpm --filter @w3ds/web dev',
