@@ -1,6 +1,11 @@
 import { AuthenticationError, type AuthProviderCapabilities, type AuthUser } from '@w3ds/auth';
 import type { AppLanguage, UserProfile } from '@w3ds/types';
-import { appLanguages } from '@w3ds/types';
+import {
+  appLanguages,
+  isPublicHandle,
+  looksLikeTechnicalIdentifier,
+  STALE_CREATOR_PLACEHOLDER,
+} from '@w3ds/types';
 import {
   type SettingsPageState,
   type SettingsSectionId,
@@ -14,32 +19,17 @@ export function errorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const LOCAL_PLATFORM_ID_PATTERN =
-  /^w3ds_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 function isStaleOrIdentifierDisplayName(value: string): boolean {
   const name = value.trim();
   if (!name) return true;
-  if (name.toLocaleLowerCase() === 'creator') return true;
-  if (name.startsWith('@')) return true;
-  if (UUID_PATTERN.test(name) || LOCAL_PLATFORM_ID_PATTERN.test(name)) return true;
-  return false;
+  if (name.toLocaleLowerCase() === STALE_CREATOR_PLACEHOLDER.toLocaleLowerCase()) return true;
+  return looksLikeTechnicalIdentifier(name);
 }
 
 export function publicHandleOrEmpty(value: string | null | undefined, userId?: string): string {
   const handle = value?.trim().replace(/^@/, '') ?? '';
   if (!handle) return '';
-  if (
-    handle.startsWith('w3ds_') ||
-    LOCAL_PLATFORM_ID_PATTERN.test(handle) ||
-    UUID_PATTERN.test(handle)
-  ) {
-    return '';
-  }
-  if (userId && (handle === userId || handle === userId.replace(/^w3ds_/, ''))) return '';
-  if (!/^[a-z0-9][a-z0-9_-]{2,29}$/i.test(handle)) return '';
-  return handle;
+  return isPublicHandle(handle, userId ? { id: userId } : undefined) ? handle : '';
 }
 
 export function profileFormFromProfile(profile: UserProfile): ProfileFormInput {
