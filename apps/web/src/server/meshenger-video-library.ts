@@ -289,10 +289,9 @@ export class MeshengerVideoLibrary {
   }
 
   /**
-   * Group calls are only one of the ways Meshenger shares video. The same
-   * trusted chat-reference chain also grants access to that group's video
-   * messages, circles, and ordinary video File envelopes. Read each group
-   * once so multiple references cannot multiply eVault traffic or cards.
+   * A trusted chat-reference chain can grant access to that group's video
+   * messages, call recordings, and ordinary video File envelopes. Read each
+   * group once so multiple references cannot multiply eVault traffic or cards.
    */
   private async discoverGroupVideos(
     viewerEName: string,

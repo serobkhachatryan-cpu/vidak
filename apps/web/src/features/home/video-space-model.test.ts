@@ -57,6 +57,12 @@ describe('video space home model', () => {
     expect(isVideoSpaceEmpty([ownVideo], [])).toBe(false);
     expect(videoSpaceEmptyCopy.description).toMatch(/viewer and sharing layer/i);
     expect(videoSpaceEmptyCopy.description).not.toMatch(/messenger/i);
+    expect(videoSpaceEmptyCopy.description).not.toMatch(/import from/i);
+    expect(videoSpaceTabs.map((tab) => tab.label)).toEqual([
+      'Your videos',
+      'Shared with you',
+      'Explore public videos',
+    ]);
   });
 
   it('uses a labelled fallback when a thumbnail cannot be generated', () => {

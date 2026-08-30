@@ -765,4 +765,104 @@ describe('Meshenger video library', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('never returns a group-vault video after membership is gone', async () => {
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@group.w3id', uri: 'https://group-vault.example' });
+      }
+      const body = JSON.parse(String(init.body ?? '{}')) as { variables?: { ontologyId?: string } };
+      if (
+        url.hostname === 'person-vault.example' &&
+        body.variables?.ontologyId === '550e8400-e29b-41d4-a716-446655440003'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'stale-chat-reference',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: '@group.w3id',
+                      canonicalChatId: 'chat-1',
+                      type: 'group',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'group-vault.example' &&
+        body.variables?.ontologyId === 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'manifest-1',
+                    ontology: body.variables.ontologyId,
+                    parsed: { owner: '@group.w3id', members: ['@someone-else.w3id'] },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (url.hostname === 'group-vault.example') {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'secret-file',
+                    ontology: 'w3ds-file-v1',
+                    parsed: {
+                      contentType: 'video/mp4',
+                      filename: 'Must not appear.mp4',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const videos = await configuredLibrary().list({
+        eName: '@person.w3id',
+        eVaultUri: 'https://person-vault.example',
+      });
+      expect(videos).toEqual([]);
+      expect(
+        fetcher.mock.calls.some(
+          ([url, init]) =>
+            (url as URL).hostname === 'group-vault.example' &&
+            String((init as RequestInit).body ?? '').includes('w3ds-file-v1'),
+        ),
+      ).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

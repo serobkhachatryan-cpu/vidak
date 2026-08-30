@@ -169,7 +169,11 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
                   setPendingVideoId(video.id);
                   setActionError(undefined);
                   try {
-                    if (next === 'private') await videoApiClient.unpublishVideo(video.id);
+                    if (next === 'private') {
+                      await videoApiClient.unpublishVideo(video.id);
+                      await load();
+                      return;
+                    }
                     router.push(`/upload?draft=${encodeURIComponent(video.id)}`);
                   } catch {
                     setActionError('Could not change this video’s visibility. Try again.');
@@ -253,51 +257,42 @@ function PrivateLibraryPanel({
         </div>
       ) : null}
 
-      {ownedItems.length > 0 ? (
-        <section className="space-y-4" aria-labelledby="owned-videos-heading">
-          <h2 id="owned-videos-heading" className="text-xl font-semibold text-foreground">
-            Videos you published or drafted in Vidak
-          </h2>
-          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {ownedItems.map((video) => (
-              <OwnedVideoCard
-                key={video.id}
-                video={video}
-                isPending={pendingVideoId === video.id}
-                onWatch={onWatch}
-                onContinueDraft={onContinueDraft}
-                onChangeVisibility={onChangeVisibility}
-              />
-            ))}
-          </div>
-        </section>
-      ) : null}
-
       {library.status === 'error' ? (
         <ErrorState
           title="Could not load eVault videos"
-          description="Owned Vidak videos are still shown. Refresh to try your authorised eVault library again."
+          description="Videos already on this page stay available. Refresh to try your authorised library again."
           retry={onRetry}
           retryLabel="Refresh your video space"
         />
-      ) : libraryItems.length > 0 ? (
-        <section className="space-y-4" aria-labelledby="evault-videos-heading">
-          <div className="space-y-1">
-            <h2 id="evault-videos-heading" className="text-xl font-semibold text-foreground">
-              {tab === 'shared' ? 'Shared with you' : 'In your W3DS space'}
-            </h2>
-            <Text size="sm" tone="muted">
-              These videos are available through your signed-in eID. Finding them never changes
-              their sharing rules.
-            </Text>
-          </div>
-          <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
-            {libraryItems.map((video) => (
-              <LibraryVideoCard key={video.id} video={video} onRefresh={onRetry} />
-            ))}
-          </div>
-        </section>
       ) : null}
+
+      <section className="space-y-4" aria-labelledby="video-space-library-heading">
+        <div className="space-y-1">
+          <h2 id="video-space-library-heading" className="text-xl font-semibold text-foreground">
+            {tab === 'shared' ? 'Shared with you' : 'Your videos'}
+          </h2>
+          <Text size="sm" tone="muted">
+            {tab === 'shared'
+              ? 'Videos other people have authorized you to view. Finding them never changes their sharing rules.'
+              : 'Every video you own or drafted in your W3DS space. Finding them never changes their sharing rules.'}
+          </Text>
+        </div>
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+          {ownedItems.map((video) => (
+            <OwnedVideoCard
+              key={video.id}
+              video={video}
+              isPending={pendingVideoId === video.id}
+              onWatch={onWatch}
+              onContinueDraft={onContinueDraft}
+              onChangeVisibility={onChangeVisibility}
+            />
+          ))}
+          {libraryItems.map((video) => (
+            <LibraryVideoCard key={video.id} video={video} onRefresh={onRetry} />
+          ))}
+        </div>
+      </section>
     </div>
   );
 }
@@ -351,15 +346,17 @@ function OwnedVideoCard({
                   View
                 </Button>
               ) : null}
-              <Button
-                size="sm"
-                variant="secondary"
-                isLoading={isPending}
-                loadingText="Updating visibility"
-                onClick={() => onChangeVisibility(video, 'private')}
-              >
-                Make private
-              </Button>
+              {visibility.id === 'public' || visibility.id === 'shared-by-me' ? (
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  isLoading={isPending}
+                  loadingText="Updating visibility"
+                  onClick={() => onChangeVisibility(video, 'private')}
+                >
+                  Make private
+                </Button>
+              ) : null}
             </>
           )}
         </div>
