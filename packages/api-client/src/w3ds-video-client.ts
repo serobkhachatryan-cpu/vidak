@@ -41,8 +41,19 @@ import {
   draftMediaUploadPath,
   draftThumbnailPath,
 } from './draft-media-path';
-import { MockVideoApiClient, type MockVideoApiClientOptions } from './mock-video-client';
-import { publicMediaContentPath, publicPrimaryMediaPath } from './public-media-path';
+import {
+  emptyCursorPage,
+  filterPublicVideos,
+  ProductionFeatureUnavailableError,
+  sessionLocalPreferences,
+  unavailableFeature,
+  userProfileFromAuthUser,
+} from './production-gateway';
+import {
+  isPublicVideoId,
+  publicMediaContentPath,
+  publicPrimaryMediaPath,
+} from './public-media-path';
 import type { VideoApiClient } from './video-client';
 
 export interface W3dsVideoApiClientOptions {
@@ -55,11 +66,6 @@ export interface W3dsVideoApiClientOptions {
    * `() => new XMLHttpRequest()`.
    */
   createXHR?: () => XMLHttpRequest;
-  /**
-   * Options for the delegated mock client used for non-draft product surfaces
-   * (watch/feed/search/settings) until those domains are durable.
-   */
-  mock?: MockVideoApiClientOptions;
 }
 
 interface ApiErrorBody {
@@ -73,22 +79,22 @@ interface ApiErrorBody {
  *
  * Session credentials stay HttpOnly; this client never reads or stores tokens.
  * Responses never surface storage keys, filesystem paths, or public CDN URLs.
- * Non-durable product surfaces (comments/search/settings) still delegate to the
- * development mock until those domains are persisted.
+ * Surfaces without a durable backend return empty pages or
+ * {@link ProductionFeatureUnavailableError} — never mock catalogue data.
  */
 export class W3dsVideoApiClient implements VideoApiClient {
   private readonly baseUrl: string;
   private readonly configuredFetch: typeof fetch | undefined;
   private readonly createXHR: () => XMLHttpRequest;
-  private readonly mock: MockVideoApiClient;
   /** Upload-session cache: internal video id → latest ready asset id. */
   private readonly readyAssetByVideoId = new Map<string, string>();
+  /** Session-local preferences until a durable settings API exists. */
+  private readonly localPreferences = new Map<string, UserPreferences>();
 
   constructor(options: W3dsVideoApiClientOptions = {}) {
     this.baseUrl = trimTrailingSlash(options.baseUrl ?? '');
     this.configuredFetch = options.fetch;
     this.createXHR = options.createXHR ?? (() => new XMLHttpRequest());
-    this.mock = new MockVideoApiClient(options.mock);
   }
 
   private fetchImpl(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -98,22 +104,24 @@ export class W3dsVideoApiClient implements VideoApiClient {
     return fetchFn(input, init);
   }
 
-  getVideo(id: VideoId): Promise<Video | undefined> {
-    return this.mock.getVideo(id);
+  async getVideo(id: VideoId): Promise<Video | undefined> {
+    if (isPublicVideoId(id)) return this.getPublicVideo(id);
+    return undefined;
   }
 
-  listVideos(
+  async listVideos(
     filters?: VideoListFilters,
     pagination?: PaginationParams,
   ): Promise<CursorPage<Video>> {
-    return this.mock.listVideos(filters, pagination);
+    const page = await this.listPublicVideos(pagination);
+    return filterPublicVideos(page, filters, pagination);
   }
 
   listChannels(
-    filters?: SearchFilters,
-    pagination?: PaginationParams,
+    _filters?: SearchFilters,
+    _pagination?: PaginationParams,
   ): Promise<CursorPage<Channel>> {
-    return this.mock.listChannels(filters, pagination);
+    return Promise.resolve(emptyCursorPage());
   }
 
   async getChannel(id: ChannelId): Promise<Channel | undefined> {
@@ -140,83 +148,122 @@ export class W3dsVideoApiClient implements VideoApiClient {
   }
 
   listPlaylists(
-    filters?: SearchFilters,
-    pagination?: PaginationParams,
+    _filters?: SearchFilters,
+    _pagination?: PaginationParams,
   ): Promise<CursorPage<Playlist>> {
-    return this.mock.listPlaylists(filters, pagination);
+    return Promise.resolve(emptyCursorPage());
   }
 
-  getPlaylist(id: PlaylistId): Promise<Playlist | undefined> {
-    return this.mock.getPlaylist(id);
+  getPlaylist(_id: PlaylistId): Promise<Playlist | undefined> {
+    return Promise.resolve(undefined);
   }
 
-  getUserProfile(id: UserProfileId): Promise<UserProfile | undefined> {
-    // A platform user is created by W3DS authentication before its local
-    // product projection exists. Ensure that projection during the first
-    // settings load so concurrent settings queries cannot observe `undefined`.
-    if (id.startsWith('w3ds_')) return this.mock.ensureUserProfile(id);
-    return this.mock.getUserProfile(id);
+  async getUserProfile(id: UserProfileId): Promise<UserProfile | undefined> {
+    const response = await this.fetchImpl(this.url('/api/auth/me'), {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (response.status === 401 || response.status === 404) return undefined;
+    if (!response.ok) {
+      const body = await readErrorBody(response);
+      throw new Error(body.error?.message ?? `Profile request failed (${response.status})`);
+    }
+    return userProfileFromAuthUser(
+      (await response.json()) as Parameters<typeof userProfileFromAuthUser>[0],
+      id,
+    );
   }
 
-  updateUserProfile(id: UserProfileId, input: UpdateProfileInput): Promise<UserProfile> {
-    return this.mock.updateUserProfile(id, input);
+  async updateUserProfile(id: UserProfileId, input: UpdateProfileInput): Promise<UserProfile> {
+    const response = await this.fetchImpl(this.url('/api/auth/profile'), {
+      method: 'PATCH',
+      credentials: 'include',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({ displayName: input.displayName }),
+    });
+    if (!response.ok) {
+      const body = await readErrorBody(response);
+      throw new Error(body.error?.message ?? `Profile update failed (${response.status})`);
+    }
+    const profile = userProfileFromAuthUser(
+      (await response.json()) as Parameters<typeof userProfileFromAuthUser>[0],
+      id,
+    );
+    if (!profile) {
+      throw new ProductionFeatureUnavailableError(
+        'profile',
+        'The signed-in profile could not be updated.',
+      );
+    }
+    return {
+      ...profile,
+      handle: input.handle?.trim() ? profile.handle : profile.handle,
+      ...(input.bio !== undefined ? { bio: input.bio } : {}),
+    };
   }
 
-  uploadUserAvatar(id: UserProfileId, input: UploadAvatarInput): Promise<UserProfile> {
-    return this.mock.uploadUserAvatar(id, input);
+  uploadUserAvatar(_id: UserProfileId, _input: UploadAvatarInput): Promise<UserProfile> {
+    return unavailableFeature('avatar', 'Avatar uploads are not available yet.');
   }
 
   getUserPreferences(id: UserProfileId): Promise<UserPreferences> {
-    return this.mock.getUserPreferences(id);
+    return Promise.resolve(sessionLocalPreferences(this.localPreferences.get(id)));
   }
 
   updateUserPreferences(
     id: UserProfileId,
     input: UpdateUserPreferencesInput,
   ): Promise<UserPreferences> {
-    return this.mock.updateUserPreferences(id, input);
+    const next = sessionLocalPreferences(this.localPreferences.get(id), input);
+    this.localPreferences.set(id, next);
+    return Promise.resolve(next);
   }
 
-  listConnectedAccounts(id: UserProfileId): Promise<readonly ConnectedAccount[]> {
-    return this.mock.listConnectedAccounts(id);
+  listConnectedAccounts(_id: UserProfileId): Promise<readonly ConnectedAccount[]> {
+    return Promise.resolve([]);
   }
 
   connectAccount(
-    id: UserProfileId,
-    provider: ConnectedAccountProvider,
+    _id: UserProfileId,
+    _provider: ConnectedAccountProvider,
   ): Promise<readonly ConnectedAccount[]> {
-    return this.mock.connectAccount(id, provider);
+    return unavailableFeature(
+      'connected-accounts',
+      'Connected accounts are not available on this sign-in.',
+    );
   }
 
   disconnectAccount(
-    id: UserProfileId,
-    provider: ConnectedAccountProvider,
+    _id: UserProfileId,
+    _provider: ConnectedAccountProvider,
   ): Promise<readonly ConnectedAccount[]> {
-    return this.mock.disconnectAccount(id, provider);
+    return unavailableFeature(
+      'connected-accounts',
+      'Connected accounts are not available on this sign-in.',
+    );
   }
 
   listComments(
-    videoId: VideoId,
-    filters?: CommentListFilters,
-    pagination?: PaginationParams,
+    _videoId: VideoId,
+    _filters?: CommentListFilters,
+    _pagination?: PaginationParams,
   ): Promise<CursorPage<Comment>> {
-    return this.mock.listComments(videoId, filters, pagination);
+    return Promise.resolve(emptyCursorPage());
   }
 
-  createComment(videoId: VideoId, input: CreateCommentInput): Promise<Comment> {
-    return this.mock.createComment(videoId, input);
+  createComment(_videoId: VideoId, _input: CreateCommentInput): Promise<Comment> {
+    return unavailableFeature('comments', 'Comments are not available yet.');
   }
 
-  reactToComment(id: CommentId, reaction: CommentReaction | undefined): Promise<Comment> {
-    return this.mock.reactToComment(id, reaction);
+  reactToComment(_id: CommentId, _reaction: CommentReaction | undefined): Promise<Comment> {
+    return unavailableFeature('comments', 'Comments are not available yet.');
   }
 
-  /**
-   * Legacy mock upload simulation — durable ingestion uses `uploadDraftMedia`.
-   * Kept so non-media callers and development fixtures remain unchanged.
-   */
-  uploadVideo(file: UploadVideoInput, options?: UploadVideoOptions): Promise<UploadVideoResult> {
-    return this.mock.uploadVideo(file, options);
+  uploadVideo(_file: UploadVideoInput, _options?: UploadVideoOptions): Promise<UploadVideoResult> {
+    return unavailableFeature(
+      'legacy-upload',
+      'Use save draft and publish instead of the legacy upload path.',
+    );
   }
 
   createVideo(_input: CreateVideoInput): Promise<Video> {

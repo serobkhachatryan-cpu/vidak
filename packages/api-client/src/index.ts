@@ -20,6 +20,12 @@ export {
 export type { MockVideoApiClientOptions } from './mock-video-client';
 export { MockVideoApiClient, mockUploadAutoThumbnails } from './mock-video-client';
 export { createCursorPage, getNextPageParam } from './pagination';
+export type { ProductionGatewayFeature } from './production-gateway';
+export {
+  emptyCursorPage,
+  ProductionFeatureUnavailableError,
+  userProfileFromAuthUser,
+} from './production-gateway';
 export {
   isPublicVideoId,
   publicMediaContentPath,

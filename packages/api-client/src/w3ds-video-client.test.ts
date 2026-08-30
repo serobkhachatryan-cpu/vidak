@@ -78,8 +78,18 @@ class FakeXMLHttpRequest {
 }
 
 describe('W3dsVideoApiClient', () => {
-  it('creates the local product profile before concurrent first-load settings queries', async () => {
-    const client = new W3dsVideoApiClient({ mock: { delayMs: 0 } });
+  it('loads the signed-in profile from /api/auth/me instead of a mock catalogue', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain('/api/auth/me');
+      return jsonResponse({
+        id: 'w3ds_first-load-user',
+        displayName: 'New Vidak member',
+        eName: '@ada.w3id',
+        eVaultId: 'evault-ada',
+        profile: { displayName: 'New Vidak member' },
+      });
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
     const userId = 'w3ds_first-load-user';
 
     const [profile, preferences, connectedAccounts] = await Promise.all([
@@ -88,11 +98,85 @@ describe('W3dsVideoApiClient', () => {
       client.listConnectedAccounts(userId),
     ]);
 
-    expect(profile).toMatchObject({ id: userId });
+    expect(profile).toMatchObject({ id: userId, displayName: 'New Vidak member' });
     expect(profile?.displayName).not.toBe('Creator');
     expect(profile?.handle.startsWith('w3ds_')).toBe(false);
-    expect(preferences).toBeDefined();
-    expect(connectedAccounts).toEqual(expect.any(Array));
+    expect(preferences.appearance).toBe('system');
+    expect(connectedAccounts).toEqual([]);
+  });
+
+  it('does not return another person’s profile from the current session', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        id: 'w3ds_signed-in',
+        displayName: 'Ada Lovelace',
+        profile: { displayName: 'Ada Lovelace' },
+      }),
+    );
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    await expect(client.getUserProfile('w3ds_someone-else')).resolves.toBeUndefined();
+  });
+
+  it('returns empty comments and search channels instead of mock catalogue rows', async () => {
+    const client = new W3dsVideoApiClient({
+      fetch: async () => jsonResponse({ items: [], nextCursor: undefined }),
+    });
+    await expect(client.listComments('video-1')).resolves.toEqual({ items: [] });
+    await expect(client.listChannels()).resolves.toEqual({ items: [] });
+    await expect(client.listPlaylists()).resolves.toEqual({ items: [] });
+    await expect(client.createComment('video-1', { body: 'Hi' })).rejects.toMatchObject({
+      code: 'feature_unavailable',
+      feature: 'comments',
+    });
+  });
+
+  it('filters public discovery instead of reading mock feed data', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      expect(String(input)).toContain('/api/videos/public');
+      return jsonResponse({
+        items: [
+          {
+            id: 'v-ada',
+            channelId: 'channel-ada',
+            title: 'Ada lecture',
+            description: '',
+            thumbnailUrl: '/api/videos/public/pub_ada/thumbnail',
+            durationSeconds: 12,
+            status: 'published',
+            visibility: 'public',
+            publicVideoId: 'pub_ada',
+            createdAt: '2026-08-01T00:00:00.000Z',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+            viewCount: 2,
+            likeCount: 0,
+            commentCount: 0,
+            tags: [],
+          },
+          {
+            id: 'v-other',
+            channelId: 'channel-other',
+            title: 'Other clip',
+            description: '',
+            thumbnailUrl: '',
+            durationSeconds: 8,
+            status: 'published',
+            visibility: 'public',
+            publicVideoId: 'pub_other',
+            createdAt: '2026-08-02T00:00:00.000Z',
+            updatedAt: '2026-08-02T00:00:00.000Z',
+            viewCount: 9,
+            likeCount: 0,
+            commentCount: 0,
+            tags: [],
+          },
+        ],
+      });
+    });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
+    await expect(client.listVideos({ search: 'Ada', status: 'published' })).resolves.toMatchObject({
+      items: [{ id: 'v-ada' }],
+    });
+    await expect(client.getVideo('legacy-mock-id')).resolves.toBeUndefined();
   });
 
   it('sends cookie credentials for draft create/list/read/update/delete', async () => {
@@ -500,7 +584,7 @@ describe('W3dsVideoApiClient', () => {
       }
       return jsonResponse({ error: { code: 'not_found' } }, 404);
     });
-    const client = new W3dsVideoApiClient({ fetch: fetchMock, mock: { delayMs: 0 } });
+    const client = new W3dsVideoApiClient({ fetch: fetchMock });
     await expect(client.getChannel('channel-real')).resolves.toMatchObject({
       id: 'channel-real',
       name: 'Ada Lovelace',
