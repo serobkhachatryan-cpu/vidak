@@ -75,6 +75,30 @@ describe('VideoCard', () => {
     expect(markup).not.toContain('<img');
   });
 
+  it('renders a safe placeholder instead of a broken img for data thumbnails', () => {
+    const markup = renderToStaticMarkup(
+      <VideoCard
+        video={{ ...video, thumbnailUrl: 'data:image/jpeg;base64,abc' }}
+        channel={channel}
+      />,
+    );
+    expect(markup).toContain('thumbnail unavailable');
+    expect(markup).not.toContain('data:image');
+    expect(markup).not.toContain('<img');
+  });
+
+  it('renders same-origin authenticated preview posters', () => {
+    const markup = renderToStaticMarkup(
+      <VideoCard
+        video={{ ...video, thumbnailUrl: '/api/videos/owned/video-design-system/preview' }}
+        channel={channel}
+      />,
+    );
+    expect(markup).toContain('src="/api/videos/owned/video-design-system/preview"');
+    expect(markup).toContain('loading="lazy"');
+    expect(markup).not.toContain('<video');
+  });
+
   it('renders a safe placeholder instead of a broken img for blob thumbnails', () => {
     const markup = renderToStaticMarkup(
       <VideoCard

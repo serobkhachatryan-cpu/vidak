@@ -61,7 +61,9 @@ describe('channel name repair', () => {
         identity,
       }),
     ).toEqual({ name: NEUTRAL_PUBLIC_CHANNEL_NAME, shouldPersist: true });
-    expect(publicChannelNameFromOwner(`@${opaqueUuid}`, identity)).toBe(NEUTRAL_PUBLIC_CHANNEL_NAME);
+    expect(publicChannelNameFromOwner(`@${opaqueUuid}`, identity)).toBe(
+      NEUTRAL_PUBLIC_CHANNEL_NAME,
+    );
   });
 
   it('never overwrites a genuinely chosen channel name', () => {

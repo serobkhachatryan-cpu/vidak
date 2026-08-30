@@ -463,7 +463,7 @@ export function SettingsPage({
                 onChange={(next) => onLanguageChange?.(next)}
               />
             )}
-            {currentSection === 'connected' && (
+            {currentSection === 'connected' && sections.includes('connected') && (
               <ConnectedAccountsSection
                 accounts={connectedAccounts}
                 isLoading={connectedAccountsLoading ?? false}

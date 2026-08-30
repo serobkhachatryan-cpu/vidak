@@ -102,6 +102,7 @@ describe('settings navigation helpers', () => {
     expect(w3dsSections).not.toContain('password');
     expect(w3dsSections).toContain('sessions');
     expect(w3dsSections).not.toContain('danger');
+    expect(w3dsSections).not.toContain('connected');
     expect(w3dsSections).toContain('profile');
     expect(resolveActiveSettingsSection(w3dsSections, 'password')).toBe('profile');
     expect(parseSettingsSectionParam('profile')).toBe('profile');

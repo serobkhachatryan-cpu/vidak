@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  createInventoryCompletenessTracker,
-  inventoryCompletenessCopy,
-} from './completeness';
+import { createInventoryCompletenessTracker, inventoryCompletenessCopy } from './completeness';
 
 describe('inventory completeness', () => {
   it('uses counts only when a source read is incomplete', () => {
@@ -23,9 +20,7 @@ describe('inventory completeness', () => {
       retryRejected: 0,
       retryRateLimited: 0,
     });
-    expect(inventoryCompletenessCopy(state)).toBe(
-      '1 of 2 shared spaces indexed; retry needed.',
-    );
+    expect(inventoryCompletenessCopy(state)).toBe('1 of 2 shared spaces indexed; retry needed.');
     expect(inventoryCompletenessCopy(state)).not.toMatch(/@|[a-f0-9-]{8,}|group|chat|title/i);
   });
 
@@ -58,8 +53,6 @@ describe('inventory completeness', () => {
     const tracker = createInventoryCompletenessTracker();
     tracker.expectSpace();
     tracker.indexSpace();
-    expect(inventoryCompletenessCopy(tracker.snapshot())).toBe(
-      '1 of 1 shared spaces indexed.',
-    );
+    expect(inventoryCompletenessCopy(tracker.snapshot())).toBe('1 of 1 shared spaces indexed.');
   });
 });

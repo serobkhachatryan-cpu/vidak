@@ -1,7 +1,13 @@
 import type { UserProfile } from '@w3ds/types';
 import { Avatar, Badge, Button, Heading, IconButton, Text } from '@w3ds/ui';
 import { useEffect, useId, useRef, useState } from 'react';
-import { formatFollowers, formatFollowing, formatJoinDate, formatVideoCount, isPublicProfileHandle } from './format';
+import {
+  formatFollowers,
+  formatFollowing,
+  formatJoinDate,
+  formatVideoCount,
+  isPublicProfileHandle,
+} from './format';
 import { ProfileWebsiteLink } from './profile-website-link';
 import { cx, focusRing } from './styles';
 

@@ -10,5 +10,4 @@ import { defaultAuthProvider } from '@w3ds/config';
 export const videoApiClient = createVideoApiClient({
   provider: resolveAuthProviderId(process.env.NEXT_PUBLIC_AUTH_PROVIDER ?? defaultAuthProvider),
   dev: { delayMs: 300 },
-  w3ds: { mock: { delayMs: 300 } },
 });

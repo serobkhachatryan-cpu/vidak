@@ -147,6 +147,11 @@ export interface AuthProviderCapabilities {
   deleteAccount: boolean;
   /** List / revoke device sessions through the AuthClient. */
   manageSessions: boolean;
+  /**
+   * Google / GitHub / Apple sign-in linking. W3DS uses eID only;
+   * external video channels live under the imports section.
+   */
+  connectExternalAccounts: boolean;
 }
 
 /**

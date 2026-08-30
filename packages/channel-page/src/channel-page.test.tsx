@@ -107,13 +107,12 @@ describe('ChannelPage', () => {
     expect(tabs.map((tab) => tab.label)).toEqual([
       'Videos',
       'Shorts',
-      'Playlists',
       'About',
       'Videos',
       'Shorts',
-      'Playlists',
       'About',
     ]);
+    expect(markup).not.toContain('>Playlists<');
     expect(new Set(tabs.map((tab) => tab.id)).size).toBe(tabs.length);
     expect(new Set(tabs.map((tab) => tab.controls)).size).toBe(tabs.length);
 
@@ -156,7 +155,12 @@ describe('ChannelPage', () => {
     expect(shortsMarkup).toContain('4.2K views');
 
     const playlistsMarkup = renderToStaticMarkup(
-      <ChannelPage channel={channel} playlists={[playlist]} activeTab="playlists" />,
+      <ChannelPage
+        channel={channel}
+        playlists={[playlist]}
+        activeTab="playlists"
+        tabs={['videos', 'shorts', 'playlists', 'about']}
+      />,
     );
     expect(playlistsMarkup).toContain('href="/playlist/playlist-foundations"');
     expect(playlistsMarkup).toContain('Video platform foundations');
@@ -220,11 +224,23 @@ describe('ChannelPage', () => {
 
     expect(
       renderToStaticMarkup(
-        <ChannelPage channel={channel} activeTab="playlists" playlistsState="loading" />,
+        <ChannelPage
+          channel={channel}
+          activeTab="playlists"
+          playlistsState="loading"
+          tabs={['videos', 'shorts', 'playlists', 'about']}
+        />,
       ),
     ).toContain('aria-label="Loading playlists"');
     expect(
-      renderToStaticMarkup(<ChannelPage channel={channel} activeTab="playlists" playlists={[]} />),
+      renderToStaticMarkup(
+        <ChannelPage
+          channel={channel}
+          activeTab="playlists"
+          playlists={[]}
+          tabs={['videos', 'shorts', 'playlists', 'about']}
+        />,
+      ),
     ).toContain('No playlists yet');
     expect(
       renderToStaticMarkup(
@@ -233,6 +249,7 @@ describe('ChannelPage', () => {
           activeTab="playlists"
           playlistsState="error"
           onRetryPlaylists={() => undefined}
+          tabs={['videos', 'shorts', 'playlists', 'about']}
         />,
       ),
     ).toContain('Could not load playlists');

@@ -297,6 +297,26 @@ export class CreatorVideoService {
     };
   }
 
+  /**
+   * Anonymous channel discovery: creator channels with at least one public video.
+   */
+  async listPublicChannels(
+    params: PaginationParams & { query?: string } = {},
+  ): Promise<CursorPage<Channel>> {
+    const { offset, limit } = normalizePublicPagination(params);
+    const query = params.query?.trim();
+    const rows = await this.store.listPublicChannels(
+      limit + 1,
+      offset,
+      query && query.length > 0 ? query : undefined,
+    );
+    const items = rows.slice(0, limit);
+    return {
+      items,
+      ...(rows.length > limit ? { nextCursor: `offset:${offset + items.length}` } : {}),
+    };
+  }
+
   private async requireUser(accessToken: string): Promise<AuthUser> {
     if (!accessToken.trim()) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);

@@ -12,7 +12,7 @@ import {
   repairedChannelName,
   toSafePublicChannelProjection,
 } from '@w3ds/types';
-import { and, desc, eq, inArray, like, lte, sql } from 'drizzle-orm';
+import { and, desc, eq, exists, ilike, inArray, like, lte, or, sql } from 'drizzle-orm';
 import { CreatorVideoError } from './creator-video-errors';
 import type { W3dsDatabase } from './db/client';
 import {
@@ -96,6 +96,11 @@ export interface CreatorVideoStore {
    * Callers page with `limit` / `offset` (fetch `limit + 1` to detect a next page).
    */
   listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]>;
+  /**
+   * Anonymous channel discovery: channels that have at least one
+   * `published` + `public` video. Optional `query` matches name or handle.
+   */
+  listPublicChannels(limit: number, offset: number, query?: string): Promise<Channel[]>;
   /**
    * Atomically records one anonymous public view when the hashed viewer key is
    * new (or outside the dedup window). Never changes visibility or writes eVault.
@@ -220,6 +225,10 @@ function toVideo(
 
 function cloneChannel(channel: Channel): Channel {
   return { ...channel };
+}
+
+function likeContains(value: string): string {
+  return `%${value.replace(/[\\%_]/g, '\\$&')}%`;
 }
 
 function cloneVideo(video: Video): Video {
@@ -539,6 +548,38 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
       })
       .slice(safeOffset, safeOffset + safeLimit)
       .map((video) => this.withPublicChannel(video));
+  }
+
+  async listPublicChannels(limit: number, offset: number, query?: string): Promise<Channel[]> {
+    const safeLimit = Math.max(0, Math.floor(limit));
+    const safeOffset = Math.max(0, Math.floor(offset));
+    if (safeLimit === 0) return [];
+    const needle = query?.trim().toLocaleLowerCase();
+    const publicChannelIds = new Set(
+      [...this.videosById.values()]
+        .filter((video) => video.status === 'published' && video.visibility === 'public')
+        .map((video) => video.channelId),
+    );
+    const channels = [...this.channelsById.values()]
+      .filter((channel) => publicChannelIds.has(channel.id))
+      .filter((channel) => {
+        if (!needle) return true;
+        return (
+          channel.name.toLocaleLowerCase().includes(needle) ||
+          channel.handle.toLocaleLowerCase().includes(needle)
+        );
+      })
+      .sort((left, right) => {
+        const byName = left.name.localeCompare(right.name);
+        return byName !== 0 ? byName : left.id.localeCompare(right.id);
+      })
+      .slice(safeOffset, safeOffset + safeLimit);
+    const projected: Channel[] = [];
+    for (const channel of channels) {
+      const found = await this.findChannelById(channel.id);
+      if (found) projected.push(found);
+    }
+    return projected;
   }
 
   async recordPublicView(input: {
@@ -928,6 +969,50 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
       .limit(safeLimit)
       .offset(safeOffset);
     return rows.map((row) => toVideo(row.video, toPublicChannelProjection(row.channel, row.owner)));
+  }
+
+  async listPublicChannels(limit: number, offset: number, query?: string): Promise<Channel[]> {
+    const safeLimit = Math.max(0, Math.floor(limit));
+    const safeOffset = Math.max(0, Math.floor(offset));
+    if (safeLimit === 0) return [];
+    const needle = query?.trim();
+    const publishedPublicVideo = exists(
+      this.db
+        .select({ id: videos.id })
+        .from(videos)
+        .where(
+          and(
+            eq(videos.channelId, creatorChannels.id),
+            eq(videos.status, 'published'),
+            eq(videos.visibility, 'public'),
+          ),
+        ),
+    );
+    const search =
+      needle && needle.length > 0
+        ? or(
+            ilike(creatorChannels.name, likeContains(needle)),
+            ilike(creatorChannels.handle, likeContains(needle)),
+          )
+        : undefined;
+    const rows = await this.db
+      .select({ channel: creatorChannels, owner: w3dsPlatformUsers })
+      .from(creatorChannels)
+      .innerJoin(w3dsPlatformUsers, eq(creatorChannels.ownerId, w3dsPlatformUsers.id))
+      .where(search ? and(publishedPublicVideo, search) : publishedPublicVideo)
+      .orderBy(creatorChannels.name, creatorChannels.id)
+      .limit(safeLimit)
+      .offset(safeOffset);
+    return rows.map((row) => {
+      const channel = toChannel(row.channel);
+      const projection = toPublicChannelProjection(row.channel, row.owner);
+      return {
+        ...channel,
+        name: projection.name,
+        handle: projection.handle,
+        ...(projection.avatarUrl ? { avatarUrl: projection.avatarUrl } : {}),
+      };
+    });
   }
 
   async recordPublicView(input: {

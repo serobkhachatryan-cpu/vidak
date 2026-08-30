@@ -1,15 +1,26 @@
 export {
+  type DiscoveredVideoRecord,
   dedupeDiscoveredVideos,
   discoverCallRecordingVideos,
   discoverFileRecordVideos,
   discoverVideoMessageVideos,
   discoverW3dsFileVideos,
   isAuthorizedCallParticipant,
-  videoSpaceFileIdentity,
-  type DiscoveredVideoRecord,
   type VideoSpaceEnvelope,
   type VideoSpaceKind,
+  videoSpaceFileIdentity,
 } from './adapters';
+export {
+  assembleVideoSpaceCatalogue,
+  type VideoSpaceCatalogueItem,
+  type VideoSpaceCatalogueSnapshot,
+  videoSpaceSourceAdapters,
+  videoSpaceSourceIds,
+} from './catalogue';
+export {
+  type InventoryCompleteness,
+  inventoryCompletenessCopy,
+} from './completeness';
 export {
   documentedAuthorizationOntologies,
   documentedMessageTypes,
@@ -19,13 +30,9 @@ export {
   documentedVideoSources,
 } from './documented-sources';
 export {
-  inventoryCompletenessCopy,
-  type InventoryCompleteness,
-} from './completeness';
-export {
+  type VideoSpaceAccessScope,
+  type VideoSpaceVisibility,
   videoSpaceVisibilityLabels,
   visibilityForEVaultVideo,
   visibilityForOwnedVidakVideo,
-  type VideoSpaceAccessScope,
-  type VideoSpaceVisibility,
 } from './visibility';

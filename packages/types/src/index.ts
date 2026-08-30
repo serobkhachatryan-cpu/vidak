@@ -74,6 +74,7 @@ export {
   defaultUserPreferences,
   deleteAccountConfirmation,
   maxAvatarFileSizeBytes,
+  mergeUserPreferences,
   supportedAvatarExtensions,
   supportedAvatarMimeTypes,
 } from './user-settings';

@@ -6,7 +6,13 @@ import {
   toBrowserAuthSession,
   type UpdateAuthProfileInput,
 } from '@w3ds/auth';
-import type { AuthDeviceSession } from '@w3ds/types';
+import type { AuthDeviceSession, UpdateUserPreferencesInput, UserPreferences } from '@w3ds/types';
+import {
+  appLanguages,
+  maxAvatarFileSizeBytes,
+  mergeUserPreferences,
+  supportedAvatarMimeTypes,
+} from '@w3ds/types';
 import {
   isReplaceableWithVerifiedFullName,
   isValidPublicDisplayName,
@@ -15,10 +21,16 @@ import {
 } from '../lib/public-display-name';
 import { getW3dsDatabase } from './db/client';
 import {
+  LocalDiskMediaStorage,
+  type MediaStorage,
+  resolveLocalMediaStorageRoot,
+} from './media-storage';
+import {
   readRequiredW3dsServerConfig,
   resolveCookieSecurityConfig,
   resolveServerNodeEnv,
 } from './server-config';
+import { publicUserAvatarPath } from './user-avatar-path';
 import {
   FilePersistedE2eW3dsAuthStore,
   resetFilePersistedE2eW3dsAuthStoreForTests,
@@ -119,6 +131,7 @@ export interface W3dsAuthServiceOptions {
   store: W3dsAuthStore;
   identityVerifier?: W3dsIdentityVerifier;
   verifiedFullNameReader?: VerifiedFullNameReader;
+  mediaStorage?: MediaStorage;
   now?: () => number;
 }
 
@@ -138,6 +151,7 @@ export class W3dsAuthService {
   private readonly store: W3dsAuthStore;
   private readonly identityVerifier: W3dsIdentityVerifier;
   private readonly verifiedFullNameReader: VerifiedFullNameReader | undefined;
+  private readonly mediaStorage: MediaStorage;
   private readonly now: () => number;
 
   constructor(options: W3dsAuthServiceOptions) {
@@ -150,6 +164,8 @@ export class W3dsAuthService {
     this.identityVerifier =
       options.identityVerifier ?? new RegistryW3dsIdentityVerifier(this.config.registryBaseUrl);
     this.verifiedFullNameReader = options.verifiedFullNameReader;
+    this.mediaStorage =
+      options.mediaStorage ?? new LocalDiskMediaStorage(resolveLocalMediaStorageRoot());
   }
 
   async createOffer(publicBaseUrl: string): Promise<LoginOffer> {
@@ -368,6 +384,63 @@ export class W3dsAuthService {
     });
   }
 
+  async getPreferences(accessToken: string): Promise<UserPreferences> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    const stored = await this.store.getUserPreferences(platformSession.user.id);
+    return mergeUserPreferences(stored);
+  }
+
+  async updatePreferences(
+    accessToken: string,
+    input: UpdateUserPreferencesInput,
+  ): Promise<UserPreferences> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    const patch = validatePreferencesPatch(input);
+    const current = mergeUserPreferences(
+      await this.store.getUserPreferences(platformSession.user.id),
+    );
+    return this.store.upsertUserPreferences(
+      platformSession.user.id,
+      mergeUserPreferences(current, patch),
+    );
+  }
+
+  async uploadAvatar(
+    accessToken: string,
+    input: { bytes: Uint8Array; contentType: string; filename: string },
+  ): Promise<AuthUser> {
+    const platformSession = await this.getActiveSession(accessToken, 'access');
+    validateAvatarUpload(input);
+    const previous = await this.store.getAvatarMedia(platformSession.user.id);
+    const storageKey = this.mediaStorage.createStorageKey();
+    await this.mediaStorage.write(storageKey, input.bytes);
+    const user = await this.store.setAvatarMedia(platformSession.user.id, {
+      storageKey,
+      contentType: input.contentType,
+      avatarUrl: publicUserAvatarPath(platformSession.user.id),
+    });
+    if (previous && previous.storageKey !== storageKey) {
+      await this.mediaStorage.delete(previous.storageKey).catch(() => undefined);
+    }
+    void input.filename;
+    return user;
+  }
+
+  async readPublicAvatar(
+    userId: string,
+  ): Promise<{ body: Uint8Array; contentType: string } | undefined> {
+    const normalized = userId.trim();
+    if (!normalized) return undefined;
+    const media = await this.store.getAvatarMedia(normalized);
+    if (!media) return undefined;
+    try {
+      const body = await this.mediaStorage.read(media.storageKey);
+      return { body, contentType: media.contentType };
+    } catch {
+      return undefined;
+    }
+  }
+
   async getVerifiedFullNameConsent(accessToken: string): Promise<{
     eligible: boolean;
     prompt: boolean;
@@ -383,7 +456,10 @@ export class W3dsAuthService {
       eName: platformSession.user.eName,
       eVaultId: platformSession.user.eVaultId,
     };
-    const replaceable = isReplaceableWithVerifiedFullName(platformSession.user.displayName, identity);
+    const replaceable = isReplaceableWithVerifiedFullName(
+      platformSession.user.displayName,
+      identity,
+    );
     const givenNameOnly =
       decision === 'granted' &&
       isValidPublicDisplayName(platformSession.user.displayName, identity) &&
@@ -816,6 +892,48 @@ function validateProfileUpdateInput(
     }
   }
   return displayName;
+}
+
+function validatePreferencesPatch(input: UpdateUserPreferencesInput): UpdateUserPreferencesInput {
+  const appearance = input.appearance;
+  if (
+    appearance !== undefined &&
+    appearance !== 'light' &&
+    appearance !== 'dark' &&
+    appearance !== 'system'
+  ) {
+    throw new W3dsAuthError('Appearance preference is invalid.', 'validation_failed', 400);
+  }
+  const language = input.language;
+  if (language !== undefined && !(appLanguages as readonly string[]).includes(language)) {
+    throw new W3dsAuthError('Language preference is invalid.', 'validation_failed', 400);
+  }
+  return {
+    ...(appearance ? { appearance } : {}),
+    ...(language ? { language } : {}),
+    ...(input.notifications ? { notifications: input.notifications } : {}),
+    ...(input.privacy ? { privacy: input.privacy } : {}),
+  };
+}
+
+function validateAvatarUpload(input: {
+  bytes: Uint8Array;
+  contentType: string;
+  filename: string;
+}): void {
+  if (!(supportedAvatarMimeTypes as readonly string[]).includes(input.contentType)) {
+    throw new W3dsAuthError(
+      'Unsupported avatar format. Use JPG, PNG, or WebP.',
+      'validation_failed',
+      400,
+    );
+  }
+  if (input.bytes.byteLength <= 0) {
+    throw new W3dsAuthError('The selected avatar is empty.', 'validation_failed', 400);
+  }
+  if (input.bytes.byteLength > maxAvatarFileSizeBytes) {
+    throw new W3dsAuthError('Avatar is too large. Maximum size is 5 MB.', 'validation_failed', 400);
+  }
 }
 
 function isHttpUrl(value: string): boolean {

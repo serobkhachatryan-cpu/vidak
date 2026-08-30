@@ -2,6 +2,7 @@ import { looksLikeTechnicalIdentifier } from '@w3ds/types';
 import { describe, expect, it } from 'vitest';
 import {
   headerAccountCta,
+  headerVerifiedNameCta,
   isPublicHandle,
   isReplaceableWithVerifiedFullName,
   isValidPublicDisplayName,
@@ -9,6 +10,7 @@ import {
   NEUTRAL_PUBLIC_DISPLAY_NAME,
   SET_PUBLIC_NAME_LABEL,
   SETTINGS_PROFILE_HREF,
+  USE_VERIFIED_NAME_LABEL,
 } from './public-display-name';
 
 const opaqueUuid = 'fd10387a-b0d3-5f9c-bf54-7214a491cace';
@@ -20,9 +22,7 @@ describe('isValidPublicDisplayName', () => {
     expect(isValidPublicDisplayName('@creator.w3id')).toBe(false);
     expect(isValidPublicDisplayName('  @ada.w3id  ')).toBe(false);
     expect(isValidPublicDisplayName(`w3ds_${opaqueUuid}`)).toBe(false);
-    expect(
-      isValidPublicDisplayName('fd10387a-b0d3-5f9c-bf54-7214a491-w3ds450ac914'),
-    ).toBe(false);
+    expect(isValidPublicDisplayName('fd10387a-b0d3-5f9c-bf54-7214a491-w3ds450ac914')).toBe(false);
     expect(looksLikeTechnicalIdentifier(`w3ds_${opaqueUuid}`)).toBe(true);
     expect(isValidPublicDisplayName('')).toBe(false);
     expect(isValidPublicDisplayName('   ')).toBe(false);
@@ -106,5 +106,22 @@ describe('headerAccountCta', () => {
       label: 'Ada Lovelace',
       href: SETTINGS_PROFILE_HREF,
     });
+  });
+});
+
+describe('headerVerifiedNameCta', () => {
+  it('offers a non-blocking Profile link while the name is still replaceable', () => {
+    expect(headerVerifiedNameCta(NEUTRAL_PUBLIC_DISPLAY_NAME)).toEqual({
+      label: USE_VERIFIED_NAME_LABEL,
+      href: SETTINGS_PROFILE_HREF,
+    });
+    expect(headerVerifiedNameCta(opaqueUuid)).toEqual({
+      label: USE_VERIFIED_NAME_LABEL,
+      href: SETTINGS_PROFILE_HREF,
+    });
+  });
+
+  it('hides the header CTA after a chosen name is in place', () => {
+    expect(headerVerifiedNameCta('Ada Lovelace')).toBeUndefined();
   });
 });

@@ -40,7 +40,9 @@ export function videoSpaceFileIdentity(fileUris: readonly string[]): string {
  * One card per underlying file, even when several bindings point at it.
  * Prefer the viewer's own copy, then the richer media type.
  */
-export function dedupeDiscoveredVideos(items: readonly DiscoveredVideoRecord[]): DiscoveredVideoRecord[] {
+export function dedupeDiscoveredVideos(
+  items: readonly DiscoveredVideoRecord[],
+): DiscoveredVideoRecord[] {
   const unique = new Map<string, DiscoveredVideoRecord>();
   for (const item of items) {
     const identity = videoSpaceFileIdentity(item.fileUris);
@@ -110,8 +112,7 @@ export function discoverFileRecordVideos(
       key: `file:${ownerEName}:${file.id}:${fileUri}`,
       fileUris: [fileUri],
       kind: 'file',
-      title:
-        optionalString(file.parsed.filename) ?? optionalString(file.parsed.name) ?? 'Video',
+      title: optionalString(file.parsed.filename) ?? optionalString(file.parsed.name) ?? 'Video',
       ...(optionalString(file.parsed.createdAt)
         ? { createdAt: optionalString(file.parsed.createdAt) }
         : {}),
@@ -194,8 +195,13 @@ export function discoverVideoMessageVideos(
   return discovered;
 }
 
-export function isAuthorizedCallParticipant(payload: Record<string, unknown>, eName: string): boolean {
-  return asArray(payload.participants).some((item) => item === eName) || payload.initiator === eName;
+export function isAuthorizedCallParticipant(
+  payload: Record<string, unknown>,
+  eName: string,
+): boolean {
+  return (
+    asArray(payload.participants).some((item) => item === eName) || payload.initiator === eName
+  );
 }
 
 export function orderedRecordingFileUris(recording: Record<string, unknown>): string[] {

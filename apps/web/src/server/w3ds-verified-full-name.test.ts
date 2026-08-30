@@ -161,9 +161,10 @@ describe('RegistryVerifiedFullNameReader', () => {
       platformName: 'vidak',
       fetcher: fetcher as typeof fetch,
     });
-    await expect(
-      reader.readVerifiedFullName({ eName: '@creator.w3id' }),
-    ).resolves.toMatchObject({ name: 'Ada Lovelace', subject: '@creator.w3id' });
+    await expect(reader.readVerifiedFullName({ eName: '@creator.w3id' })).resolves.toMatchObject({
+      name: 'Ada Lovelace',
+      subject: '@creator.w3id',
+    });
     expect(types.sort()).toEqual(['id_document', 'self']);
   });
 
@@ -207,7 +208,8 @@ describe('RegistryVerifiedFullNameReader', () => {
     const fetcher = vi.fn(async (url: URL | RequestInfo) => {
       const href = String(url);
       if (href.includes('/resolve')) return jsonResponse({ uri: 'https://evault.example/creator' });
-      if (href.includes('/platforms/certification')) return jsonResponse({ token: 'platform-token' });
+      if (href.includes('/platforms/certification'))
+        return jsonResponse({ token: 'platform-token' });
       return jsonResponse({
         errors: [{ message: 'denied', extensions: { code: 'FORBIDDEN' } }],
       });
@@ -228,7 +230,8 @@ describe('RegistryVerifiedFullNameReader', () => {
     const fetcher = vi.fn(async (url: URL | RequestInfo) => {
       const href = String(url);
       if (href.includes('/resolve')) return jsonResponse({ uri: 'https://evault.example/creator' });
-      if (href.includes('/platforms/certification')) return jsonResponse({ token: 'platform-token' });
+      if (href.includes('/platforms/certification'))
+        return jsonResponse({ token: 'platform-token' });
       return new Response('forbidden', { status: 403 });
     });
     const reader = new RegistryVerifiedFullNameReader({
@@ -246,7 +249,8 @@ describe('RegistryVerifiedFullNameReader', () => {
     const fetcher = vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
       const href = String(url);
       if (href.includes('/resolve')) return new Response('down', { status: 503 });
-      if (href.includes('/platforms/certification')) return jsonResponse({ token: 'platform-token' });
+      if (href.includes('/platforms/certification'))
+        return jsonResponse({ token: 'platform-token' });
       expect(href).toBe('https://evault.example/graphql');
       const body = JSON.parse(String(init?.body));
       if (body.variables?.type === 'id_document') {
@@ -356,11 +360,13 @@ describe('verified full name consent and persistence', () => {
       readVerifiedFullName: vi.fn().mockRejectedValue(new Error('network')),
     };
     const { service, accessToken } = await authenticatedService(reader);
-    await expect(service.applyVerifiedFullName(accessToken, { grant: true })).rejects.toMatchObject({
-      code: 'remote_unavailable',
-      reason: 'source_unavailable',
-      status: 503,
-    });
+    await expect(service.applyVerifiedFullName(accessToken, { grant: true })).rejects.toMatchObject(
+      {
+        code: 'remote_unavailable',
+        reason: 'source_unavailable',
+        status: 503,
+      },
+    );
   });
 
   it('rejects a mismatched identity and leaves the placeholder name', async () => {

@@ -7,9 +7,9 @@ import {
 
 describe('video space visibility', () => {
   it('keeps an owned eVault video private unless ACL names other people or the public wildcard', () => {
-    expect(
-      visibilityForEVaultVideo({ accessScope: 'personal', viewerEName: '@owner.w3id' }),
-    ).toBe('private');
+    expect(visibilityForEVaultVideo({ accessScope: 'personal', viewerEName: '@owner.w3id' })).toBe(
+      'private',
+    );
     expect(
       visibilityForEVaultVideo({
         accessScope: 'personal',

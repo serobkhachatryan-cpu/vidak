@@ -17,7 +17,8 @@ export interface CreateVideoApiClientOptions {
 
 /**
  * Creates the video API client for the configured auth provider.
- * Development keeps `MockVideoApiClient`; W3DS uses cookie draft routes.
+ * Development keeps `MockVideoApiClient` for unit tests, Storybook, and local
+ * fixtures. W3DS uses durable platform routes and never a silent mock fallback.
  */
 export function createVideoApiClient(options: CreateVideoApiClientOptions = {}): VideoApiClient {
   const provider = resolveAuthProviderId(options.provider);

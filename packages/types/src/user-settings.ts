@@ -74,6 +74,8 @@ export interface UploadAvatarInput {
   type: string;
   /** Preview URL used by the mock client to persist the uploaded avatar. */
   previewUrl: string;
+  /** Original image bytes for durable production upload. */
+  file?: Blob;
 }
 
 export interface UpdateUserPreferencesInput {
@@ -107,6 +109,27 @@ export const defaultUserPreferences: UserPreferences = {
   notifications: defaultNotificationPreferences,
   privacy: defaultPrivacySettings,
 };
+
+export function mergeUserPreferences(
+  previous: UserPreferences | undefined,
+  input?: UpdateUserPreferencesInput,
+): UserPreferences {
+  const base = previous ?? defaultUserPreferences;
+  if (!input) {
+    return {
+      appearance: base.appearance,
+      language: base.language,
+      notifications: { ...base.notifications },
+      privacy: { ...base.privacy },
+    };
+  }
+  return {
+    appearance: input.appearance ?? base.appearance,
+    language: input.language ?? base.language,
+    notifications: { ...base.notifications, ...input.notifications },
+    privacy: { ...base.privacy, ...input.privacy },
+  };
+}
 
 /** Shared avatar upload constraints used by clients and settings validation. */
 export const supportedAvatarMimeTypes = ['image/jpeg', 'image/png', 'image/webp'] as const;

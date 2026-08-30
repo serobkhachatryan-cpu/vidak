@@ -15,7 +15,13 @@ import { type ReactNode, useId, useState } from 'react';
 import { ChannelHeader, channelBannerClassName } from './channel-header';
 import { AboutPanel, PlaylistsPanel, ShortsPanel, VideosPanel } from './channel-panels';
 import { type ChannelSectionState, LoadingRegion, skeletonKeys } from './channel-section';
-import { type ChannelTabId, ChannelTabs, channelPanelId, channelTabId } from './channel-tabs';
+import {
+  type ChannelTabId,
+  ChannelTabs,
+  channelCatalogueTabOrder,
+  channelPanelId,
+  channelTabId,
+} from './channel-tabs';
 import { cx } from './styles';
 
 /** The channel page and each of its sections share the same set of view states. */
@@ -34,6 +40,7 @@ export interface ChannelPageProps {
   playlistsState?: ChannelSectionState;
   activeTab?: ChannelTabId;
   defaultTab?: ChannelTabId;
+  tabs?: readonly ChannelTabId[];
   onTabChange?: (tab: ChannelTabId) => void;
   subscribed?: boolean;
   defaultSubscribed?: boolean;
@@ -90,6 +97,7 @@ export function ChannelPage({
   playlistsState = 'ready',
   activeTab,
   defaultTab = 'videos',
+  tabs = channelCatalogueTabOrder,
   onTabChange,
   subscribed,
   defaultSubscribed = false,
@@ -109,7 +117,8 @@ export function ChannelPage({
   const scope = useId();
   const [selectedTab, setSelectedTab] = useState<ChannelTabId>(defaultTab);
   const [ownSubscribed, setOwnSubscribed] = useState(defaultSubscribed);
-  const currentTab = activeTab ?? selectedTab;
+  const currentTab =
+    (tabs.includes(activeTab ?? selectedTab) ? (activeTab ?? selectedTab) : tabs[0]) ?? 'videos';
   const isSubscribed = subscribed ?? ownSubscribed;
 
   const changeTab = (tab: ChannelTabId) => {
@@ -150,7 +159,7 @@ export function ChannelPage({
           subscribed={isSubscribed}
           onSubscribeToggle={toggleSubscription}
         />
-        <ChannelTabs scope={scope} activeTab={currentTab} onChange={changeTab} />
+        <ChannelTabs scope={scope} activeTab={currentTab} onChange={changeTab} tabs={tabs} />
         <div
           role="tabpanel"
           id={channelPanelId(scope, currentTab)}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useInfiniteChannels, useInfinitePlaylists, useInfiniteVideos } from '@w3ds/hooks';
+import { useInfiniteChannels, useInfiniteVideos } from '@w3ds/hooks';
 import type { SearchResultType, SearchSort, Video } from '@w3ds/types';
 import {
   ChannelSearchResult,
@@ -8,7 +8,6 @@ import {
   ErrorState,
   Grid,
   Page,
-  PlaylistSearchResult,
   SearchFilters,
   SearchInput,
   SearchResultSkeleton,
@@ -66,7 +65,6 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
     12,
   );
   const channelSearch = useInfiniteChannels(videoApiClient, { query, sort }, 12);
-  const playlistSearch = useInfinitePlaylists(videoApiClient, { query, sort }, 12);
 
   const suggestions = useMemo(() => {
     const normalized = inputValue.trim().toLocaleLowerCase();
@@ -82,18 +80,10 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
     const observer = new IntersectionObserver(
       ([entry]) => {
         if (!entry?.isIntersecting) return;
-        if (type === 'videos' && videoSearch.hasNextPage && !videoSearch.isFetchingNextPage) {
-          void videoSearch.fetchNextPage();
-        }
         if (type === 'channels' && channelSearch.hasNextPage && !channelSearch.isFetchingNextPage) {
           void channelSearch.fetchNextPage();
-        }
-        if (
-          type === 'playlists' &&
-          playlistSearch.hasNextPage &&
-          !playlistSearch.isFetchingNextPage
-        ) {
-          void playlistSearch.fetchNextPage();
+        } else if (videoSearch.hasNextPage && !videoSearch.isFetchingNextPage) {
+          void videoSearch.fetchNextPage();
         }
       },
       { rootMargin: '240px' },
@@ -104,9 +94,6 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
     channelSearch.fetchNextPage,
     channelSearch.hasNextPage,
     channelSearch.isFetchingNextPage,
-    playlistSearch.fetchNextPage,
-    playlistSearch.hasNextPage,
-    playlistSearch.isFetchingNextPage,
     query,
     type,
     videoSearch.fetchNextPage,
@@ -132,16 +119,14 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
 
   const videos = videoSearch.data?.pages.flatMap((page) => page.items) ?? [];
   const channels = channelSearch.data?.pages.flatMap((page) => page.items) ?? [];
-  const playlists = playlistSearch.data?.pages.flatMap((page) => page.items) ?? [];
-  const currentSearch =
-    type === 'videos' ? videoSearch : type === 'channels' ? channelSearch : playlistSearch;
-  const resultCount =
-    type === 'videos' ? videos.length : type === 'channels' ? channels.length : playlists.length;
+  const resultType: SearchResultType = type === 'channels' ? 'channels' : 'videos';
+  const currentSearch = resultType === 'channels' ? channelSearch : videoSearch;
+  const resultCount = resultType === 'channels' ? channels.length : videos.length;
   const isLoadingMore = currentSearch.isFetchingNextPage;
 
   return (
     <ApplicationShell currentHref="/search" searchValue={query}>
-      <Page title="Search" description="Find videos, channels, and playlists.">
+      <Page title="Search" description="Find videos and creator channels.">
         <form onSubmit={submit} className="relative max-w-2xl">
           <SearchInput
             ref={inputRef}
@@ -172,7 +157,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
                 selectSuggestion(suggestions[activeSuggestion] ?? '');
               }
             }}
-            placeholder="Search videos, channels, and playlists"
+            placeholder="Search videos and channels"
             aria-autocomplete="list"
             aria-controls="search-suggestions"
             aria-activedescendant={
@@ -221,18 +206,28 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
         ) : (
           <div className="mt-8 space-y-6">
             <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
-              <SearchFilters value={type} onChange={setType} />
+              <SearchFilters
+                value={resultType}
+                onChange={(next) => {
+                  if (next === 'playlists') return;
+                  setType(next);
+                }}
+              />
               <SearchSortControl value={sort} onChange={setSort} />
             </div>
             <p className="font-sans text-sm text-muted-foreground" aria-live="polite">
               {currentSearch.isPending
                 ? 'Searching…'
-                : `${resultCount} ${type} found for “${query}”`}
+                : `${resultCount} ${resultType} found for “${query}”`}
             </p>
             {currentSearch.isPending ? (
-              <Grid columns={type === 'videos' ? 3 : 1} gap={6} aria-label="Loading search results">
-                {Array.from({ length: type === 'videos' ? 9 : 4 }, (_, index) => (
-                  <SearchResultSkeleton key={index} type={type} />
+              <Grid
+                columns={resultType === 'videos' ? 3 : 1}
+                gap={6}
+                aria-label="Loading search results"
+              >
+                {Array.from({ length: resultType === 'videos' ? 9 : 4 }, (_, index) => (
+                  <SearchResultSkeleton key={index} type={resultType} />
                 ))}
               </Grid>
             ) : currentSearch.error ? (
@@ -249,24 +244,17 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
               />
             ) : (
               <>
-                {type === 'videos' && (
+                {resultType === 'videos' && (
                   <Grid columns={3} gap={6}>
                     {videos.map((video) => (
                       <SearchVideoCard key={video.id} video={video} />
                     ))}
                   </Grid>
                 )}
-                {type === 'channels' && (
+                {resultType === 'channels' && (
                   <div className="space-y-4">
                     {channels.map((channel) => (
                       <ChannelSearchResult key={channel.id} channel={channel} />
-                    ))}
-                  </div>
-                )}
-                {type === 'playlists' && (
-                  <div className="space-y-4">
-                    {playlists.map((playlist) => (
-                      <PlaylistSearchResult key={playlist.id} playlist={playlist} />
                     ))}
                   </div>
                 )}

@@ -1,6 +1,7 @@
 'use client';
 
 import type { VideoApiClient } from '@w3ds/api-client';
+import { videoProductSurfaceEnabled } from '@w3ds/api-client';
 import {
   useInfiniteChannels,
   useInfinitePlaylists,
@@ -92,7 +93,8 @@ export function UserProfilePageData({ client, userId, ...props }: UserProfilePag
     },
     videosPageSize,
   );
-  const playlistsQuery = useInfinitePlaylists(client, {}, playlistsPageSize);
+  const playlistsEnabled = videoProductSurfaceEnabled(client, 'playlists');
+  const playlistsQuery = useInfinitePlaylists(client, {}, playlistsPageSize, playlistsEnabled);
 
   const videoPages = videosQuery.data?.pages;
   const playlistPages = playlistsQuery.data?.pages;
@@ -160,6 +162,7 @@ export function UserProfilePageData({ client, userId, ...props }: UserProfilePag
         void channelsQuery.refetch();
         void playlistsQuery.refetch();
       }}
+      {...(playlistsEnabled ? { tabs: ['videos', 'playlists', 'about'] as const } : {})}
       {...(profileQuery.error ? { onRetry: () => void profileQuery.refetch() } : {})}
     />
   );

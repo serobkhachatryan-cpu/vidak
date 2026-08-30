@@ -172,7 +172,9 @@ export function SettingsPageData({
   const sections = useMemo(() => settingsSectionsForCapabilities(capabilities), [capabilities]);
   const profileQuery = useUserProfile(videoClient, userId);
   const preferencesQuery = useUserPreferences(videoClient, userId);
-  const connectedQuery = useConnectedAccounts(videoClient, userId);
+  const connectedQuery = useConnectedAccounts(videoClient, userId, {
+    enabled: capabilities.connectExternalAccounts,
+  });
   const channelImportsQuery = useQuery({
     queryKey: ['channel-imports', userId],
     queryFn: () => readChannelImports(authClient, accessToken),
@@ -443,6 +445,7 @@ export function SettingsPageData({
         size: file.size,
         type: file.type,
         previewUrl,
+        file,
       });
       clearAvatarPreview();
       await syncAuthProjection(

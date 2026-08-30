@@ -84,7 +84,9 @@ describe('video space adapters', () => {
         viewerEName: viewer,
         sourceEName: owner,
         referenced: new Set(),
-        calls: [{ id: 'call-1', ontology: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd', parsed: payload }],
+        calls: [
+          { id: 'call-1', ontology: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd', parsed: payload },
+        ],
       }),
     ).toEqual([]);
   });

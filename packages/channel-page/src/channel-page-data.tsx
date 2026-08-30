@@ -1,6 +1,7 @@
 'use client';
 
 import type { VideoApiClient } from '@w3ds/api-client';
+import { videoProductSurfaceEnabled } from '@w3ds/api-client';
 import { useChannel, useInfinitePlaylists, useInfiniteVideos, useUserProfile } from '@w3ds/hooks';
 import type { ChannelId, Video } from '@w3ds/types';
 import { useMemo } from 'react';
@@ -65,7 +66,8 @@ export function ChannelPageData({ client, channelId, ...props }: ChannelPageData
     { channelId, status: 'published', visibility: 'public' },
     uploadsPageSize,
   );
-  const playlistsQuery = useInfinitePlaylists(client, {}, playlistsPageSize);
+  const playlistsEnabled = videoProductSurfaceEnabled(client, 'playlists');
+  const playlistsQuery = useInfinitePlaylists(client, {}, playlistsPageSize, playlistsEnabled);
 
   const uploadPages = uploadsQuery.data?.pages;
   const playlistPages = playlistsQuery.data?.pages;
@@ -114,6 +116,7 @@ export function ChannelPageData({ client, channelId, ...props }: ChannelPageData
       onLoadMoreUploads={() => void uploadsQuery.fetchNextPage()}
       onRetryUploads={() => void uploadsQuery.refetch()}
       onRetryPlaylists={() => void playlistsQuery.refetch()}
+      {...(playlistsEnabled ? { tabs: ['videos', 'shorts', 'playlists', 'about'] as const } : {})}
       {...(channelQuery.error ? { onRetry: () => void channelQuery.refetch() } : {})}
     />
   );

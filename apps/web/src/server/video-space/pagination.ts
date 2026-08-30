@@ -18,7 +18,9 @@ export function readEnvelopeConnectionPage(connection: Record<string, unknown> |
   endCursor?: string;
 } {
   const pageInfo =
-    connection?.pageInfo && typeof connection.pageInfo === 'object' && !Array.isArray(connection.pageInfo)
+    connection?.pageInfo &&
+    typeof connection.pageInfo === 'object' &&
+    !Array.isArray(connection.pageInfo)
       ? (connection.pageInfo as Record<string, unknown>)
       : undefined;
   const hasNextPage = pageInfo?.hasNextPage;
@@ -35,15 +37,15 @@ export function readEnvelopeConnectionPage(connection: Record<string, unknown> |
 
 export async function collectPaginatedEnvelopes<T>(input: {
   maxPages: number;
-  readPage: (after: string | null) => Promise<Record<string, unknown> | EnvelopeConnectionPage | undefined>;
+  readPage: (
+    after: string | null,
+  ) => Promise<Record<string, unknown> | EnvelopeConnectionPage | undefined>;
   mapEdge: (edge: unknown) => T | undefined;
 }): Promise<PaginatedEnvelopes<T>> {
   const items: T[] = [];
   let after: string | null = null;
   for (let page = 0; page < input.maxPages; page += 1) {
-    const pageData = readEnvelopeConnectionPage(
-      record(await input.readPage(after)),
-    );
+    const pageData = readEnvelopeConnectionPage(record(await input.readPage(after)));
     for (const edge of pageData.edges) {
       const item = input.mapEdge(edge);
       if (item) items.push(item);

@@ -1,11 +1,13 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { AuthUser } from '@w3ds/auth';
+import type { UserPreferences } from '@w3ds/types';
 import {
   type CreateOfferRecordInput,
   type CreateSessionRecordInput,
   InMemoryW3dsAuthStore,
   type RotateSessionRecordInput,
+  type StoredAvatarMedia,
   type StoredOffer,
   type StoredPlatformSession,
   type UpdateUserProfileRecordInput,
@@ -49,6 +51,8 @@ export class FilePersistedE2eW3dsAuthStore implements W3dsAuthStore {
           users: AuthUser[];
           sessions: StoredPlatformSession[];
           verifiedFullNameDecisions?: Record<string, VerifiedFullNameDecision>;
+          preferences?: Record<string, UserPreferences>;
+          avatarMedia?: Record<string, StoredAvatarMedia>;
         },
       );
     } catch {
@@ -99,6 +103,18 @@ export class FilePersistedE2eW3dsAuthStore implements W3dsAuthStore {
   }
   setVerifiedFullNameDecision(userId: string, decision: VerifiedFullNameDecision) {
     return this.withState(true, () => this.memory.setVerifiedFullNameDecision(userId, decision));
+  }
+  getUserPreferences(userId: string) {
+    return this.withState(false, () => this.memory.getUserPreferences(userId));
+  }
+  upsertUserPreferences(userId: string, preferences: UserPreferences) {
+    return this.withState(true, () => this.memory.upsertUserPreferences(userId, preferences));
+  }
+  getAvatarMedia(userId: string) {
+    return this.withState(false, () => this.memory.getAvatarMedia(userId));
+  }
+  setAvatarMedia(userId: string, media: StoredAvatarMedia & { avatarUrl: string }) {
+    return this.withState(true, () => this.memory.setAvatarMedia(userId, media));
   }
   createSession(input: CreateSessionRecordInput) {
     return this.withState(true, () => this.memory.createSession(input));
