@@ -1,66 +1,71 @@
 'use client';
 
 import { Button, Card, Heading, Text } from '@w3ds/ui';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAuthentication } from './auth-provider';
+import {
+  fetchVerifiedFullNameConsent,
+  shouldCheckVerifiedFullName,
+  submitVerifiedFullNameGrant,
+  type VerifiedFullNameUiKind,
+} from './verified-full-name-client';
 
-type ConsentState = 'hidden' | 'prompt' | 'saving' | 'error';
+type ConsentState = Extract<VerifiedFullNameUiKind, 'hidden' | 'prompt' | 'unavailable'> | 'saving';
 
 /**
- * First-login prompt. The verified passport name is read from the person's
- * eVault only after they grant permission — never during w3ds://auth.
+ * First-login prompt. Uses the authenticated session provider, not the
+ * build-time client provider, so a W3DS cookie session is enough.
  */
 export function VerifiedFullNameConsent() {
-  const { provider, user, updateSessionUser } = useAuthentication();
+  const { user, session, updateSessionUser } = useAuthentication();
   const [state, setState] = useState<ConsentState>('hidden');
   const [error, setError] = useState<string>();
 
+  const load = useCallback(async () => {
+    if (
+      !shouldCheckVerifiedFullName({ sessionProvider: session?.provider, hasUser: Boolean(user) })
+    ) {
+      return;
+    }
+    try {
+      const result = await fetchVerifiedFullNameConsent();
+      if (result.kind === 'prompt' || result.kind === 'unavailable') {
+        setError(result.message);
+        setState(result.kind);
+        return;
+      }
+      setError(undefined);
+      setState('hidden');
+    } catch {
+      setError('Your verified name is not available right now.');
+      setState('unavailable');
+    }
+  }, [session?.provider, user]);
+
   useEffect(() => {
-    if (provider !== 'w3ds' || !user?.eName) return;
-    let cancelled = false;
-    void fetch('/api/auth/verified-full-name', { credentials: 'include', cache: 'no-store' })
-      .then(async (response) => {
-        if (!response.ok) return { eligible: false };
-        return (await response.json()) as { eligible?: boolean };
-      })
-      .then((consent) => {
-        if (!cancelled && consent.eligible) setState('prompt');
-      })
-      .catch(() => {
-        // Fail closed: do not prompt when the consent status cannot be read.
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [provider, user?.eName, user?.id]);
+    void load();
+  }, [load]);
 
   if (state === 'hidden') return null;
 
   const respond = async (grant: boolean) => {
+    if (state === 'unavailable' && !grant) {
+      setState('hidden');
+      return;
+    }
     setError(undefined);
     setState('saving');
-    try {
-      const response = await fetch('/api/auth/verified-full-name', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ grant }),
-      });
-      const body = (await response.json().catch(() => undefined)) as
-        | { user?: { displayName?: string }; error?: { message?: string } }
-        | undefined;
-      if (!response.ok) {
-        setError(body?.error?.message ?? 'The verified name could not be used.');
-        setState('error');
-        return;
-      }
-      if (grant && user && body?.user) updateSessionUser({ ...user, ...body.user });
-      setState('hidden');
-    } catch {
-      setError('The verified name could not be used.');
-      setState('error');
+    const result = await submitVerifiedFullNameGrant(grant);
+    if (!result.ok) {
+      setError(result.message);
+      setState(grant ? 'unavailable' : 'prompt');
+      return;
     }
+    if (grant && user && result.user) updateSessionUser({ ...user, ...result.user });
+    setState('hidden');
   };
+
+  const unavailable = state === 'unavailable';
 
   return (
     <div
@@ -71,13 +76,14 @@ export function VerifiedFullNameConsent() {
     >
       <Card elevated className="w-full max-w-md space-y-4 p-6">
         <Heading as="h2" size="lg" id="verified-full-name-title">
-          Use your verified full name?
+          {unavailable ? 'Verified name unavailable' : 'Use your verified full name?'}
         </Heading>
         <Text>
-          Your eID stores the full name from your verified identity document in your eVault. Vidak
-          will use that name as your public name only if you allow it.
+          {unavailable
+            ? (error ?? 'Your verified name is not available right now.')
+            : 'Your eID stores the full name from your verified identity document in your eVault. Vidak will use that name as your public name only if you allow it.'}
         </Text>
-        {error ? (
+        {error && !unavailable ? (
           <Text size="sm" tone="danger" role="alert">
             {error}
           </Text>
@@ -91,14 +97,20 @@ export function VerifiedFullNameConsent() {
           >
             Not now
           </Button>
-          <Button
-            type="button"
-            isLoading={state === 'saving'}
-            loadingText="Using verified name"
-            onClick={() => void respond(true)}
-          >
-            Use verified name
-          </Button>
+          {unavailable ? (
+            <Button type="button" onClick={() => void load()}>
+              Try again
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              isLoading={state === 'saving'}
+              loadingText="Using verified name"
+              onClick={() => void respond(true)}
+            >
+              Use verified name
+            </Button>
+          )}
         </div>
       </Card>
     </div>

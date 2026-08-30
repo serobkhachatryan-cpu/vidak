@@ -6,6 +6,7 @@ import { ApplicationShell } from '../../components/application-shell';
 import { authApiClient } from '../../lib/auth-api-client';
 import { videoApiClient } from '../../lib/video-api-client';
 import { SessionLoadingSkeleton, useAuthentication } from '../auth/auth-provider';
+import { VerifiedFullNameProfileAction } from '../auth/verified-full-name-profile-action';
 import { useAppearancePreference } from './appearance-preference';
 
 export function SettingsPageFeature() {
@@ -38,6 +39,7 @@ export function SettingsPageFeature() {
         onAccountDeleted={() => {
           void logout().then(() => router.replace('/'));
         }}
+        profileExtras={<VerifiedFullNameProfileAction />}
       />
     </ApplicationShell>
   );

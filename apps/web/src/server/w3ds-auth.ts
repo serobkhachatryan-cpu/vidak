@@ -370,19 +370,26 @@ export class W3dsAuthService {
 
   async getVerifiedFullNameConsent(accessToken: string): Promise<{
     eligible: boolean;
+    prompt: boolean;
+    sourceReady: boolean;
     decision: VerifiedFullNameDecision | null;
   }> {
     const platformSession = await this.getActiveSession(accessToken, 'access');
     const decision = await this.store.getVerifiedFullNameDecision(platformSession.user.id);
-    const eligible =
-      !decision &&
-      Boolean(this.verifiedFullNameReader) &&
-      isReplaceableWithVerifiedFullName(platformSession.user.displayName, {
-        id: platformSession.user.id,
-        eName: platformSession.user.eName,
-        eVaultId: platformSession.user.eVaultId,
-      });
-    return { eligible, decision: decision ?? null };
+    const sourceReady = Boolean(this.verifiedFullNameReader);
+    const replaceable = isReplaceableWithVerifiedFullName(platformSession.user.displayName, {
+      id: platformSession.user.id,
+      eName: platformSession.user.eName,
+      eVaultId: platformSession.user.eVaultId,
+    });
+    // "Not now" must not trap the person: they stay eligible for an explicit grant.
+    const eligible = sourceReady && replaceable;
+    return {
+      eligible,
+      prompt: eligible && !decision,
+      sourceReady,
+      decision: decision ?? null,
+    };
   }
 
   /**

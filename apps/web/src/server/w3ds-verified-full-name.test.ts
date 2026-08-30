@@ -149,6 +149,8 @@ describe('verified full name consent and persistence', () => {
     if (!accessToken) throw new Error('Expected access token');
     await expect(service.getVerifiedFullNameConsent(accessToken)).resolves.toEqual({
       eligible: true,
+      prompt: true,
+      sourceReady: true,
       decision: null,
     });
   });
@@ -182,6 +184,8 @@ describe('verified full name consent and persistence', () => {
     });
     await expect(service.getVerifiedFullNameConsent(accessToken)).resolves.toEqual({
       eligible: false,
+      prompt: false,
+      sourceReady: true,
       decision: 'granted',
     });
   });
@@ -250,14 +254,50 @@ describe('verified full name consent and persistence', () => {
   });
 
   it('records a decline without reading or changing the name', async () => {
-    const reader = { readVerifiedFullName: vi.fn() };
+    const reader = {
+      readVerifiedFullName: vi.fn().mockResolvedValue({
+        name: 'Ada Lovelace',
+        subject: '@creator.w3id',
+        type: 'id_document',
+      }),
+    };
     const { service, accessToken } = await authenticatedService(reader);
     const user = await service.declineVerifiedFullName(accessToken);
     expect(user.displayName).toBe(NEUTRAL_PUBLIC_DISPLAY_NAME);
     expect(reader.readVerifiedFullName).not.toHaveBeenCalled();
     await expect(service.getVerifiedFullNameConsent(accessToken)).resolves.toEqual({
-      eligible: false,
+      eligible: true,
+      prompt: false,
+      sourceReady: true,
       decision: 'declined',
+    });
+    const userAfterGrant = await service.applyVerifiedFullName(accessToken, { grant: true });
+    expect(userAfterGrant.displayName).toBe('Ada Lovelace');
+  });
+
+  it('keeps identifier and placeholder names eligible when a reader is configured', async () => {
+    const reader = {
+      readVerifiedFullName: vi.fn().mockResolvedValue({
+        name: 'Ada Lovelace',
+        subject: '@creator.w3id',
+        type: 'id_document',
+      }),
+    };
+    const { service, accessToken } = await authenticatedService(reader);
+    await expect(service.getVerifiedFullNameConsent(accessToken)).resolves.toMatchObject({
+      eligible: true,
+      prompt: true,
+      sourceReady: true,
+    });
+  });
+
+  it('reports an unready name source without pretending the person is ineligible', async () => {
+    const { service, accessToken } = await authenticatedService();
+    await expect(service.getVerifiedFullNameConsent(accessToken)).resolves.toEqual({
+      eligible: false,
+      prompt: false,
+      sourceReady: false,
+      decision: null,
     });
   });
 });
@@ -269,7 +309,7 @@ function jsonResponse(body: unknown): Response {
   });
 }
 
-function createService(reader: VerifiedFullNameReader) {
+function createService(reader?: VerifiedFullNameReader) {
   const verifier: W3dsIdentityVerifier = {
     verify: vi.fn().mockResolvedValue(verifiedIdentity),
   };
@@ -284,13 +324,13 @@ function createService(reader: VerifiedFullNameReader) {
       },
       store,
       identityVerifier: verifier,
-      verifiedFullNameReader: reader,
+      ...(reader ? { verifiedFullNameReader: reader } : {}),
       now: () => 1_780_000_000_000,
     }),
   };
 }
 
-async function authenticatedService(reader: VerifiedFullNameReader) {
+async function authenticatedService(reader?: VerifiedFullNameReader) {
   const { service } = createService(reader);
   const offer = await service.createOffer('https://vidak.example');
   await service.completeOffer({

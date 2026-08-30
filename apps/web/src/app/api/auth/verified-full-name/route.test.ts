@@ -51,7 +51,12 @@ describe('verified full name consent route', () => {
       }),
     );
     expect(status.status).toBe(200);
-    await expect(status.json()).resolves.toEqual({ eligible: true, decision: null });
+    await expect(status.json()).resolves.toEqual({
+      eligible: true,
+      prompt: true,
+      sourceReady: true,
+      decision: null,
+    });
 
     const refused = await POST(
       new NextRequest('https://vidak.example/api/auth/verified-full-name', {

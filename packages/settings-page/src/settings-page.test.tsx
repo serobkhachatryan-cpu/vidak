@@ -40,6 +40,18 @@ describe('SettingsPage', () => {
     expect(markup).toContain('aria-selected="true"');
   });
 
+  it('renders a Profile extras action for verified name', () => {
+    const markup = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@vidak.video"
+        profile={profile}
+        defaultSection="profile"
+        profileExtras={<button type="button">Use verified name from eID</button>}
+      />,
+    );
+    expect(markup).toContain('Use verified name from eID');
+  });
+
   it('surfaces profile validation messaging', () => {
     const markup = renderToStaticMarkup(
       <SettingsPage

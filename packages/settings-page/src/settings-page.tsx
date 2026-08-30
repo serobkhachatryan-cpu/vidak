@@ -152,6 +152,8 @@ export interface SettingsPageProps {
   onProfileChange?: (patch: Partial<ProfileFormInput>) => void;
   onAvatarSelect?: (file: File) => void;
   onSaveProfile?: () => void;
+  /** Optional Profile-section content (for example a verified-name action). */
+  profileExtras?: ReactNode;
   emailForm?: EmailFormInput;
   emailErrors?: EmailFormErrors;
   emailSuccess?: string;
@@ -277,6 +279,7 @@ export function SettingsPage({
   onProfileChange,
   onAvatarSelect,
   onSaveProfile,
+  profileExtras,
   emailForm = emptyEmail,
   emailErrors,
   emailSuccess,
@@ -403,6 +406,7 @@ export function SettingsPage({
                 onChange={(patch) => onProfileChange?.(patch)}
                 onAvatarSelect={(file) => onAvatarSelect?.(file)}
                 onSubmit={() => onSaveProfile?.()}
+                extras={profileExtras}
               />
             )}
             {currentSection === 'email' && sections.includes('email') && (

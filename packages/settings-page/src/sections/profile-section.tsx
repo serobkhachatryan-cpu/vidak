@@ -1,7 +1,7 @@
 'use client';
 
 import { Avatar, Button, Input, Label, Text, Textarea } from '@w3ds/ui';
-import { type ChangeEvent, useId, useRef } from 'react';
+import { type ChangeEvent, type ReactNode, useId, useRef } from 'react';
 import { avatarFileAccept } from '../settings-constants';
 import type { ProfileFormErrors, ProfileFormInput } from '../settings-validation';
 
@@ -17,6 +17,7 @@ export interface ProfileSectionProps {
   onChange: (patch: Partial<ProfileFormInput>) => void;
   onAvatarSelect: (file: File) => void;
   onSubmit: () => void;
+  extras?: ReactNode;
 }
 
 export function ProfileSection({
@@ -31,6 +32,7 @@ export function ProfileSection({
   onChange,
   onAvatarSelect,
   onSubmit,
+  extras,
 }: ProfileSectionProps) {
   const displayNameId = useId();
   const handleId = useId();
@@ -103,6 +105,7 @@ export function ProfileSection({
             {errors.displayName}
           </Text>
         )}
+        {extras}
       </div>
 
       <div className="space-y-2">
