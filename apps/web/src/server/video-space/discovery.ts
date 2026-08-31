@@ -3,6 +3,7 @@
  * eNames, IDs, tokens, or media URLs.
  */
 import type { InventoryCompleteness } from './completeness';
+import { coveragePageTotal } from './completeness';
 
 export type InventoryScope = 'all' | 'owned' | 'shared';
 
@@ -55,6 +56,8 @@ export function formatInventoryMetricsLog(input: {
 }): string {
   const completion =
     input.metrics.completionMs === undefined ? '-' : String(input.metrics.completionMs);
+  const coverage = input.completeness.coverage;
+  const pages = coveragePageTotal(coverage);
   return [
     'video-space-inventory',
     `cache=${input.metrics.cache}`,
@@ -65,5 +68,16 @@ export function formatInventoryMetricsLog(input: {
     `sources_shared=${input.metrics.sourceCounts.sharedSpaces}`,
     `sources_failed=${input.metrics.sourceCounts.failed}`,
     `retry_rate_limited=${input.completeness.retryRateLimited}`,
+    `pages=${pages}`,
+    `histories=${coverage?.groupHistories ?? 0}`,
+    `directs=${coverage?.directChats ?? 0}`,
+    `grants_reference=${coverage?.referenceGrants ?? 0}`,
+    `grants_official=${coverage?.officialChatGrants ?? 0}`,
+    `pages_chat=${coverage?.chatPages ?? 0}`,
+    `pages_message=${coverage?.messagePages ?? 0}`,
+    `pages_file=${coverage?.filePages ?? 0}`,
+    `pages_w3ds_file=${coverage?.w3dsFilePages ?? 0}`,
+    `pages_manifest=${coverage?.groupManifestPages ?? 0}`,
+    `pages_call=${coverage?.callSessionPages ?? 0}`,
   ].join(' ');
 }

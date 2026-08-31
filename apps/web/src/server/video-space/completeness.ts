@@ -2,6 +2,54 @@
  * Counts-only inventory completeness. Never include names, IDs, titles,
  * eNames, or other record content in the copy or the structured state.
  */
+
+/** Documented eVault pages and grants actually scanned. Counts only. */
+export interface InventoryCoverage {
+  chatPages: number;
+  messagePages: number;
+  filePages: number;
+  w3dsFilePages: number;
+  groupManifestPages: number;
+  callSessionPages: number;
+  groupHistories: number;
+  directChats: number;
+  referenceGrants: number;
+  officialChatGrants: number;
+}
+
+export type InventoryCoveragePageKind =
+  | 'chatPages'
+  | 'messagePages'
+  | 'filePages'
+  | 'w3dsFilePages'
+  | 'groupManifestPages'
+  | 'callSessionPages';
+
+export const emptyInventoryCoverage: InventoryCoverage = {
+  chatPages: 0,
+  messagePages: 0,
+  filePages: 0,
+  w3dsFilePages: 0,
+  groupManifestPages: 0,
+  callSessionPages: 0,
+  groupHistories: 0,
+  directChats: 0,
+  referenceGrants: 0,
+  officialChatGrants: 0,
+};
+
+export function coveragePageTotal(coverage: InventoryCoverage | undefined): number {
+  if (!coverage) return 0;
+  return (
+    coverage.chatPages +
+    coverage.messagePages +
+    coverage.filePages +
+    coverage.w3dsFilePages +
+    coverage.groupManifestPages +
+    coverage.callSessionPages
+  );
+}
+
 export interface InventoryCompleteness {
   indexed: number;
   expected: number;
@@ -16,6 +64,7 @@ export interface InventoryCompleteness {
   retryRateLimited: number;
   /** Sources currently queued for background retry. Zero once the scan is terminal. */
   retrying?: number;
+  coverage?: InventoryCoverage;
 }
 
 export const completeInventory: InventoryCompleteness = {
@@ -30,6 +79,7 @@ export const completeInventory: InventoryCompleteness = {
   retryRejected: 0,
   retryRateLimited: 0,
   retrying: 0,
+  coverage: { ...emptyInventoryCoverage },
 };
 
 export function inventoryCompletenessCopy(state: InventoryCompleteness): string {
@@ -56,6 +106,7 @@ export function createInventoryCompletenessTracker() {
   let retryRejected = 0;
   let retryRateLimited = 0;
   let retrying = 0;
+  const coverage: InventoryCoverage = { ...emptyInventoryCoverage };
 
   return {
     expectSpace() {
@@ -91,6 +142,19 @@ export function createInventoryCompletenessTracker() {
       retrying = Math.max(0, retrying - 1);
       this.markRetryClass(kind);
     },
+    recordPage(kind: InventoryCoveragePageKind) {
+      coverage[kind] += 1;
+    },
+    recordGroupHistory() {
+      coverage.groupHistories += 1;
+    },
+    recordDirectChat() {
+      coverage.directChats += 1;
+    },
+    recordGrant(kind: 'reference' | 'official') {
+      if (kind === 'reference') coverage.referenceGrants += 1;
+      else coverage.officialChatGrants += 1;
+    },
     snapshot(): InventoryCompleteness {
       const classified = indexed + denied + missing + failed;
       const complete = classified === expected && retrying === 0 && !retryNeeded;
@@ -106,6 +170,7 @@ export function createInventoryCompletenessTracker() {
         retryRejected,
         retryRateLimited,
         retrying,
+        coverage: { ...coverage },
       };
     },
   };

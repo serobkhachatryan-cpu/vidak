@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { createInventoryCompletenessTracker, inventoryCompletenessCopy } from './completeness';
+import {
+  createInventoryCompletenessTracker,
+  emptyInventoryCoverage,
+  inventoryCompletenessCopy,
+} from './completeness';
 
 describe('inventory completeness', () => {
   it('uses counts only when a source read is incomplete', () => {
@@ -21,6 +25,7 @@ describe('inventory completeness', () => {
       retryRejected: 0,
       retryRateLimited: 0,
       retrying: 0,
+      coverage: emptyInventoryCoverage,
     });
     expect(inventoryCompletenessCopy(state)).toBe('1 of 2 shared spaces indexed; retry needed.');
     expect(inventoryCompletenessCopy(state)).not.toMatch(/@|[a-f0-9-]{8,}|group|chat|title/i);
@@ -47,6 +52,7 @@ describe('inventory completeness', () => {
       retryRejected: 0,
       retryRateLimited: 0,
       retrying: 0,
+      coverage: emptyInventoryCoverage,
     });
     expect(inventoryCompletenessCopy(state)).toBe(
       '1 of 3 shared spaces indexed; 1 denied by current access; 1 not found.',
@@ -90,8 +96,34 @@ describe('inventory completeness', () => {
     expect(state.complete).toBe(true);
     expect(state.retryNeeded).toBe(false);
     expect(state.failed).toBe(2);
+    expect(state.coverage).toEqual(emptyInventoryCoverage);
     expect(inventoryCompletenessCopy(state)).toBe(
       '3 of 7 shared spaces indexed; 1 denied by current access; 1 not found; 2 failed.',
     );
+  });
+
+  it('records documented page and grant counts without treating space totals as inventory', () => {
+    const tracker = createInventoryCompletenessTracker();
+    tracker.expectSpace();
+    tracker.indexSpace();
+    tracker.recordPage('chatPages');
+    tracker.recordPage('messagePages');
+    tracker.recordPage('messagePages');
+    tracker.recordGroupHistory();
+    tracker.recordDirectChat();
+    tracker.recordGrant('reference');
+    tracker.recordGrant('official');
+    const state = tracker.snapshot();
+    expect(state.complete).toBe(true);
+    expect(state.indexed).toBe(1);
+    expect(state.coverage).toEqual({
+      ...emptyInventoryCoverage,
+      chatPages: 1,
+      messagePages: 2,
+      groupHistories: 1,
+      directChats: 1,
+      referenceGrants: 1,
+      officialChatGrants: 1,
+    });
   });
 });
