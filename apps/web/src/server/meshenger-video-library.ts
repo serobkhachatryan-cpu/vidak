@@ -1132,12 +1132,12 @@ export class MeshengerVideoLibrary {
       completeness.markScanFinished();
       return snapshot('done');
     }
-    if (savedQueue.length > 0) {
-      restoreJobLedger();
-      queue.push(...savedQueue);
-    } else if (openTasks.length > 0) {
+    if (openTasks.length > 0) {
       restoreJobLedger();
       for (const task of openTasks) queue.push(task.payload as unknown as SharedWork);
+    } else if (savedQueue.length > 0) {
+      restoreJobLedger();
+      queue.push(...savedQueue);
     } else {
       seedInitialQueue();
     }
@@ -1146,7 +1146,7 @@ export class MeshengerVideoLibrary {
     dedupeWork(queue, workKey);
 
     if (options?.drain === false) {
-      await persistCheckpoint();
+      if (savedQueue.length === 0 && openTasks.length === 0) await persistCheckpoint();
       return snapshot('batch');
     }
 

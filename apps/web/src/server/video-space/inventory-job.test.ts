@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { inventoryTaskKey } from './inventory-schedule';
-import { createMemoryInventoryJobStore } from './job-store';
+import { createMemoryInventoryJobStore, toPostgresJson } from './job-store';
 import { type DeferredWork, drainFairVaultQueue, upsertWork } from './work-queue';
 
 type Work = DeferredWork & {
@@ -240,5 +240,13 @@ describe('durable inventory checkpoints', () => {
     );
     expect(key.includes('\u0000')).toBe(false);
     expect(key.split('\u001f')).toHaveLength(6);
+  });
+
+  it('clones jsonb values without NUL bytes or circular refs', () => {
+    const circular: { self?: unknown; title: string } = { title: 'ok\u0000x' };
+    circular.self = circular;
+    const cloned = toPostgresJson(circular);
+    expect(cloned.title).toBe('okx');
+    expect(cloned.self).toBeUndefined();
   });
 });

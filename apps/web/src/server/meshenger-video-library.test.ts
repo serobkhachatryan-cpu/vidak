@@ -3246,4 +3246,119 @@ describe('Meshenger video library', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('resumes open tasks instead of a stale ledger queue', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'running',
+      ledger: { queue: [{ type: 'chats', after: 'stale', attempts: 0 }], drainFinished: false },
+    });
+    await store.saveTask({
+      id: 'messages-task',
+      jobId: job.id,
+      taskKey: 'messages-task',
+      kind: 'messages',
+      vaultKey: '@person.w3id',
+      cursorAfter: null,
+      attempts: 0,
+      notBefore: 0,
+      status: 'pending',
+      priority: 60,
+      payload: { type: 'messages', after: null, attempts: 0 },
+    });
+    const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
+    const messageOntology = '550e8400-e29b-41d4-a716-446655440004';
+    let chatPages = 0;
+    let messagePages = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const raw = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (raw.includes(chatOntology)) chatPages += 1;
+        if (raw.includes(messageOntology)) messagePages += 1;
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_AUTH_JWT_SECRET: secret,
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', drain: true, onSnapshot: () => undefined },
+      );
+      expect(messagePages).toBeGreaterThan(0);
+      expect(chatPages).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not let an HTTP hydrate shrink open tasks', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'running',
+      ledger: { queue: [{ type: 'chats', after: null, attempts: 0 }], drainFinished: false },
+    });
+    for (const kind of ['chats', 'messages', 'group-files'] as const) {
+      await store.saveTask({
+        id: `${kind}-task`,
+        jobId: job.id,
+        taskKey: `${kind}-task`,
+        kind,
+        vaultKey: '@person.w3id',
+        cursorAfter: null,
+        attempts: 0,
+        notBefore: 0,
+        status: 'pending',
+        priority: 30,
+        payload: { type: kind, after: null, attempts: 0 },
+      });
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_AUTH_JWT_SECRET: secret,
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', drain: false, onSnapshot: () => undefined },
+      );
+      const open = await store.loadOpenTasks(job.id);
+      expect(open).toHaveLength(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
