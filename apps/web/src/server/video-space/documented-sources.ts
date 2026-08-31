@@ -14,10 +14,15 @@
  *
  * Pagination: documented eVault `metaEnvelopes` uses `pageInfo.hasNextPage` /
  * `endCursor`. The inventory scanner follows every page of Chat, Message
- * (including `search: { fields: ["chatId"] }` history), File, w3ds-file-v1,
- * GroupManifest, and call-session on each authorized vault. That matches the
- * eID/Meshenger client's documented record types without calling Meshenger
- * private HTTP APIs or inventing GraphQL fields.
+ * (unfiltered on the viewer's vault and on member group / opened direct
+ * vaults; plus `search: { fields: ["chatId"] }` per granted chat), File,
+ * w3ds-file-v1, GroupManifest, and call-session on each authorized vault.
+ *
+ * Chat grants: official Chat records (`type` + `participantIds`) hop to the
+ * other party's vault. Meshenger-style `isReference` + canonical owner/chat
+ * fields are also followed when present. Indexed-space counts are not the
+ * inventory; coverage counts of those documented pages are. No Meshenger
+ * private HTTP APIs and no invented GraphQL fields.
  */
 export const documentedVideoSourceIds = [
   'w3ds-file',
@@ -63,4 +68,24 @@ export function documentedOntologyId(id: DocumentedVideoSourceId): string {
   const source = documentedVideoSources.find((item) => item.id === id);
   if (!source) throw new Error(`Unknown documented video source: ${id}`);
   return source.ontologyId;
+}
+
+/** Map a documented ontology id to the counts-only coverage page bucket. */
+export function coverageKindForOntology(
+  ontologyId: string,
+):
+  | 'chatPages'
+  | 'messagePages'
+  | 'filePages'
+  | 'w3dsFilePages'
+  | 'groupManifestPages'
+  | 'callSessionPages'
+  | undefined {
+  if (ontologyId === documentedAuthorizationOntologies.chat) return 'chatPages';
+  if (ontologyId === documentedAuthorizationOntologies.groupManifest) return 'groupManifestPages';
+  if (ontologyId === documentedOntologyId('video-message')) return 'messagePages';
+  if (ontologyId === documentedOntologyId('file-record')) return 'filePages';
+  if (ontologyId === documentedOntologyId('w3ds-file')) return 'w3dsFilePages';
+  if (ontologyId === documentedOntologyId('call-recording')) return 'callSessionPages';
+  return undefined;
 }

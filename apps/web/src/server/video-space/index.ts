@@ -35,6 +35,7 @@ export {
   parseInventoryScope,
 } from './discovery';
 export {
+  coverageKindForOntology,
   documentedAuthorizationOntologies,
   documentedMessageTypes,
   documentedOntologyId,

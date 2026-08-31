@@ -1,6 +1,7 @@
 import type { Video } from '@w3ds/types';
 import {
   completeInventory,
+  coveragePageTotal,
   type InventoryCompleteness,
   inventoryCompletenessCopy,
 } from '../../server/video-space/completeness';
@@ -107,6 +108,13 @@ export function libraryProgressCopy(input: {
   if (retrying > 0) parts.push(`retrying ${retrying}`);
   else if (input.discovery === 'partial' && completeness?.retryNeeded) parts.push('retry needed');
   else if (input.discovery === 'refreshing') parts.push('updating your library');
+  const coverage = completeness?.coverage;
+  if (coverage) {
+    if (coverage.groupHistories > 0) parts.push(`${coverage.groupHistories} histories`);
+    if (coverage.directChats > 0) parts.push(`${coverage.directChats} directs`);
+    const pages = coveragePageTotal(coverage);
+    if (pages > 0) parts.push(`${pages} pages scanned`);
+  }
   return parts.join(' · ');
 }
 

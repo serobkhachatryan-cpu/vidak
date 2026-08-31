@@ -7,6 +7,7 @@ import {
   createMeshengerVideoStreamId,
   verifyMeshengerVideoStreamId,
 } from './meshenger-video-library';
+import { emptyInventoryCoverage } from './video-space/completeness';
 
 const secret = '12345678901234567890123456789012';
 const grant = {
@@ -1193,6 +1194,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        coverage: emptyInventoryCoverage,
       });
       const serialized = JSON.stringify(workspace.completeness);
       expect(serialized).not.toMatch(/@missing|@group|chat-ok|Indexed clip/i);
@@ -1361,6 +1363,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        coverage: emptyInventoryCoverage,
       });
     } finally {
       vi.unstubAllGlobals();
@@ -1559,6 +1562,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        coverage: emptyInventoryCoverage,
       });
       expect(
         fetcher.mock.calls.some(
@@ -1689,6 +1693,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        coverage: emptyInventoryCoverage,
       });
     } finally {
       vi.unstubAllGlobals();
@@ -2490,6 +2495,307 @@ describe('Meshenger video library', () => {
         { scope: 'owned', onSnapshot: () => undefined },
       );
       expect(result.items.map((item) => item.title)).toEqual(['Keep this.mp4']);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('follows official Chat participant grants onto the other vault without Meshenger isReference', async () => {
+    const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
+    const messageOntology = '550e8400-e29b-41d4-a716-446655440004';
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+      }
+      const body = JSON.parse(String(init.body ?? '{}')) as {
+        variables?: { ontologyId?: string; chatId?: string };
+      };
+      if (url.hostname === 'person-vault.example' && body.variables?.ontologyId === chatOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'official-dm',
+                    ontology: chatOntology,
+                    parsed: {
+                      type: 'direct',
+                      id: 'dm-1',
+                      participantIds: ['@person.w3id', '@friend.w3id'],
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'friend-vault.example' &&
+        body.variables?.ontologyId === messageOntology &&
+        body.variables.chatId === 'dm-1'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'friend-clip',
+                    ontology: messageOntology,
+                    parsed: {
+                      chatId: 'dm-1',
+                      type: 'file',
+                      mediaUrl: 'w3ds://file?id=@friend.w3id/briefing',
+                      file: { name: 'Official dm clip.mp4' },
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const result = await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { scope: 'shared', onSnapshot: () => undefined },
+      );
+      expect(result.items.map((item) => item.title)).toContain('Official dm clip.mp4');
+      expect(result.completeness.coverage?.officialChatGrants).toBeGreaterThan(0);
+      expect(result.completeness.coverage?.directChats).toBeGreaterThan(0);
+      expect(result.completeness.complete).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('inventories member group messages that chatId search would miss', async () => {
+    const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
+    const messageOntology = '550e8400-e29b-41d4-a716-446655440004';
+    const manifestOntology = 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e';
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@group.w3id', uri: 'https://group-vault.example' });
+      }
+      const body = JSON.parse(String(init.body ?? '{}')) as {
+        query?: string;
+        variables?: { ontologyId?: string; chatId?: string };
+      };
+      if (url.hostname === 'person-vault.example' && body.variables?.ontologyId === chatOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'ref-1',
+                    ontology: chatOntology,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: '@group.w3id',
+                      canonicalChatId: 'chat-known',
+                      type: 'group',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'group-vault.example' &&
+        body.variables?.ontologyId === manifestOntology
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'manifest-1',
+                    ontology: manifestOntology,
+                    parsed: { owner: '@group.w3id', members: ['@person.w3id'] },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'group-vault.example' &&
+        body.variables?.ontologyId === messageOntology &&
+        !body.variables.chatId
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'orphan-msg',
+                    ontology: messageOntology,
+                    parsed: {
+                      type: 'video',
+                      fileId: 'w3ds://file?id=@group.w3id/orphan',
+                      file: { filename: 'Unscoped group clip.mp4' },
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const result = await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { scope: 'shared', onSnapshot: () => undefined },
+      );
+      expect(result.items.map((item) => item.title)).toContain('Unscoped group clip.mp4');
+      expect(result.completeness.coverage?.referenceGrants).toBeGreaterThan(0);
+      expect(result.completeness.coverage?.messagePages).toBeGreaterThan(0);
+      expect(result.completeness.coverage?.groupManifestPages).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('pages GroupManifest until membership is found and then lists member files', async () => {
+    const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
+    const manifestOntology = 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e';
+    const fileOntology = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    let manifestPages = 0;
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@group.w3id', uri: 'https://group-vault.example' });
+      }
+      const body = JSON.parse(String(init.body ?? '{}')) as {
+        variables?: { ontologyId?: string; after?: string | null };
+      };
+      if (url.hostname === 'person-vault.example' && body.variables?.ontologyId === chatOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'ref-1',
+                    ontology: chatOntology,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: '@group.w3id',
+                      canonicalChatId: 'chat-known',
+                      type: 'group',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'group-vault.example' &&
+        body.variables?.ontologyId === manifestOntology
+      ) {
+        manifestPages += 1;
+        if (!body.variables.after) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'manifest-old',
+                      ontology: manifestOntology,
+                      parsed: { owner: '@group.w3id', members: ['@other.w3id'] },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: true, endCursor: 'manifests-2' },
+              },
+            },
+          });
+        }
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'manifest-current',
+                    ontology: manifestOntology,
+                    parsed: { owner: '@group.w3id', members: ['@person.w3id'] },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (url.hostname === 'group-vault.example' && body.variables?.ontologyId === fileOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'member-file',
+                    ontology: fileOntology,
+                    parsed: {
+                      mimeType: 'video/mp4',
+                      name: 'Member-only take.mp4',
+                      uri: 'w3ds://file?id=@group.w3id/member-file',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const result = await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { scope: 'shared', onSnapshot: () => undefined },
+      );
+      expect(manifestPages).toBeGreaterThanOrEqual(2);
+      expect(result.items.map((item) => item.title)).toContain('Member-only take.mp4');
+      expect(result.completeness.coverage?.groupManifestPages).toBeGreaterThanOrEqual(2);
+      expect(result.completeness.coverage?.filePages).toBeGreaterThan(0);
     } finally {
       vi.unstubAllGlobals();
     }

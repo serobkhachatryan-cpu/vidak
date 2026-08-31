@@ -24,6 +24,7 @@ import type {
 } from './video-space/discovery';
 import { emptySourceCounts } from './video-space/discovery';
 import {
+  coverageKindForOntology,
   documentedAuthorizationOntologies,
   documentedOntologyId,
 } from './video-space/documented-sources';
@@ -160,6 +161,7 @@ interface ChatReference {
   groupEName: string;
   chatId: string;
   type?: string | undefined;
+  basis: 'reference' | 'official';
 }
 type SourceFailure = 'denied' | 'missing' | 'unavailable' | 'rate_limited' | 'rejected';
 type RateLimitMode = 'fail-fast' | 'backoff';
@@ -186,6 +188,8 @@ interface GroupDiscovery {
   openedChatIds?: string[];
   chatsComplete?: boolean;
   chatsCursor?: string;
+  manifestsComplete?: boolean;
+  manifestsCursor?: string;
 }
 interface ResolvedVault {
   ownerEName: string;
@@ -250,7 +254,7 @@ export class MeshengerVideoLibrary {
     const chatEnvelopes = includeShared
       ? await this.tryListEnvelopes(ownVault.ownerEName, eVaultUri, chatOntology, completeness)
       : [];
-    const chatReferences = chatReferencesFromEnvelopes(chatEnvelopes);
+    const chatReferences = chatGrantsFromEnvelopes(chatEnvelopes, eName);
     const messages = await this.tryListEnvelopes(
       ownVault.ownerEName,
       eVaultUri,
@@ -621,6 +625,7 @@ export class MeshengerVideoLibrary {
       }
       if (item.attempts > 0) completeness.finishRetry();
       counts.personalPages += 1;
+      recordCoveragePage(completeness, item.source.ontologyId);
       await item.source.ingest(page.value.items);
       if (!page.value.complete && page.value.endCursor) {
         queue.push({ source: item.source, after: page.value.endCursor, attempts: 0 });
@@ -689,6 +694,24 @@ export class MeshengerVideoLibrary {
             retryAfterMs?: number;
           }
         | {
+            type: 'group-history';
+            spaceKey: string;
+            groupEName: string;
+            owner: string;
+            eVaultUri: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
+            type: 'group-manifests';
+            spaceKey: string;
+            groupEName: string;
+            owner: string;
+            eVaultUri: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
             type: 'group-calls';
             spaceKey: string;
             groupEName: string;
@@ -716,6 +739,24 @@ export class MeshengerVideoLibrary {
             owner: string;
             eVaultUri: string;
             chatId: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
+            type: 'direct-chats';
+            spaceKey: string;
+            ownerEName: string;
+            owner: string;
+            eVaultUri: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
+            type: 'direct-history';
+            spaceKey: string;
+            ownerEName: string;
+            owner: string;
+            eVaultUri: string;
             after: string | null;
             retryAfterMs?: number;
           }
@@ -750,6 +791,9 @@ export class MeshengerVideoLibrary {
     const failedSpaces = new Set<string>();
     const openedGroups = new Map<string, { vault: ResolvedVault; member: boolean }>();
     const openedDirects = new Map<string, ResolvedVault>();
+    const scheduledGroupFiles = new Set<string>();
+    const scheduledGroupHistory = new Set<string>();
+    const scheduledDirectHistory = new Set<string>();
 
     const addSpaceWork = (key: string, n = 1) => {
       remaining.set(key, (remaining.get(key) ?? 0) + n);
@@ -836,6 +880,54 @@ export class MeshengerVideoLibrary {
       scheduledGroupChats.set(groupEName, seen);
     };
 
+    const enqueueGroupFiles = (groupEName: string, vault: ResolvedVault) => {
+      if (scheduledGroupFiles.has(groupEName)) return;
+      scheduledGroupFiles.add(groupEName);
+      for (const ontologyId of [fileOntology, w3dsFileOntology]) {
+        addSpaceWork(groupEName);
+        queue.push({
+          type: 'group-files',
+          spaceKey: groupEName,
+          groupEName,
+          owner: vault.ownerEName,
+          eVaultUri: vault.eVaultUri,
+          ontologyId,
+          after: null,
+          attempts: 0,
+        });
+      }
+    };
+
+    const enqueueGroupHistory = (groupEName: string, vault: ResolvedVault) => {
+      if (scheduledGroupHistory.has(groupEName)) return;
+      scheduledGroupHistory.add(groupEName);
+      addSpaceWork(groupEName);
+      queue.push({
+        type: 'group-history',
+        spaceKey: groupEName,
+        groupEName,
+        owner: vault.ownerEName,
+        eVaultUri: vault.eVaultUri,
+        after: null,
+        attempts: 0,
+      });
+    };
+
+    const enqueueDirectHistory = (ownerEName: string, vault: ResolvedVault) => {
+      if (scheduledDirectHistory.has(ownerEName)) return;
+      scheduledDirectHistory.add(ownerEName);
+      addSpaceWork(ownerEName);
+      queue.push({
+        type: 'direct-history',
+        spaceKey: ownerEName,
+        ownerEName,
+        owner: vault.ownerEName,
+        eVaultUri: vault.eVaultUri,
+        after: null,
+        attempts: 0,
+      });
+    };
+
     const enqueueGroup = (groupEName: string, chatIds: Iterable<string>) => {
       if (settled.has(groupEName) && !openedGroups.has(groupEName)) return;
       const referenced = referencedGroupChats.get(groupEName) ?? new Set<string>();
@@ -903,9 +995,10 @@ export class MeshengerVideoLibrary {
       });
     };
     const ingestReferences = (envelopes: Envelope[]) => {
-      const references = chatReferencesFromEnvelopes(envelopes);
+      const references = chatGrantsFromEnvelopes(envelopes, eName);
       conversations.push(...chatEnvelopesToConversations(eName, references, envelopes));
       for (const reference of references) {
+        completeness.recordGrant(reference.basis);
         if (reference.type === 'group' || !reference.type) {
           enqueueGroup(reference.groupEName, [reference.chatId]);
         }
@@ -941,6 +1034,7 @@ export class MeshengerVideoLibrary {
         }
         if (item.attempts > 0) completeness.finishRetry();
         counts.personalPages += 1;
+        recordCoveragePage(completeness, ontologyId);
         if (item.type === 'chats') ingestReferences(page.value.items);
         else {
           messageRecords.push(
@@ -1005,6 +1099,8 @@ export class MeshengerVideoLibrary {
         }
         openedGroups.set(item.groupEName, { vault, member: space.currentMember === true });
         conversations.push(...space.conversations);
+        recordCoveragePage(completeness, groupManifestOntology);
+        recordCoveragePage(completeness, chatOntology);
         const chatIds = new Set([...referencedIds, ...(space.openedChatIds ?? [])]);
         enqueueGroupMessages(item.groupEName, vault, chatIds);
         addSpaceWork(item.groupEName);
@@ -1019,19 +1115,19 @@ export class MeshengerVideoLibrary {
           attempts: 0,
         });
         if (space.currentMember) {
-          for (const ontologyId of [fileOntology, w3dsFileOntology]) {
-            addSpaceWork(item.groupEName);
-            queue.push({
-              type: 'group-files',
-              spaceKey: item.groupEName,
-              groupEName: item.groupEName,
-              owner: vault.ownerEName,
-              eVaultUri: vault.eVaultUri,
-              ontologyId,
-              after: null,
-              attempts: 0,
-            });
-          }
+          enqueueGroupFiles(item.groupEName, vault);
+          enqueueGroupHistory(item.groupEName, vault);
+        } else if (space.manifestsComplete === false && space.manifestsCursor) {
+          addSpaceWork(item.groupEName);
+          queue.push({
+            type: 'group-manifests',
+            spaceKey: item.groupEName,
+            groupEName: item.groupEName,
+            owner: vault.ownerEName,
+            eVaultUri: vault.eVaultUri,
+            after: space.manifestsCursor,
+            attempts: 0,
+          });
         }
         if (space.chatsComplete === false && space.chatsCursor) {
           addSpaceWork(item.groupEName);
@@ -1066,6 +1162,7 @@ export class MeshengerVideoLibrary {
           return;
         }
         if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, chatOntology);
         const opened = openedGroups.get(item.groupEName);
         if (opened) {
           const chatIds = page.value.items
@@ -1100,7 +1197,85 @@ export class MeshengerVideoLibrary {
           return;
         }
         if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, messageOntology);
+        if (item.after === null) completeness.recordGroupHistory();
         ingestMessagePage(item.groupEName, item.chatId, page.value.items);
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'group-history') {
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(item.owner, item.eVaultUri, messageOntology, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, messageOntology);
+        found.push(
+          ...this.discoverMessageVideos(page.value.items, referenced, eName, item.groupEName),
+        );
+        messageRecords.push(
+          ...page.value.items.map((message) => toMeshengerMessage(item.groupEName, message)),
+        );
+        mergeAuthorMap(historicalAuthors, authorsFromMessages(page.value.items));
+        for (const [chatId, authors] of historicalAuthors) {
+          for (const author of authors) {
+            if (sameEName(author, item.groupEName) || sameEName(author, eName)) continue;
+            enqueueAuthor(author, chatId);
+          }
+        }
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'group-manifests') {
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(item.owner, item.eVaultUri, groupManifestOntology, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, groupManifestOntology);
+        const opened = openedGroups.get(item.groupEName);
+        const becameMember = page.value.items.some((manifest) =>
+          isCurrentGroupMember(manifest.parsed, eName),
+        );
+        if (becameMember && opened && !opened.member) {
+          openedGroups.set(item.groupEName, { vault: opened.vault, member: true });
+          enqueueGroupFiles(item.groupEName, opened.vault);
+          enqueueGroupHistory(item.groupEName, opened.vault);
+          addSpaceWork(item.groupEName);
+          queue.push({
+            type: 'group-chats',
+            spaceKey: item.groupEName,
+            groupEName: item.groupEName,
+            owner: opened.vault.ownerEName,
+            eVaultUri: opened.vault.eVaultUri,
+            after: null,
+            attempts: 0,
+          });
+        }
         continueOrFinishPage(item.spaceKey, item, page.value);
         snapshot('batch');
         return;
@@ -1122,6 +1297,7 @@ export class MeshengerVideoLibrary {
           return;
         }
         if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, callSessionOntology);
         found.push(
           ...(await this.discoverCallVideos({
             viewerEName: eName,
@@ -1153,6 +1329,7 @@ export class MeshengerVideoLibrary {
           return;
         }
         if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, item.ontologyId);
         if (item.ontologyId === w3dsFileOntology) {
           found.push(
             ...this.discoverRawFileVideos(item.owner, page.value.items, referenced, eName),
@@ -1209,7 +1386,8 @@ export class MeshengerVideoLibrary {
         }
         openedDirects.set(item.ownerEName, vault);
         conversations.push(...space.conversations);
-        const chatIds = space.openedChatIds ?? [...referencedIds];
+        recordCoveragePage(completeness, chatOntology);
+        const chatIds = [...new Set([...(space.openedChatIds ?? []), ...referencedIds])];
         for (const chatId of chatIds) {
           addSpaceWork(item.ownerEName);
           queue.push({
@@ -1234,6 +1412,19 @@ export class MeshengerVideoLibrary {
           after: null,
           attempts: 0,
         });
+        enqueueDirectHistory(item.ownerEName, vault);
+        if (space.chatsComplete === false && space.chatsCursor) {
+          addSpaceWork(item.ownerEName);
+          queue.push({
+            type: 'direct-chats',
+            spaceKey: item.ownerEName,
+            ownerEName: item.ownerEName,
+            owner: vault.ownerEName,
+            eVaultUri: vault.eVaultUri,
+            after: space.chatsCursor,
+            attempts: 0,
+          });
+        }
         finishSpaceWork(item.ownerEName);
         snapshot('batch');
         return;
@@ -1261,7 +1452,66 @@ export class MeshengerVideoLibrary {
           return;
         }
         if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, messageOntology);
+        if (item.after === null) completeness.recordDirectChat();
         ingestMessagePage(item.ownerEName, item.chatId, page.value.items);
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'direct-chats') {
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(item.owner, item.eVaultUri, chatOntology, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, chatOntology);
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'direct-history') {
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(item.owner, item.eVaultUri, messageOntology, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, messageOntology);
+        found.push(
+          ...this.discoverMessageVideos(page.value.items, referenced, eName, item.ownerEName),
+        );
+        messageRecords.push(
+          ...page.value.items.map((message) => toMeshengerMessage(item.ownerEName, message)),
+        );
+        mergeAuthorMap(historicalAuthors, authorsFromMessages(page.value.items));
+        for (const [chatId, authors] of historicalAuthors) {
+          for (const author of authors) {
+            if (sameEName(author, item.ownerEName) || sameEName(author, eName)) continue;
+            enqueueAuthor(author, chatId);
+          }
+        }
         continueOrFinishPage(item.spaceKey, item, page.value);
         snapshot('batch');
         return;
@@ -1283,6 +1533,7 @@ export class MeshengerVideoLibrary {
           return;
         }
         if (item.attempts > 0) completeness.finishRetry();
+        recordCoveragePage(completeness, callSessionOntology);
         found.push(
           ...(await this.discoverCallVideos({
             viewerEName: eName,
@@ -1297,6 +1548,8 @@ export class MeshengerVideoLibrary {
         snapshot('batch');
         return;
       }
+
+      if (item.type !== 'author-messages') return;
 
       const authorRead = await this.readSource(
         async () => {
@@ -1326,6 +1579,7 @@ export class MeshengerVideoLibrary {
       }
       if (item.attempts > 0) completeness.finishRetry();
       if (!authorRead.failure) {
+        recordCoveragePage(completeness, messageOntology);
         found.push(
           ...this.discoverMessageVideos(
             authorRead.value.items,
@@ -1560,6 +1814,10 @@ export class MeshengerVideoLibrary {
         openedChatIds,
         chatsComplete: chatsRead.value.complete,
         ...(chatsRead.value.endCursor ? { chatsCursor: chatsRead.value.endCursor } : {}),
+        manifestsComplete: manifestsRead.value.complete,
+        ...(manifestsRead.value.endCursor
+          ? { manifestsCursor: manifestsRead.value.endCursor }
+          : {}),
       };
     }
 
@@ -1839,10 +2097,11 @@ export class MeshengerVideoLibrary {
     const eVaultUri = vaultRead.value.eVaultUri;
     const chatsRead = await this.readSource(
       () =>
-        this.listEnvelopes(owner, eVaultUri, chatOntology, failureTracker, {
+        this.listEnvelopes(owner, eVaultUri, chatOntology, undefined, {
+          maxPages: input.mode === 'open' ? 1 : maxPages,
           rateLimit: input.rateLimit ?? 'fail-fast',
-        }).then((page) => page.items),
-      [] as Envelope[],
+        }),
+      { items: [] as Envelope[], complete: false },
       failureTracker,
     );
     if (chatsRead.failure === 'denied') return emptySpace('denied');
@@ -1856,13 +2115,12 @@ export class MeshengerVideoLibrary {
     }
 
     const canonicalChats = new Map<string, Envelope>();
-    for (const chat of chatsRead.value) {
+    for (const chat of chatsRead.value.items) {
       if (chat.parsed.isReference === true) continue;
       if (optionalString(chat.parsed.type)?.toLowerCase() === 'group') continue;
       const chatId = optionalString(chat.parsed.id) ?? chat.id;
       if (input.chatIds.has(chatId)) canonicalChats.set(chatId, chat);
     }
-    if (!canonicalChats.size) return emptySpace('denied');
 
     for (const [chatId, chat] of canonicalChats) {
       const participants = asArray(chat.parsed.participantIds).filter(
@@ -1888,13 +2146,15 @@ export class MeshengerVideoLibrary {
         outcome: 'indexed',
         retryNeeded: false,
         vault: vaultRead.value,
-        openedChatIds: [...canonicalChats.keys()],
+        openedChatIds: [...new Set([...input.chatIds, ...canonicalChats.keys()])],
+        chatsComplete: chatsRead.value.complete,
+        ...(chatsRead.value.endCursor ? { chatsCursor: chatsRead.value.endCursor } : {}),
       };
     }
 
     let retryNeeded = false;
     let retryClass: 'unavailable' | 'rate_limited' | 'rejected' | undefined;
-    for (const chatId of canonicalChats.keys()) {
+    for (const chatId of input.chatIds) {
       const messageRead = await this.readSource(
         () =>
           this.listMessagesForChat(
@@ -2448,6 +2708,13 @@ function isAuthorizationGraphqlError(error: unknown): boolean {
     message.includes('access denied')
   );
 }
+function recordCoveragePage(
+  completeness: InventoryCompletenessTracker | undefined,
+  ontologyId: string,
+): void {
+  const kind = coverageKindForOntology(ontologyId);
+  if (kind) completeness?.recordPage(kind);
+}
 function normalizeEName(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) return trimmed;
@@ -2465,19 +2732,49 @@ function number(value: unknown): number | undefined {
 function asArray(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
-function chatReference(payload: RecordValue): ChatReference | undefined {
-  if (payload.isReference !== true) return undefined;
-  const groupEName = optionalString(payload.canonicalOwnerEName);
-  const chatId = optionalString(payload.canonicalChatId);
-  if (!groupEName || !chatId || !isEName(groupEName)) return undefined;
+function chatGrantFromEnvelope(envelope: Envelope, viewerEName: string): ChatReference[] {
+  const payload = envelope.parsed;
   const type = optionalString(payload.type)?.toLowerCase();
-  return { groupEName, chatId, ...(type ? { type } : {}) };
+  const chatId =
+    optionalString(payload.canonicalChatId) ?? optionalString(payload.id) ?? envelope.id;
+  if (!chatId) return [];
+  if (payload.isReference === true) {
+    const owner = optionalString(payload.canonicalOwnerEName);
+    const ownerEName = owner ? asEName(owner) : undefined;
+    if (!ownerEName) return [];
+    return [{ groupEName: ownerEName, chatId, basis: 'reference', ...(type ? { type } : {}) }];
+  }
+  const grants: ChatReference[] = [];
+  const canonicalOwner = optionalString(payload.canonicalOwnerEName);
+  const canonicalOwnerEName = canonicalOwner ? asEName(canonicalOwner) : undefined;
+  if (canonicalOwnerEName && !sameEName(canonicalOwnerEName, viewerEName)) {
+    grants.push({
+      groupEName: canonicalOwnerEName,
+      chatId,
+      basis: 'official',
+      ...(type ? { type } : {}),
+    });
+  }
+  if (type === 'group') return grants;
+  for (const participant of asArray(payload.participantIds)) {
+    if (typeof participant !== 'string') continue;
+    const participantEName = asEName(participant);
+    if (!participantEName || sameEName(participantEName, viewerEName)) continue;
+    grants.push({
+      groupEName: participantEName,
+      chatId,
+      type: type ?? 'direct',
+      basis: 'official',
+    });
+  }
+  return grants;
 }
-function chatReferencesFromEnvelopes(envelopes: Envelope[]): ChatReference[] {
+function chatGrantsFromEnvelopes(envelopes: Envelope[], viewerEName: string): ChatReference[] {
   const unique = new Map<string, ChatReference>();
   for (const envelope of envelopes) {
-    const reference = chatReference(envelope.parsed);
-    if (reference) unique.set(`${reference.groupEName}::${reference.chatId}`, reference);
+    for (const grant of chatGrantFromEnvelope(envelope, viewerEName)) {
+      unique.set(`${grant.groupEName}::${grant.chatId}::${grant.type ?? ''}`, grant);
+    }
   }
   return [...unique.values()];
 }
@@ -2605,6 +2902,10 @@ function parsePayload(value: unknown): RecordValue | undefined {
   } catch {
     return undefined;
   }
+}
+function asEName(value: string): string | undefined {
+  const normalized = normalizeEName(value);
+  return isEName(normalized) ? normalized : undefined;
 }
 function isEName(value: string): boolean {
   return /^@[^\s@/]+$/.test(value);

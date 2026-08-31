@@ -149,6 +149,39 @@ describe('video space home model', () => {
       }),
     ).toBe('18 shared videos found · 5 of 7 spaces indexed · retrying 2');
     expect(
+      libraryProgressCopy({
+        itemCount: 11,
+        shared: false,
+        discovery: 'refreshing',
+        completeness: {
+          indexed: 7,
+          expected: 7,
+          denied: 0,
+          missing: 0,
+          complete: false,
+          retryNeeded: false,
+          retryUnavailable: 0,
+          retryRejected: 0,
+          retryRateLimited: 0,
+          retrying: 1,
+          coverage: {
+            chatPages: 3,
+            messagePages: 20,
+            filePages: 4,
+            w3dsFilePages: 2,
+            groupManifestPages: 2,
+            callSessionPages: 3,
+            groupHistories: 12,
+            directChats: 4,
+            referenceGrants: 7,
+            officialChatGrants: 9,
+          },
+        },
+      }),
+    ).toBe(
+      '11 videos found · 7 of 7 spaces indexed · retrying 1 · 12 histories · 4 directs · 34 pages scanned',
+    );
+    expect(
       libraryDiscoveryBanner({
         discovery: 'refreshing',
         itemCount: 4,
