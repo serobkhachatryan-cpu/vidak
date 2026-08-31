@@ -1096,7 +1096,12 @@ export class MeshengerVideoLibrary {
       }
     };
 
-    if (drainFinished && savedQueue.length === 0 && openTasks.length === 0) {
+    if (
+      drainFinished &&
+      savedQueue.length === 0 &&
+      openTasks.length === 0 &&
+      (job.completeness.retrying ?? 0) === 0
+    ) {
       restoreJobLedger();
       completeness.markScanFinished();
       return snapshot('done');

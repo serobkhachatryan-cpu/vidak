@@ -151,9 +151,12 @@ describe('inventory completeness', () => {
     const tracker = createInventoryCompletenessTracker();
     expect(tracker.snapshot().complete).toBe(true);
     tracker.markRetry();
+    tracker.queueRetry();
     expect(tracker.snapshot().complete).toBe(false);
+    expect(tracker.snapshot().retrying).toBe(1);
     tracker.markScanFinished();
     expect(tracker.snapshot().complete).toBe(true);
     expect(tracker.snapshot().retryNeeded).toBe(false);
+    expect(tracker.snapshot().retrying).toBe(0);
   });
 });

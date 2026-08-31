@@ -3056,4 +3056,61 @@ describe('Meshenger video library', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('reseeds a drainFinished job that still has leftover retries instead of returning it as done', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: {
+        indexed: 0,
+        expected: 0,
+        denied: 0,
+        missing: 0,
+        failed: 0,
+        complete: false,
+        retryNeeded: true,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 10,
+        retrying: 10,
+      },
+      ledger: { queue: [], drainFinished: true },
+    });
+    let chatPages = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const raw = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (raw.includes('550e8400-e29b-41d4-a716-446655440003')) chatPages += 1;
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      const result = await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', onSnapshot: () => undefined },
+      );
+      expect(chatPages).toBeGreaterThan(0);
+      expect(result.completeness.retrying).toBe(0);
+      expect(result.completeness.complete).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
