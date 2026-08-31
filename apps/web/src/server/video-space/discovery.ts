@@ -8,6 +8,9 @@ export type InventoryScope = 'owned' | 'shared';
 
 export type InventoryDiscovery = 'refreshing' | 'partial' | 'complete';
 
+/** Scanner progress events. `batch` is any completed source/page/space; `done` is terminal. */
+export type InventoryScanPhase = 'batch' | 'done';
+
 export type InventoryCacheOutcome = 'hit' | 'miss' | 'coalesced';
 
 export interface InventorySourceCounts {

@@ -4,6 +4,7 @@ import {
   evaultItemsForTab,
   isVideoSpaceEmpty,
   libraryDiscoveryBanner,
+  libraryProgressCopy,
   libraryUpdatingCopy,
   ownedItemsForTab,
   previewFallbackCopy,
@@ -64,7 +65,7 @@ describe('video space home model', () => {
     expect(videoSpaceTabs.map((tab) => tab.label)).toEqual([
       'Your videos',
       'Shared with you',
-      'Explore public videos',
+      'Public videos published in Vidak',
     ]);
   });
 
@@ -124,11 +125,31 @@ describe('video space home model', () => {
     expect(libraryUpdatingCopy(3)).toBe('Showing 3 videos — updating your library…');
     expect(libraryUpdatingCopy(1)).toBe('Showing 1 video — updating your library…');
     expect(
+      libraryProgressCopy({
+        itemCount: 18,
+        shared: true,
+        discovery: 'refreshing',
+        completeness: {
+          indexed: 5,
+          expected: 7,
+          denied: 0,
+          missing: 0,
+          complete: false,
+          retryNeeded: false,
+          retryUnavailable: 0,
+          retryRejected: 0,
+          retryRateLimited: 0,
+          retrying: 2,
+        },
+      }),
+    ).toBe('18 shared videos found · 5 of 7 spaces indexed · retrying 2');
+    expect(
       libraryDiscoveryBanner({
         discovery: 'refreshing',
         itemCount: 4,
+        shared: false,
       }),
-    ).toBe('Showing 4 videos — updating your library…');
+    ).toBe('4 videos found · updating your library');
     expect(
       libraryDiscoveryBanner({
         discovery: 'complete',

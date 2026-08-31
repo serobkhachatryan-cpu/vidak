@@ -8,7 +8,7 @@ import { createInventoryCoordinator, publicLibraryItems } from './inventory-coor
 
 type SnapshotHandler = (
   library: MeshengerLibrary,
-  phase: 'first' | 'done',
+  phase: 'batch' | 'done',
   counts: InventorySourceCounts,
 ) => void;
 
@@ -41,7 +41,7 @@ describe('inventory coordinator', () => {
       async (_user: { eName: string }, options: { scope: string; onSnapshot: SnapshotHandler }) => {
         scans.push(options.scope);
         if (options.scope === 'owned') {
-          options.onSnapshot(library([ownedFirst]), 'first', {
+          options.onSnapshot(library([ownedFirst]), 'batch', {
             personalPages: 1,
             sharedSpaces: 0,
             failed: 0,
@@ -86,7 +86,7 @@ describe('inventory coordinator', () => {
     let scans = 0;
     const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
       scans += 1;
-      options.onSnapshot(library([owned]), 'first', {
+      options.onSnapshot(library([owned]), 'batch', {
         personalPages: 1,
         sharedSpaces: 0,
         failed: 0,
@@ -176,7 +176,7 @@ describe('inventory coordinator', () => {
       retryRateLimited: 1,
     };
     const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
-      options.onSnapshot(library([owned], incomplete), 'first', {
+      options.onSnapshot(library([owned], incomplete), 'batch', {
         personalPages: 1,
         sharedSpaces: 1,
         failed: 1,
@@ -200,6 +200,101 @@ describe('inventory coordinator', () => {
     expect(snapshot.discovery).toBe('partial');
     expect(snapshot.completeness.retryRateLimited).toBe(1);
     expect(snapshot.discovery).not.toBe('complete');
+  });
+
+  it('updates the cached snapshot after every batch including a 429 retry', async () => {
+    const first = video({ id: 'shared-1', title: 'First clip', accessScope: 'shared' });
+    const second = video({ id: 'shared-2', title: 'Later clip', accessScope: 'shared' });
+    const refreshing = {
+      indexed: 1,
+      expected: 2,
+      denied: 0,
+      missing: 0,
+      complete: false,
+      retryNeeded: false,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 0,
+      retrying: 1,
+    };
+    const complete = {
+      ...completeInventory,
+      indexed: 2,
+      expected: 2,
+    };
+    let emit: SnapshotHandler | undefined;
+    let resolveScan: (value: MeshengerLibrary) => void = () => undefined;
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      emit = options.onSnapshot;
+      options.onSnapshot(library([first], refreshing), 'batch', {
+        personalPages: 1,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return new Promise<MeshengerLibrary>((resolve) => {
+        resolveScan = resolve;
+      });
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary,
+        probeSharedSpaceAccess: vi.fn(),
+      }),
+      log: () => undefined,
+    });
+    const initial = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(initial.discovery).toBe('refreshing');
+    expect(initial.items.map((item) => item.title)).toEqual(['First clip']);
+
+    emit?.(library([first, second], refreshing), 'batch', {
+      personalPages: 1,
+      sharedSpaces: 2,
+      failed: 0,
+    });
+    const grown = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(grown.discovery).toBe('refreshing');
+    expect(grown.items.map((item) => item.title)).toEqual(
+      expect.arrayContaining(['First clip', 'Later clip']),
+    );
+
+    emit?.(library([first, second], complete), 'done', {
+      personalPages: 1,
+      sharedSpaces: 2,
+      failed: 0,
+    });
+    resolveScan(library([first, second], complete));
+    await scanLibrary.mock.results[0]?.value;
+    const finished = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(finished.discovery).toBe('complete');
+    expect(finished.items).toHaveLength(2);
+  });
+
+  it('keeps earlier batches when a later source is still retrying', async () => {
+    const kept = video({ id: 'owned-1', title: 'Kept' });
+    const later = video({ id: 'owned-2', title: 'Added later' });
+    let emit: SnapshotHandler | undefined;
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      emit = options.onSnapshot;
+      options.onSnapshot(library([kept]), 'batch', {
+        personalPages: 1,
+        sharedSpaces: 0,
+        failed: 0,
+      });
+      return new Promise<MeshengerLibrary>(() => undefined);
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary,
+        probeSharedSpaceAccess: vi.fn(),
+      }),
+      log: () => undefined,
+    });
+    await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'owned' });
+    emit?.(library([later]), 'batch', { personalPages: 2, sharedSpaces: 0, failed: 0 });
+    const merged = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'owned' });
+    expect(merged.items.map((item) => item.title)).toEqual(
+      expect.arrayContaining(['Kept', 'Added later']),
+    );
   });
 
   it('never copies tokens, cookies, or media URLs into the public catalogue', () => {

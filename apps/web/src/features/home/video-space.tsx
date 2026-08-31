@@ -147,6 +147,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   const empty =
     library.status === 'ready' &&
     library.discovery !== 'refreshing' &&
+    library.discovery !== 'partial' &&
     (tab !== 'yours' || owned.status === 'ready') &&
     isVideoSpaceEmpty(libraryItems, ownedItems);
 
@@ -267,6 +268,7 @@ function PrivateLibraryPanel({
     ...(library.discovery ? { discovery: library.discovery } : {}),
     ...(library.completeness ? { completeness: library.completeness } : {}),
     itemCount: libraryItems.length + ownedItems.length,
+    shared: tab === 'shared',
   });
   const coldLoad =
     library.items.length === 0 &&
@@ -304,6 +306,7 @@ function PrivateLibraryPanel({
     ownedItems.length === 0 &&
     !completenessBanner &&
     library.discovery !== 'refreshing' &&
+    library.discovery !== 'partial' &&
     library.status !== 'loading'
   ) {
     return (
@@ -314,7 +317,7 @@ function PrivateLibraryPanel({
         description={
           tab === 'shared'
             ? 'When someone authorizes you to view a video in their W3DS space, it will appear here.'
-            : 'Videos you own will appear here. Public discovery stays in Explore public videos.'
+            : 'Videos you own will appear here. Public videos published in Vidak stay in that tab.'
         }
       />
     );
@@ -350,9 +353,16 @@ function PrivateLibraryPanel({
               : 'Every video you own or drafted in your W3DS space. Finding them never changes their sharing rules.'}
           </Text>
           {completenessBanner ? (
-            <Text size="sm" tone="muted" role="status">
-              {completenessBanner}
-            </Text>
+            <div className="flex flex-wrap items-center gap-3">
+              <Text size="sm" tone="muted" role="status">
+                {completenessBanner}
+              </Text>
+              {library.discovery === 'partial' ? (
+                <Button size="sm" variant="secondary" onClick={onRetry}>
+                  Retry
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
         <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
@@ -534,8 +544,8 @@ function PublicExplorePanel() {
   if (videos.length === 0) {
     return (
       <EmptyState
-        title="No public videos yet"
-        description="Public discovery only shows videos people chose to publish. Your private library is unchanged."
+        title="No public videos published in Vidak yet"
+        description="This list is videos people published in Vidak. It is not a catalogue of all public W3DS media."
       />
     );
   }
@@ -543,7 +553,7 @@ function PublicExplorePanel() {
   return (
     <>
       <Text size="sm" tone="muted" className="mb-4">
-        Public videos people have chosen to share. This feed does not include your private library.
+        Public videos published in Vidak. This list is not a catalogue of all public W3DS media.
       </Text>
       <Grid columns={5} gap={6}>
         {videos.map((video) => (
@@ -576,7 +586,7 @@ export function PublicHomeFeed() {
     <ApplicationShell currentHref="/">
       <Page
         title="Home"
-        description="Public videos people have chosen to share. Sign in to see every video you are authorized to view in your W3DS space."
+        description="Public videos published in Vidak. Sign in to see every video you are authorized to view in your W3DS space."
         containerSize="full"
         actions={<Button onClick={() => router.push('/login?returnTo=/')}>Sign in</Button>}
       >

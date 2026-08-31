@@ -1184,6 +1184,7 @@ describe('Meshenger video library', () => {
         retryUnavailable: 0,
         retryRejected: 0,
         retryRateLimited: 0,
+        retrying: 0,
       });
       const serialized = JSON.stringify(workspace.completeness);
       expect(serialized).not.toMatch(/@missing|@group|chat-ok|Indexed clip/i);
@@ -1350,6 +1351,7 @@ describe('Meshenger video library', () => {
         retryUnavailable: 0,
         retryRejected: 0,
         retryRateLimited: 0,
+        retrying: 0,
       });
     } finally {
       vi.unstubAllGlobals();
@@ -1546,6 +1548,7 @@ describe('Meshenger video library', () => {
         retryUnavailable: 0,
         retryRejected: 0,
         retryRateLimited: 0,
+        retrying: 0,
       });
       expect(
         fetcher.mock.calls.some(
@@ -1674,6 +1677,7 @@ describe('Meshenger video library', () => {
         retryUnavailable: 0,
         retryRejected: 0,
         retryRateLimited: 0,
+        retrying: 0,
       });
     } finally {
       vi.unstubAllGlobals();
@@ -1753,6 +1757,343 @@ describe('Meshenger video library', () => {
       ).rejects.toMatchObject({ code: 'rate_limited', status: 429 });
       expect(Date.now() - started).toBeLessThan(2_000);
       expect(fetcher.mock.calls.length).toBeLessThan(12);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('retries a first-pass 429 in the background and emits additional owned cards', async () => {
+    const fileOntology = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    let filePages = 0;
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      const body = JSON.parse(String(init.body ?? '{}')) as {
+        variables?: { ontologyId?: string; after?: string | null };
+      };
+      if (body.variables?.ontologyId === fileOntology) {
+        filePages += 1;
+        if (filePages === 1) return new Response('too many requests', { status: 429 });
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'owned-after-retry',
+                    ontology: fileOntology,
+                    parsed: {
+                      contentType: 'video/mp4',
+                      filename: 'Recovered take.mp4',
+                      createdAt: '2026-08-20T10:00:00.000Z',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const titles: string[][] = [];
+      const result = await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        {
+          scope: 'owned',
+          onSnapshot: (library) => {
+            titles.push(library.items.map((item) => item.title));
+          },
+        },
+      );
+      expect(titles.some((page) => page.includes('Recovered take.mp4'))).toBe(true);
+      expect(result.items.map((item) => item.title)).toContain('Recovered take.mp4');
+      expect(result.completeness.complete).toBe(true);
+      expect(result.completeness.retryNeeded).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('paginates owned sources and merges later pages without dropping the first', async () => {
+    const fileOntology = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      const body = JSON.parse(String(init.body ?? '{}')) as {
+        variables?: { ontologyId?: string; after?: string | null };
+      };
+      if (body.variables?.ontologyId === fileOntology) {
+        if (!body.variables.after) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'page-one',
+                      ontology: fileOntology,
+                      parsed: {
+                        contentType: 'video/mp4',
+                        filename: 'First page.mp4',
+                        createdAt: '2026-08-21T10:00:00.000Z',
+                      },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+              },
+            },
+          });
+        }
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'page-two',
+                    ontology: fileOntology,
+                    parsed: {
+                      contentType: 'video/mp4',
+                      filename: 'Second page.mp4',
+                      createdAt: '2026-08-22T10:00:00.000Z',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const snapshots: string[][] = [];
+      const result = await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        {
+          scope: 'owned',
+          onSnapshot: (library) => {
+            snapshots.push(library.items.map((item) => item.title));
+          },
+        },
+      );
+      expect(snapshots.some((page) => page.length === 1 && page[0] === 'First page.mp4')).toBe(
+        true,
+      );
+      expect(result.items.map((item) => item.title)).toEqual(
+        expect.arrayContaining(['First page.mp4', 'Second page.mp4']),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('retries a 429 shared space then paginated chats without dropping earlier cards', async () => {
+    const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
+    const fileOntology = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
+    const manifestOntology = 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e';
+    const groupHits = new Map<string, number>();
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.pathname === '/resolve') {
+        const id = url.searchParams.get('w3id');
+        if (id === '@group-a.w3id') return json({ ename: id, uri: 'https://group-a.example' });
+        if (id === '@group-b.w3id') return json({ ename: id, uri: 'https://group-b.example' });
+        return json({ ename: '@person.w3id', uri: 'https://person-vault.example' });
+      }
+      const body = JSON.parse(String(init.body ?? '{}')) as {
+        variables?: { ontologyId?: string; after?: string | null };
+      };
+      const ontologyId = body.variables?.ontologyId;
+      if (url.hostname === 'person-vault.example' && ontologyId === chatOntology) {
+        if (!body.variables?.after) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'ref-a',
+                      ontology: chatOntology,
+                      parsed: {
+                        isReference: true,
+                        canonicalOwnerEName: '@group-a.w3id',
+                        canonicalChatId: 'chat-a',
+                        type: 'group',
+                      },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: true, endCursor: 'chats-2' },
+              },
+            },
+          });
+        }
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'ref-b',
+                    ontology: chatOntology,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: '@group-b.w3id',
+                      canonicalChatId: 'chat-b',
+                      type: 'group',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (url.hostname === 'group-a.example') {
+        const n = (groupHits.get(ontologyId ?? 'all') ?? 0) + 1;
+        groupHits.set(ontologyId ?? 'all', n);
+        if (n === 1) return new Response('too many requests', { status: 429 });
+        if (ontologyId === manifestOntology) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'manifest-a',
+                      ontology: manifestOntology,
+                      parsed: { owner: '@group-a.w3id', members: ['@person.w3id'] },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        if (ontologyId === fileOntology) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'clip-a',
+                      ontology: fileOntology,
+                      parsed: {
+                        contentType: 'video/mp4',
+                        filename: 'Group A clip.mp4',
+                        createdAt: '2026-08-20T10:00:00.000Z',
+                      },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+      }
+      if (url.hostname === 'group-b.example' && ontologyId === fileOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'clip-b',
+                    ontology: fileOntology,
+                    parsed: {
+                      contentType: 'video/mp4',
+                      filename: 'Group B clip.mp4',
+                      createdAt: '2026-08-21T10:00:00.000Z',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (url.hostname === 'group-b.example' && ontologyId === manifestOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'manifest-b',
+                    ontology: manifestOntology,
+                    parsed: { owner: '@group-b.w3id', members: ['@person.w3id'] },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const snapshots: string[][] = [];
+      const result = await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        {
+          scope: 'shared',
+          onSnapshot: (library) => {
+            snapshots.push(library.items.map((item) => item.title));
+          },
+        },
+      );
+      expect(snapshots[0]?.length ?? 0).toBeLessThan(result.items.length);
+      expect(result.items.map((item) => item.title)).toEqual(
+        expect.arrayContaining(['Group A clip.mp4', 'Group B clip.mp4']),
+      );
+      expect(result.completeness.retryNeeded).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not scan shared group vaults when owned scope is requested', async () => {
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.hostname === 'group-vault.example') {
+        throw new Error('owned scope must not read shared vaults');
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { scope: 'owned', onSnapshot: () => undefined },
+      );
+      expect(
+        fetcher.mock.calls.some(([url]) => (url as URL).hostname === 'group-vault.example'),
+      ).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }

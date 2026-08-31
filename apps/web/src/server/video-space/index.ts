@@ -22,6 +22,7 @@ export type {
   InventoryCacheOutcome,
   InventoryDiscovery,
   InventoryMetrics,
+  InventoryScanPhase,
   InventoryScope,
   InventorySourceCounts,
 } from './discovery';
