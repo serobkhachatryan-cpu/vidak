@@ -3,11 +3,13 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import {
+  accessScopeForViewer,
   dedupeDiscoveredVideos,
   discoverCallRecordingVideos,
   discoverFileRecordVideos,
   discoverVideoMessageVideos,
   discoverW3dsFileVideos,
+  documentedRecordOwnerEName,
   isAuthorizedCallParticipant,
 } from './adapters';
 
@@ -29,7 +31,7 @@ describe('video space adapters', () => {
           },
         ],
         referenced,
-        'personal',
+        owner,
       ),
     ).toEqual([
       expect.objectContaining({
@@ -58,7 +60,7 @@ describe('video space adapters', () => {
           },
         ],
         new Set(),
-        'shared',
+        viewer,
       ),
     ).toEqual([
       expect.objectContaining({
@@ -103,7 +105,7 @@ describe('video space adapters', () => {
         },
       ],
       referenced,
-      'personal',
+      owner,
     );
     const fromMessage = discoverVideoMessageVideos(
       [
@@ -114,11 +116,12 @@ describe('video space adapters', () => {
             type: 'video',
             fileId: fileUri,
             file: { filename: 'Same clip.mp4' },
+            senderEName: owner,
           },
         },
       ],
       new Set(),
-      'personal',
+      owner,
     );
     const merged = dedupeDiscoveredVideos([...fromFile, ...fromMessage]);
     expect(merged).toHaveLength(1);
@@ -138,7 +141,7 @@ describe('video space adapters', () => {
           },
         ],
         new Set(),
-        'personal',
+        owner,
       ),
     ).toEqual([]);
   });
@@ -158,7 +161,7 @@ describe('video space adapters', () => {
           },
         ],
         new Set(),
-        'shared',
+        viewer,
       ),
     ).toEqual([
       expect.objectContaining({
@@ -194,8 +197,68 @@ describe('video space adapters', () => {
           },
         ],
         new Set(),
-        'shared',
+        viewer,
       ),
     ).toEqual([]);
+  });
+
+  it('classifies ownership from documented subject/owner, not the discovery vault', () => {
+    expect(documentedRecordOwnerEName({ senderEName: owner }, [fileUri])).toBe(owner);
+    expect(documentedRecordOwnerEName({ ownerId: owner }, [])).toBe(owner);
+    expect(documentedRecordOwnerEName({ subject: owner }, [])).toBe(owner);
+    expect(documentedRecordOwnerEName({}, [fileUri])).toBe(owner);
+    expect(accessScopeForViewer(owner, owner)).toBe('personal');
+    expect(accessScopeForViewer(viewer, owner)).toBe('shared');
+    expect(accessScopeForViewer(viewer, undefined)).toBe('shared');
+
+    const ownMessageInGroup = discoverVideoMessageVideos(
+      [
+        {
+          id: 'mine-in-group',
+          ontology: '550e8400-e29b-41d4-a716-446655440004',
+          parsed: {
+            type: 'video',
+            fileId: 'w3ds://file?id=@group.w3id/clip-9',
+            file: { filename: 'My group clip.mp4' },
+            senderEName: viewer,
+          },
+        },
+      ],
+      new Set(),
+      viewer,
+      '@group.w3id',
+    );
+    expect(ownMessageInGroup).toEqual([
+      expect.objectContaining({
+        title: 'My group clip.mp4',
+        accessScope: 'personal',
+      }),
+    ]);
+
+    const ownCallInGroup = discoverCallRecordingVideos({
+      viewerEName: viewer,
+      sourceEName: '@group.w3id',
+      referenced: new Set(),
+      calls: [
+        {
+          id: 'call-mine',
+          ontology: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd',
+          parsed: {
+            initiator: viewer,
+            participants: [viewer, owner],
+            recording: {
+              mediaIsVideo: true,
+              mediaUri: 'w3ds://file?id=@group.w3id/call-mine',
+            },
+          },
+        },
+      ],
+    });
+    expect(ownCallInGroup).toEqual([
+      expect.objectContaining({
+        accessScope: 'personal',
+        kind: 'call-recording',
+      }),
+    ]);
   });
 });

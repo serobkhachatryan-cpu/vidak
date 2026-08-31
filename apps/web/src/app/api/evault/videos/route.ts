@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
     if (!accessToken)
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const session = await getW3dsAuthService().getSession(accessToken);
-    const scope = parseInventoryScope(request.nextUrl.searchParams.get('scope')) ?? 'owned';
+    const scope = parseInventoryScope(request.nextUrl.searchParams.get('scope')) ?? 'all';
     const refresh = request.nextUrl.searchParams.get('refresh') === '1';
     const snapshot = await getInventoryCoordinator().getSnapshot(session.user, { scope, refresh });
     const items = snapshot.items.map((item) => {

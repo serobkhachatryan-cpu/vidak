@@ -95,7 +95,7 @@ describe('eVault video library route', () => {
     expect(mocks.getPreviewService).not.toHaveBeenCalled();
   });
 
-  it('defaults missing scope to owned so Shared with you is not scanned on Home', async () => {
+  it('defaults missing scope to all so Home inventories the complete union', async () => {
     const getSnapshot = vi.fn().mockResolvedValue({
       items: [],
       conversations: [],
@@ -112,7 +112,7 @@ describe('eVault video library route', () => {
         retryRateLimited: 0,
       },
       discovery: 'complete',
-      scope: 'owned',
+      scope: 'all',
       metrics: {
         cache: 'hit',
         firstResultMs: 0,
@@ -131,7 +131,7 @@ describe('eVault video library route', () => {
     );
     expect(getSnapshot).toHaveBeenCalledWith(
       { eName: '@person.w3id' },
-      { scope: 'owned', refresh: false },
+      { scope: 'all', refresh: false },
     );
   });
 

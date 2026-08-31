@@ -21,7 +21,7 @@ describe('inventory discovery status', () => {
   it('parses tab scope and keeps metrics free of identifiers', () => {
     expect(parseInventoryScope('owned')).toBe('owned');
     expect(parseInventoryScope('shared')).toBe('shared');
-    expect(parseInventoryScope('all')).toBeUndefined();
+    expect(parseInventoryScope('all')).toBe('all');
     const line = formatInventoryMetricsLog({
       discovery: 'partial',
       completeness: {

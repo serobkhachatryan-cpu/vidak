@@ -11,7 +11,7 @@ import {
   visibilityForOwnedVidakVideo,
 } from '../../server/video-space/visibility';
 
-export type VideoSpaceTab = 'yours' | 'shared' | 'explore';
+export type VideoSpaceTab = 'all' | 'yours' | 'shared' | 'explore';
 
 export type VideoSpacePreviewState = 'ready' | 'processing' | 'unavailable';
 
@@ -37,8 +37,9 @@ export { videoSpaceVisibilityLabels } from '../../server/video-space/visibility'
 export { completeInventory };
 
 export const videoSpaceTabs: ReadonlyArray<{ id: VideoSpaceTab; label: string }> = [
-  { id: 'yours', label: 'Your videos' },
-  { id: 'shared', label: 'Shared with you' },
+  { id: 'all', label: 'All videos' },
+  { id: 'yours', label: 'My videos' },
+  { id: 'shared', label: 'Shared with me' },
   { id: 'explore', label: 'Public videos published in Vidak' },
 ];
 
@@ -54,11 +55,12 @@ export function evaultItemsForTab(
 ): VideoSpaceLibraryItem[] {
   if (tab === 'explore') return [];
   if (tab === 'shared') return items.filter((item) => item.accessScope === 'shared');
-  return items.filter((item) => item.accessScope === 'personal');
+  if (tab === 'yours') return items.filter((item) => item.accessScope === 'personal');
+  return [...items];
 }
 
 export function ownedItemsForTab(items: readonly Video[], tab: VideoSpaceTab): Video[] {
-  if (tab !== 'yours') return [];
+  if (tab === 'shared' || tab === 'explore') return [];
   return [...items];
 }
 

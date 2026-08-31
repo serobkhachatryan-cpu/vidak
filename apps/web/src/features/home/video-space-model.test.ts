@@ -48,12 +48,15 @@ const ownedPublic: Video = {
 
 describe('video space home model', () => {
   it('keeps the public explore tab separate from the private library', () => {
-    expect(videoSpaceTabs.map((tab) => tab.id)).toEqual(['yours', 'shared', 'explore']);
+    expect(videoSpaceTabs.map((tab) => tab.id)).toEqual(['all', 'yours', 'shared', 'explore']);
+    expect(evaultItemsForTab([ownVideo, sharedVideo], 'all')).toEqual([ownVideo, sharedVideo]);
     expect(evaultItemsForTab([ownVideo, sharedVideo], 'yours')).toEqual([ownVideo]);
     expect(evaultItemsForTab([ownVideo, sharedVideo], 'shared')).toEqual([sharedVideo]);
     expect(evaultItemsForTab([ownVideo, sharedVideo], 'explore')).toEqual([]);
     expect(ownedItemsForTab([ownedPublic], 'explore')).toEqual([]);
+    expect(ownedItemsForTab([ownedPublic], 'all')).toEqual([ownedPublic]);
     expect(ownedItemsForTab([ownedPublic], 'yours')).toEqual([ownedPublic]);
+    expect(ownedItemsForTab([ownedPublic], 'shared')).toEqual([]);
   });
 
   it('does not treat a public feed as a substitute for an empty private library', () => {
@@ -63,8 +66,9 @@ describe('video space home model', () => {
     expect(videoSpaceEmptyCopy.description).not.toMatch(/messenger/i);
     expect(videoSpaceEmptyCopy.description).not.toMatch(/import from/i);
     expect(videoSpaceTabs.map((tab) => tab.label)).toEqual([
-      'Your videos',
-      'Shared with you',
+      'All videos',
+      'My videos',
+      'Shared with me',
       'Public videos published in Vidak',
     ]);
   });
@@ -76,7 +80,8 @@ describe('video space home model', () => {
     expect(previewFallbackCopy('unsupported').description).toBe('');
   });
 
-  it('shows counts-only completeness copy and keeps Shared with you separate', () => {
+  it('keeps counts-only completeness copy and treats My videos / Shared with me as filters', () => {
+    expect(evaultItemsForTab([ownVideo, sharedVideo], 'all')).toEqual([ownVideo, sharedVideo]);
     expect(evaultItemsForTab([ownVideo, sharedVideo], 'shared')).toEqual([sharedVideo]);
     expect(evaultItemsForTab([ownVideo, sharedVideo], 'yours')).toEqual([ownVideo]);
     expect(evaultItemsForTab([ownVideo, sharedVideo], 'explore')).toEqual([]);

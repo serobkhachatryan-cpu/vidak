@@ -163,7 +163,7 @@ export function createInventoryCoordinator(options?: {
   ): Promise<InventorySnapshot> {
     if (entry.firstResultAt === undefined) await entry.firstReady;
     let snapshot = entry.snapshot;
-    if (entry.scope === 'shared') {
+    if (entry.scope === 'shared' || entry.scope === 'all') {
       snapshot = await revalidateShared(user, entry);
     }
     const discovery = inventoryDiscovery({
@@ -317,7 +317,7 @@ function spacesFromItems(
   items: readonly MeshengerVideo[],
   scope: InventoryScope,
 ): SharedSpaceProbe[] {
-  if (scope !== 'shared') return [];
+  if (scope !== 'shared' && scope !== 'all') return [];
   const unique = new Map<string, SharedSpaceProbe>();
   for (const item of items) {
     if (!item.sourceSpaceKey || item.accessBasis !== 'membership') continue;

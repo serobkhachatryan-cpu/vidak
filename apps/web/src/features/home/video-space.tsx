@@ -49,8 +49,8 @@ type OwnedState =
   | { status: 'error' };
 
 function tabFromSearch(value: string | null): VideoSpaceTab {
-  if (value === 'shared' || value === 'explore') return value;
-  return 'yours';
+  if (value === 'yours' || value === 'shared' || value === 'explore') return value;
+  return 'all';
 }
 
 export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) {
@@ -58,15 +58,13 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tab = tabFromSearch(searchParams.get('tab'));
-  const [ownedLibrary, setOwnedLibrary] = useState<LibraryState>({ status: 'idle', items: [] });
-  const [sharedLibrary, setSharedLibrary] = useState<LibraryState>({ status: 'idle', items: [] });
+  const [library, setLibrary] = useState<LibraryState>({ status: 'idle', items: [] });
   const [owned, setOwned] = useState<OwnedState>({ status: 'loading' });
   const [pendingVideoId, setPendingVideoId] = useState<string | undefined>();
   const [actionError, setActionError] = useState<string | undefined>();
 
-  const loadEvault = useCallback(async (scope: 'owned' | 'shared', refresh = false) => {
-    const setState = scope === 'owned' ? setOwnedLibrary : setSharedLibrary;
-    setState((current) =>
+  const loadEvault = useCallback(async (refresh = false) => {
+    setLibrary((current) =>
       current.items.length > 0
         ? {
             ...current,
@@ -75,7 +73,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         : { status: 'loading', items: [] },
     );
     try {
-      const query = new URLSearchParams({ scope });
+      const query = new URLSearchParams({ scope: 'all' });
       if (refresh) query.set('refresh', '1');
       const response = await fetch(`/api/evault/videos?${query.toString()}`, { cache: 'no-store' });
       const body = (await response.json()) as {
@@ -84,7 +82,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         discovery?: InventoryDiscovery;
       };
       if (!response.ok || !Array.isArray(body.items)) throw new Error();
-      setState({
+      setLibrary({
         status: 'ready',
         items: body.items.map((item) => ({
           ...item,
@@ -95,7 +93,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         ...(body.discovery ? { discovery: body.discovery } : {}),
       });
     } catch {
-      setState((current) =>
+      setLibrary((current) =>
         current.items.length > 0 ? { ...current, status: 'error' } : { status: 'error', items: [] },
       );
     }
@@ -104,39 +102,33 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   const load = useCallback(
     async (refresh = false) => {
       setActionError(undefined);
-      if (tab === 'yours' || refresh) {
-        setOwned((current) => (current.status === 'ready' ? current : { status: 'loading' }));
-        void videoApiClient
-          .listOwnedVideos()
-          .then((items) => setOwned({ status: 'ready', items }))
-          .catch(() =>
-            setOwned((current) => (current.status === 'ready' ? current : { status: 'error' })),
-          );
-        await loadEvault('owned', refresh);
-      }
-      if (tab === 'shared') await loadEvault('shared', refresh);
+      setOwned((current) => (current.status === 'ready' ? current : { status: 'loading' }));
+      void videoApiClient
+        .listOwnedVideos()
+        .then((items) => setOwned({ status: 'ready', items }))
+        .catch(() =>
+          setOwned((current) => (current.status === 'ready' ? current : { status: 'error' })),
+        );
+      await loadEvault(refresh);
     },
-    [loadEvault, tab],
+    [loadEvault],
   );
 
   useEffect(() => {
     void load(false);
   }, [load]);
 
-  const library = tab === 'shared' ? sharedLibrary : ownedLibrary;
-
   useEffect(() => {
     if (library.discovery !== 'refreshing') return;
-    const scope = tab === 'shared' ? 'shared' : 'owned';
     const timer = window.setTimeout(() => {
-      void loadEvault(scope, false);
+      void loadEvault(false);
     }, 1500);
     return () => window.clearTimeout(timer);
-  }, [library.discovery, loadEvault, tab]);
+  }, [library.discovery, loadEvault]);
 
   const setTab = (next: VideoSpaceTab) => {
     const params = new URLSearchParams(searchParams.toString());
-    if (next === 'yours') params.delete('tab');
+    if (next === 'all') params.delete('tab');
     else params.set('tab', next);
     const query = params.toString();
     router.replace(query ? `${pathname}?${query}` : pathname);
@@ -148,7 +140,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
     library.status === 'ready' &&
     library.discovery !== 'refreshing' &&
     library.discovery !== 'partial' &&
-    (tab !== 'yours' || owned.status === 'ready') &&
+    (tab === 'shared' || owned.status === 'ready') &&
     isVideoSpaceEmpty(libraryItems, ownedItems);
 
   return (
@@ -312,12 +304,18 @@ function PrivateLibraryPanel({
     return (
       <EmptyState
         title={
-          tab === 'shared' ? 'Nothing has been shared with you yet' : 'No videos in this section'
+          tab === 'shared'
+            ? 'Nothing has been shared with you yet'
+            : tab === 'yours'
+              ? 'No videos you own yet'
+              : 'No videos in this section'
         }
         description={
           tab === 'shared'
             ? 'When someone authorizes you to view a video in their W3DS space, it will appear here.'
-            : 'Videos you own will appear here. Public videos published in Vidak stay in that tab.'
+            : tab === 'yours'
+              ? 'Videos you own — including Messenger, calls, groups, and other W3DS apps — appear here.'
+              : 'Videos you own or are authorized to view will appear here. Public videos published in Vidak stay in that tab.'
         }
       />
     );
@@ -345,12 +343,14 @@ function PrivateLibraryPanel({
       <section className="space-y-4" aria-labelledby="video-space-library-heading">
         <div className="space-y-1">
           <h2 id="video-space-library-heading" className="text-xl font-semibold text-foreground">
-            {tab === 'shared' ? 'Shared with you' : 'Your videos'}
+            {tab === 'shared' ? 'Shared with me' : tab === 'yours' ? 'My videos' : 'All videos'}
           </h2>
           <Text size="sm" tone="muted">
             {tab === 'shared'
-              ? 'Videos other people have authorized you to view. Finding them never changes their sharing rules.'
-              : 'Every video you own or drafted in your W3DS space. Finding them never changes their sharing rules.'}
+              ? 'Videos other people own that you are currently authorized to view. Finding them never changes their sharing rules.'
+              : tab === 'yours'
+                ? 'Every video you own in your W3DS space, including Messenger, calls, groups, and other apps. Finding them never changes their sharing rules.'
+                : 'Every video you own or are authorized to view. My videos and Shared with me filter this same list.'}
           </Text>
           {completenessBanner ? (
             <div className="flex flex-wrap items-center gap-3">

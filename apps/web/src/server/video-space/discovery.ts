@@ -4,7 +4,7 @@
  */
 import type { InventoryCompleteness } from './completeness';
 
-export type InventoryScope = 'owned' | 'shared';
+export type InventoryScope = 'all' | 'owned' | 'shared';
 
 export type InventoryDiscovery = 'refreshing' | 'partial' | 'complete';
 
@@ -27,7 +27,7 @@ export interface InventoryMetrics {
 }
 
 export function parseInventoryScope(value: string | null | undefined): InventoryScope | undefined {
-  if (value === 'owned' || value === 'shared') return value;
+  if (value === 'all' || value === 'owned' || value === 'shared') return value;
   return undefined;
 }
 
