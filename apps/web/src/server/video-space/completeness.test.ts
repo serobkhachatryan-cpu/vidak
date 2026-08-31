@@ -14,6 +14,7 @@ describe('inventory completeness', () => {
       expected: 2,
       denied: 0,
       missing: 0,
+      failed: 0,
       complete: false,
       retryNeeded: true,
       retryUnavailable: 0,
@@ -39,6 +40,7 @@ describe('inventory completeness', () => {
       expected: 3,
       denied: 1,
       missing: 1,
+      failed: 0,
       complete: true,
       retryNeeded: false,
       retryUnavailable: 0,
@@ -72,5 +74,24 @@ describe('inventory completeness', () => {
     tracker.finishRetry();
     tracker.indexSpace();
     expect(tracker.snapshot()).toMatchObject({ complete: true, retrying: 0, retryNeeded: false });
+  });
+
+  it('treats a terminal space failure as classified so every space can complete', () => {
+    const tracker = createInventoryCompletenessTracker();
+    for (let i = 0; i < 7; i += 1) tracker.expectSpace();
+    tracker.indexSpace();
+    tracker.indexSpace();
+    tracker.indexSpace();
+    tracker.denySpace();
+    tracker.missSpace();
+    tracker.failSpace();
+    tracker.failSpace();
+    const state = tracker.snapshot();
+    expect(state.complete).toBe(true);
+    expect(state.retryNeeded).toBe(false);
+    expect(state.failed).toBe(2);
+    expect(inventoryCompletenessCopy(state)).toBe(
+      '3 of 7 shared spaces indexed; 1 denied by current access; 1 not found; 2 failed.',
+    );
   });
 });

@@ -7,6 +7,8 @@ export interface InventoryCompleteness {
   expected: number;
   denied: number;
   missing: number;
+  /** Spaces that exhausted retries with a terminal, reported failure. */
+  failed?: number;
   complete: boolean;
   retryNeeded: boolean;
   retryUnavailable: number;
@@ -21,6 +23,7 @@ export const completeInventory: InventoryCompleteness = {
   expected: 0,
   denied: 0,
   missing: 0,
+  failed: 0,
   complete: true,
   retryNeeded: false,
   retryUnavailable: 0,
@@ -33,6 +36,7 @@ export function inventoryCompletenessCopy(state: InventoryCompleteness): string 
   const parts = [`${state.indexed} of ${state.expected} shared spaces indexed`];
   if (state.denied > 0) parts.push(`${state.denied} denied by current access`);
   if (state.missing > 0) parts.push(`${state.missing} not found`);
+  if (state.failed) parts.push(`${state.failed} failed`);
   const retrying = state.retrying ?? 0;
   if (retrying > 0) parts.push(`retrying ${retrying}`);
   const classified = `${parts[0]}${parts.length > 1 ? `; ${parts.slice(1).join('; ')}` : ''}`;
@@ -46,6 +50,7 @@ export function createInventoryCompletenessTracker() {
   let indexed = 0;
   let denied = 0;
   let missing = 0;
+  let failed = 0;
   let retryNeeded = false;
   let retryUnavailable = 0;
   let retryRejected = 0;
@@ -65,11 +70,13 @@ export function createInventoryCompletenessTracker() {
     missSpace() {
       missing += 1;
     },
+    failSpace() {
+      failed += 1;
+    },
     markRetry() {
       retryNeeded = true;
     },
     markRetryClass(kind: 'unavailable' | 'rejected' | 'rate_limited') {
-      retryNeeded = true;
       if (kind === 'unavailable') retryUnavailable += 1;
       else if (kind === 'rejected') retryRejected += 1;
       else retryRateLimited += 1;
@@ -85,13 +92,14 @@ export function createInventoryCompletenessTracker() {
       this.markRetryClass(kind);
     },
     snapshot(): InventoryCompleteness {
-      const classified = indexed + denied + missing;
+      const classified = indexed + denied + missing + failed;
       const complete = classified === expected && retrying === 0 && !retryNeeded;
       return {
         indexed,
         expected,
         denied,
         missing,
+        failed,
         complete,
         retryNeeded: retryNeeded || classified + retrying < expected,
         retryUnavailable,

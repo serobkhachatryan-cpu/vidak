@@ -361,4 +361,65 @@ describe('inventory coordinator', () => {
     ).toHaveLength(1);
     expect(scanLibrary).toHaveBeenCalledTimes(1);
   });
+
+  it('resumes an incomplete inventory instead of serving it as a TTL cache hit', async () => {
+    const first = video({ id: 'shared-1', title: 'First clip', accessScope: 'shared' });
+    const second = video({ id: 'shared-2', title: 'Later clip', accessScope: 'shared' });
+    const incomplete = {
+      indexed: 3,
+      expected: 7,
+      denied: 0,
+      missing: 0,
+      failed: 0,
+      complete: false,
+      retryNeeded: true,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 4,
+      retrying: 0,
+    };
+    const complete = {
+      ...completeInventory,
+      indexed: 7,
+      expected: 7,
+    };
+    let scans = 0;
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      scans += 1;
+      if (scans === 1) {
+        options.onSnapshot(library([first], incomplete), 'done', {
+          personalPages: 1,
+          sharedSpaces: 3,
+          failed: 0,
+        });
+        return library([first], incomplete);
+      }
+      options.onSnapshot(library([first, second], complete), 'done', {
+        personalPages: 1,
+        sharedSpaces: 7,
+        failed: 0,
+      });
+      return library([first, second], complete);
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary,
+        probeSharedSpaceAccess: vi.fn().mockResolvedValue({ access: 'ok', member: true }),
+      }),
+      log: () => undefined,
+      ttlMs: 60_000,
+    });
+    const firstSnap = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(firstSnap.discovery).toBe('partial');
+    expect(firstSnap.items).toHaveLength(1);
+    const secondSnap = await coordinator.getSnapshot(
+      { eName: '@person.w3id' },
+      { scope: 'shared' },
+    );
+    expect(scanLibrary).toHaveBeenCalledTimes(2);
+    expect(secondSnap.discovery).toBe('complete');
+    expect(secondSnap.items.map((item) => item.title)).toEqual(
+      expect.arrayContaining(['First clip', 'Later clip']),
+    );
+  });
 });

@@ -357,10 +357,23 @@ export function isDocumentedVideoAttachment(message: Record<string, unknown>): b
     optionalString(message.contentType) ??
     optionalString(message.mimeType);
   const mime = contentType?.toLowerCase();
+  const filename = attachmentFilename(message);
   if (isExplicitlyNonVideoMime(mime)) return false;
-  if (type === 'video' || type === 'circle' || type === 'file') return true;
+  if (filename && nonVideoFilenamePattern.test(filename)) return false;
+  if (type === 'video' || type === 'circle') return true;
   if (mime?.startsWith('video/') === true) return true;
+  if (type === 'file' && filename && videoFilenamePattern.test(filename)) return true;
   return false;
+}
+
+function attachmentFilename(message: Record<string, unknown>): string | undefined {
+  const file = record(message.file);
+  return (
+    optionalString(file?.filename) ??
+    optionalString(file?.name) ??
+    optionalString(message.filename) ??
+    optionalString(message.name)
+  );
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -386,12 +399,27 @@ function optionalW3dsFileUri(value: unknown): string | undefined {
   return fileUri && parseW3dsFileUri(fileUri) ? fileUri : undefined;
 }
 
+const videoFilenamePattern = /\.(mp4|webm|mov|m4v|mkv|ogv|avi)(?:$|\?)/i;
+const nonVideoFilenamePattern =
+  /\.(zip|pdf|docx?|xlsx?|pptx?|txt|csv|json|xml|rar|7z|gz|tar)(?:$|\?)/i;
+
 function isExplicitlyNonVideoMime(mime: string | undefined): boolean {
   if (!mime) return false;
-  return (
+  if (mime.startsWith('video/')) return false;
+  if (
     mime.startsWith('image/') ||
     mime.startsWith('audio/') ||
     mime.startsWith('text/') ||
-    mime === 'application/pdf'
-  );
+    mime === 'application/pdf' ||
+    mime === 'application/zip' ||
+    mime === 'application/x-zip-compressed' ||
+    mime === 'application/x-7z-compressed' ||
+    mime === 'application/gzip' ||
+    mime === 'application/x-tar' ||
+    mime.startsWith('application/msword') ||
+    mime.startsWith('application/vnd.')
+  ) {
+    return true;
+  }
+  return mime.startsWith('application/') || mime.startsWith('multipart/');
 }

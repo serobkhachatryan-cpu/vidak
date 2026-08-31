@@ -8,7 +8,16 @@
  *
  * Official Message.type is text | image | file | system, with mediaUrl on
  * image/file. This repo also already reads Meshenger video/circle messages
- * through the same Message ontology. Adapters must inventory both.
+ * through the same Message ontology. Adapters must inventory both, but only
+ * playable video media — type=file still requires a video MIME type or a
+ * video filename; ZIPs and documents are never cards.
+ *
+ * Pagination: documented eVault `metaEnvelopes` uses `pageInfo.hasNextPage` /
+ * `endCursor`. The inventory scanner follows every page of Chat, Message
+ * (including `search: { fields: ["chatId"] }` history), File, w3ds-file-v1,
+ * GroupManifest, and call-session on each authorized vault. That matches the
+ * eID/Meshenger client's documented record types without calling Meshenger
+ * private HTTP APIs or inventing GraphQL fields.
  */
 export const documentedVideoSourceIds = [
   'w3ds-file',
