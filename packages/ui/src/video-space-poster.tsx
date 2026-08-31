@@ -1,7 +1,8 @@
 'use client';
 
 import { isRenderableThumbnailUrl } from '@w3ds/types';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { enqueuePreviewLoad } from './preview-load-queue';
 import { Badge, Skeleton } from './primitives';
 
 export type VideoSpacePosterState = 'ready' | 'processing' | 'unavailable';
@@ -14,6 +15,8 @@ export interface VideoSpacePosterProps {
   durationSeconds?: number;
   visibilityLabel?: string;
   locked?: boolean;
+  /** When true, preview fetches wait until the card is near the viewport. */
+  loadWhenVisible?: boolean;
 }
 
 function formatDuration(seconds: number): string {
@@ -33,12 +36,32 @@ export function VideoSpacePoster({
   durationSeconds,
   visibilityLabel,
   locked = false,
+  loadWhenVisible = false,
 }: VideoSpacePosterProps) {
+  const frameRef = useRef<HTMLDivElement>(null);
+  const [visible, setVisible] = useState(!loadWhenVisible);
   const [source, setSource] = useState<string | undefined>(() =>
     state === 'ready' && posterUrl && isRenderableThumbnailUrl(posterUrl) ? posterUrl : undefined,
   );
   const [failed, setFailed] = useState(state === 'unavailable');
   const [usedFallback, setUsedFallback] = useState(false);
+
+  useEffect(() => {
+    if (!loadWhenVisible || visible) return;
+    const node = frameRef.current;
+    if (!node || typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry?.isIntersecting) setVisible(true);
+      },
+      { rootMargin: '240px' },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [loadWhenVisible, visible]);
 
   useEffect(() => {
     setFailed(state === 'unavailable');
@@ -48,6 +71,7 @@ export function VideoSpacePoster({
       return;
     }
     setSource(undefined);
+    if (!visible) return;
     if (state !== 'processing' || !posterUrl || !isRenderableThumbnailUrl(posterUrl)) return;
 
     let cancelled = false;
@@ -62,7 +86,7 @@ export function VideoSpacePoster({
         }
         if (response.status === 202) {
           window.setTimeout(() => {
-            void poll();
+            if (!cancelled) void enqueuePreviewLoad(poll);
           }, 2000);
           return;
         }
@@ -76,17 +100,18 @@ export function VideoSpacePoster({
         if (!cancelled) setFailed(true);
       }
     };
-    void poll();
+    const cancelQueue = enqueuePreviewLoad(poll);
     return () => {
       cancelled = true;
+      cancelQueue();
     };
-  }, [fallbackPosterUrl, posterUrl, state]);
+  }, [fallbackPosterUrl, posterUrl, state, visible]);
 
   const showImage = Boolean(source) && !failed;
   const showProcessing = !showImage && !failed && state !== 'unavailable';
 
   return (
-    <div className="relative overflow-hidden bg-muted">
+    <div ref={frameRef} className="relative overflow-hidden bg-muted">
       {showImage && source ? (
         <img
           src={source}

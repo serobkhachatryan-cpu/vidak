@@ -49,5 +49,31 @@ describe('envelope pagination', () => {
     });
     expect(result.items).toEqual(['one']);
     expect(result.complete).toBe(false);
+    expect(result.endCursor).toBe('cursor-1');
+  });
+
+  it('emits the first page before remaining pages are read', async () => {
+    const pages = [
+      {
+        edges: [{ node: { id: 'one' } }],
+        pageInfo: { hasNextPage: true, endCursor: 'cursor-1' },
+      },
+      {
+        edges: [{ node: { id: 'two' } }],
+        pageInfo: { hasNextPage: false, endCursor: null },
+      },
+    ];
+    let calls = 0;
+    const seen: string[][] = [];
+    await collectPaginatedEnvelopes({
+      maxPages: 30,
+      readPage: async () => pages[calls++],
+      mapEdge: (edge) => (edge as { node?: { id?: string } }).node?.id,
+      onPage: (items) => {
+        seen.push([...items]);
+      },
+    });
+    expect(seen[0]).toEqual(['one']);
+    expect(seen[1]).toEqual(['two']);
   });
 });

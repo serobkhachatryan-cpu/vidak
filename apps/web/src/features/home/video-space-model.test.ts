@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest';
 import {
   evaultItemsForTab,
   isVideoSpaceEmpty,
+  libraryDiscoveryBanner,
+  libraryUpdatingCopy,
   ownedItemsForTab,
   previewFallbackCopy,
   shareChangeConfirmation,
@@ -116,6 +118,34 @@ describe('video space home model', () => {
         retryRateLimited: 0,
       }),
     ).toBe('0 of 7 shared spaces indexed; 7 denied by current access.');
+  });
+
+  it('keeps visible counts while the library is still updating', () => {
+    expect(libraryUpdatingCopy(3)).toBe('Showing 3 videos — updating your library…');
+    expect(libraryUpdatingCopy(1)).toBe('Showing 1 video — updating your library…');
+    expect(
+      libraryDiscoveryBanner({
+        discovery: 'refreshing',
+        itemCount: 4,
+      }),
+    ).toBe('Showing 4 videos — updating your library…');
+    expect(
+      libraryDiscoveryBanner({
+        discovery: 'complete',
+        itemCount: 4,
+        completeness: {
+          indexed: 2,
+          expected: 2,
+          denied: 0,
+          missing: 0,
+          complete: true,
+          retryNeeded: false,
+          retryUnavailable: 0,
+          retryRejected: 0,
+          retryRateLimited: 0,
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it('confirms that a share action changes only that video', () => {

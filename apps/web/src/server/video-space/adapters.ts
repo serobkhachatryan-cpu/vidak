@@ -10,6 +10,8 @@ export interface VideoSpaceEnvelope {
   parsed: Record<string, unknown>;
 }
 
+export type VideoAccessBasis = 'personal' | 'membership' | 'history';
+
 export interface DiscoveredVideoRecord {
   key: string;
   fileUris: string[];
@@ -20,6 +22,9 @@ export interface DiscoveredVideoRecord {
   createdAt?: string | undefined;
   accessScope: VideoSpaceAccessScope;
   sourceId: 'w3ds-file' | 'file-record' | 'call-recording' | 'video-message';
+  /** Server-only space identity for cache revalidation. Never sent to clients. */
+  sourceSpaceKey?: string;
+  accessBasis?: VideoAccessBasis;
 }
 
 const kindRank: Record<VideoSpaceKind, number> = {
@@ -84,6 +89,8 @@ export function discoverW3dsFileVideos(
         : {}),
       accessScope,
       sourceId: 'w3ds-file',
+      sourceSpaceKey: ownerEName,
+      accessBasis: accessScope === 'personal' ? 'personal' : 'membership',
     });
     referenced.add(fileUri);
   }
@@ -118,6 +125,8 @@ export function discoverFileRecordVideos(
         : {}),
       accessScope,
       sourceId: 'file-record',
+      sourceSpaceKey: ownerEName,
+      accessBasis: accessScope === 'personal' ? 'personal' : 'membership',
     });
     referenced.add(fileUri);
   }
@@ -154,6 +163,8 @@ export function discoverCallRecordingVideos(input: {
       ...(startedAt ? { createdAt: startedAt } : {}),
       accessScope: input.sourceEName === input.viewerEName ? 'personal' : 'shared',
       sourceId: 'call-recording',
+      sourceSpaceKey: input.sourceEName,
+      accessBasis: input.sourceEName === input.viewerEName ? 'personal' : 'history',
     });
   }
   return discovered;
@@ -163,6 +174,7 @@ export function discoverVideoMessageVideos(
   messages: readonly VideoSpaceEnvelope[],
   referenced: Set<string>,
   accessScope: VideoSpaceAccessScope,
+  sourceSpaceKey?: string,
 ): DiscoveredVideoRecord[] {
   const discovered: DiscoveredVideoRecord[] = [];
   for (const message of messages) {
@@ -190,6 +202,8 @@ export function discoverVideoMessageVideos(
         : {}),
       accessScope,
       sourceId: 'video-message',
+      ...(sourceSpaceKey ? { sourceSpaceKey } : {}),
+      accessBasis: accessScope === 'personal' ? 'personal' : 'history',
     });
   }
   return discovered;
