@@ -113,6 +113,21 @@ export function inventoryDrainGateKey(jobId: string): string {
 
 const staleLockMs = 60_000;
 
+/** Postgres text/jsonb rejects NUL bytes; circular GraphQL nodes must not abort persist. */
+export function toPostgresJson<T>(value: T): T {
+  const seen = new WeakSet<object>();
+  return JSON.parse(
+    JSON.stringify(value, (_key, nested) => {
+      if (typeof nested === 'string') return nested.replaceAll('\u0000', '');
+      if (nested && typeof nested === 'object') {
+        if (seen.has(nested)) return undefined;
+        seen.add(nested);
+      }
+      return nested;
+    }),
+  ) as T;
+}
+
 function emptyJob(
   ownerEName: string,
   ownerEVaultUri: string,
@@ -327,6 +342,7 @@ async function upsertInventoryTask(
   executor: Pick<W3dsDatabase, 'insert'>,
   task: PersistedInventoryTask,
 ): Promise<void> {
+  const payload = toPostgresJson(task.payload);
   await executor
     .insert(videoSpaceInventoryTasks)
     .values({
@@ -341,7 +357,7 @@ async function upsertInventoryTask(
       notBefore: new Date(task.notBefore),
       status: task.status,
       priority: task.priority,
-      payload: task.payload,
+      payload,
       lockedUntil: task.lockedUntil ? new Date(task.lockedUntil) : null,
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -354,7 +370,7 @@ async function upsertInventoryTask(
         notBefore: new Date(task.notBefore),
         status: task.status,
         priority: task.priority,
-        payload: task.payload,
+        payload,
         lockedUntil: task.lockedUntil ? new Date(task.lockedUntil) : null,
         updatedAt: new Date(),
       },
@@ -460,39 +476,44 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
     },
     async saveJob(job) {
       const now = new Date();
+      const completeness = toPostgresJson(job.completeness as unknown as Record<string, unknown>);
+      const ledger = toPostgresJson({
+        ...job.ledger,
+        conversations: job.conversations,
+        messages: job.messages,
+        sourceCounts: job.sourceCounts,
+      });
       await db()
         .update(videoSpaceInventoryJobs)
         .set({
           status: job.status,
-          completeness: job.completeness as unknown as Record<string, unknown>,
-          mediaCounts: (job.completeness.media ?? emptyInventoryMediaCounts) as unknown as Record<
-            string,
-            unknown
-          >,
-          ledger: {
-            ...job.ledger,
-            conversations: job.conversations,
-            messages: job.messages,
-            sourceCounts: job.sourceCounts,
-          },
+          completeness,
+          mediaCounts: toPostgresJson(
+            (job.completeness.media ?? emptyInventoryMediaCounts) as unknown as Record<
+              string,
+              unknown
+            >,
+          ),
+          ledger,
           updatedAt: now,
           completedAt: job.completedAt ? new Date(job.completedAt) : null,
           ownerEVaultUri: job.ownerEVaultUri,
         })
         .where(eq(videoSpaceInventoryJobs.id, job.id));
       for (const item of job.items) {
+        const card = toPostgresJson(item as unknown as Record<string, unknown>);
         await db()
           .insert(videoSpaceInventoryItems)
           .values({
             id: `${job.id}:${item.id}`,
             jobId: job.id,
             itemKey: item.id,
-            card: item as unknown as Record<string, unknown>,
+            card,
             createdAt: now,
           })
           .onConflictDoUpdate({
             target: [videoSpaceInventoryItems.jobId, videoSpaceInventoryItems.itemKey],
-            set: { card: item as unknown as Record<string, unknown> },
+            set: { card },
           });
       }
     },
