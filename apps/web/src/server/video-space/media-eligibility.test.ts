@@ -7,6 +7,7 @@ import {
   classifyResolvedEnvelope,
   constructW3dsFileUri,
   documentedMediaFileUris,
+  mergeDocumentedEnvelopeFields,
 } from './media-eligibility';
 
 const vault = '@owner.w3id';
@@ -39,6 +40,17 @@ describe('documented media eligibility', () => {
         vaultOwnerEName: vault,
       }),
     ).toEqual({ status: 'resolve', fileUri });
+  });
+
+  it('resolves a documented mediaUrl stored on envelopes rather than parsed', () => {
+    const payload = mergeDocumentedEnvelopeFields({ type: 'file' }, [
+      { fieldKey: 'mediaUrl', value: fileUri, valueType: 'string' },
+    ]);
+    expect(payload.mediaUrl).toBe(fileUri);
+    expect(classifyAuthorizedMedia({ payload, vaultOwnerEName: vault })).toEqual({
+      status: 'resolve',
+      fileUri,
+    });
   });
 
   it('never treats an arbitrary HTTPS URL as playable media', () => {

@@ -44,19 +44,55 @@ export function documentedMediaFileUris(
   vaultOwnerEName?: string,
 ): string[] {
   const file = record(payload.file);
+  const attachment = record(payload.attachment);
   const unique = new Set<string>();
   const add = (value: unknown) => {
     const fileUri = documentedFileUri(value, vaultOwnerEName);
     if (fileUri) unique.add(fileUri);
   };
   for (const value of asArray(payload.mediaSegments)) add(value);
+  for (const value of asArray(payload.attachments)) add(value);
+  for (const value of asArray(payload.mediaFiles)) add(value);
   add(payload.fileId);
   add(payload.mediaUri);
   add(payload.mediaUrl);
+  add(payload.fileUri);
+  add(payload.fileUrl);
+  add(payload.uri);
+  add(payload.url);
+  add(payload.media);
+  add(payload.mediaFile);
+  add(payload.attachment);
+  add(payload.data);
   add(file?.uri);
   add(file?.fileUri);
+  add(file?.url);
   add(file?.id);
+  add(file?.data);
+  add(attachment?.uri);
+  add(attachment?.fileUri);
+  add(attachment?.url);
+  add(attachment?.id);
   return [...unique];
+}
+
+export function mergeDocumentedEnvelopeFields(
+  parsed: Record<string, unknown>,
+  envelopes: readonly unknown[],
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...parsed };
+  for (const entry of envelopes) {
+    const envelope = record(entry);
+    if (!envelope) continue;
+    const key = optionalString(envelope.fieldKey);
+    if (!key) continue;
+    const value = coerceEnvelopeValue(envelope.value, optionalString(envelope.valueType));
+    if (value === undefined) continue;
+    if (next[key] === undefined) next[key] = value;
+    const fileUri = documentedFileUri(value, undefined);
+    if (fileUri && next.mediaUrl === undefined) next.mediaUrl = fileUri;
+  }
+  return next;
 }
 
 export function classifyAuthorizedMedia(input: {
@@ -109,13 +145,17 @@ export function classifyAuthorizedMedia(input: {
       : { status: 'unresolved', reason: 'missing_w3ds_file_uri' };
   }
 
-  if ((type === 'file' || !type) && fileUri) {
+  if ((type === 'file' || type === 'video' || type === 'circle' || !type) && fileUri) {
     if (input.resolvedContentType !== undefined || input.resolvedOntology) {
       return isExplicitlyNonVideoMime(contentType)
         ? { status: 'exclude', reason: 'non_video' }
         : { status: 'accept', fileUri };
     }
     return { status: 'resolve', fileUri };
+  }
+
+  if (type === 'file' || type === 'video' || type === 'circle' || !type) {
+    return { status: 'unresolved', reason: 'missing_w3ds_file_uri' };
   }
 
   return { status: 'unresolved', reason: 'missing_w3ds_file_uri' };
@@ -140,6 +180,16 @@ export function classifyResolvedEnvelope(input: {
 }
 
 function documentedFileUri(value: unknown, vaultOwnerEName?: string): string | undefined {
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const nested = value as Record<string, unknown>;
+    return (
+      documentedFileUri(nested.uri, vaultOwnerEName) ??
+      documentedFileUri(nested.fileUri, vaultOwnerEName) ??
+      documentedFileUri(nested.url, vaultOwnerEName) ??
+      documentedFileUri(nested.id, vaultOwnerEName) ??
+      documentedFileUri(nested.data, vaultOwnerEName)
+    );
+  }
   const text = optionalString(value);
   if (!text) return undefined;
   if (parseW3dsFileUri(text)) return text;
@@ -148,6 +198,19 @@ function documentedFileUri(value: unknown, vaultOwnerEName?: string): string | u
     return constructW3dsFileUri(vaultOwnerEName, text);
   }
   return undefined;
+}
+
+function coerceEnvelopeValue(value: unknown, valueType: string | undefined): unknown {
+  if (valueType === 'object' || valueType === 'array') {
+    if (typeof value === 'string') {
+      try {
+        return JSON.parse(value) as unknown;
+      } catch {
+        return value;
+      }
+    }
+  }
+  return value;
 }
 
 function attachmentFilename(message: Record<string, unknown>): string | undefined {
