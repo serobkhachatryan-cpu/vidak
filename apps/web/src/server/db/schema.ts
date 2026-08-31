@@ -781,4 +781,97 @@ export type SupportReportRow = typeof supportReports.$inferSelect;
 export type SupportTaskRow = typeof supportTasks.$inferSelect;
 export type ChannelImportConnectionRow = typeof channelImportConnections.$inferSelect;
 export type ImportedChannelRow = typeof importedChannels.$inferSelect;
+export type VideoSpaceInventoryJobStatus = 'running' | 'complete' | 'failed';
+export type VideoSpaceInventoryTaskStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'succeeded'
+  | 'denied'
+  | 'missing'
+  | 'failed';
+
+/**
+ * One durable inventory job per authenticated eName. Checkpoints live in
+ * related task/item tables so a process restart or closed browser cannot
+ * drop scan progress.
+ */
+export const videoSpaceInventoryJobs = pgTable(
+  'video_space_inventory_jobs',
+  {
+    id: text('id').primaryKey(),
+    ownerEName: text('owner_e_name').notNull(),
+    ownerEVaultUri: text('owner_e_vault_uri').notNull(),
+    status: text('status').$type<VideoSpaceInventoryJobStatus>().notNull(),
+    completeness: jsonb('completeness').$type<Record<string, unknown>>().notNull(),
+    mediaCounts: jsonb('media_counts').$type<Record<string, unknown>>().notNull(),
+    ledger: jsonb('ledger').$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+    completedAt: timestamp('completed_at', { withTimezone: true, mode: 'date' }),
+  },
+  (table) => [
+    uniqueIndex('video_space_inventory_jobs_owner_uidx').on(table.ownerEName),
+    index('video_space_inventory_jobs_status_idx').on(table.status, table.updatedAt),
+  ],
+);
+
+export const videoSpaceInventoryTasks = pgTable(
+  'video_space_inventory_tasks',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => videoSpaceInventoryJobs.id, { onDelete: 'cascade' }),
+    taskKey: text('task_key').notNull(),
+    kind: text('kind').notNull(),
+    vaultKey: text('vault_key').notNull(),
+    ontologyId: text('ontology_id'),
+    cursorAfter: text('cursor_after'),
+    attempts: integer('attempts').notNull().default(0),
+    notBefore: timestamp('not_before', { withTimezone: true, mode: 'date' }).notNull(),
+    status: text('status').$type<VideoSpaceInventoryTaskStatus>().notNull(),
+    priority: integer('priority').notNull(),
+    payload: jsonb('payload').$type<Record<string, unknown>>().notNull(),
+    lockedUntil: timestamp('locked_until', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('video_space_inventory_tasks_job_key_uidx').on(table.jobId, table.taskKey),
+    index('video_space_inventory_tasks_claim_idx').on(
+      table.status,
+      table.notBefore,
+      table.priority,
+    ),
+    index('video_space_inventory_tasks_job_status_idx').on(table.jobId, table.status),
+    index('video_space_inventory_tasks_vault_idx').on(table.vaultKey, table.status),
+  ],
+);
+
+export const videoSpaceInventoryItems = pgTable(
+  'video_space_inventory_items',
+  {
+    id: text('id').primaryKey(),
+    jobId: text('job_id')
+      .notNull()
+      .references(() => videoSpaceInventoryJobs.id, { onDelete: 'cascade' }),
+    itemKey: text('item_key').notNull(),
+    card: jsonb('card').$type<Record<string, unknown>>().notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('video_space_inventory_items_job_key_uidx').on(table.jobId, table.itemKey),
+    index('video_space_inventory_items_job_idx').on(table.jobId),
+  ],
+);
+
+export const videoSpaceVaultGates = pgTable('video_space_vault_gates', {
+  vaultKey: text('vault_key').primaryKey(),
+  notBefore: timestamp('not_before', { withTimezone: true, mode: 'date' }).notNull(),
+  inflightUntil: timestamp('inflight_until', { withTimezone: true, mode: 'date' }),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
+
 export type ChannelImportOAuthStateRow = typeof channelImportOAuthStates.$inferSelect;
+export type VideoSpaceInventoryJobRow = typeof videoSpaceInventoryJobs.$inferSelect;
+export type VideoSpaceInventoryTaskRow = typeof videoSpaceInventoryTasks.$inferSelect;

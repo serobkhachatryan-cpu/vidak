@@ -7,7 +7,7 @@ import {
   createMeshengerVideoStreamId,
   verifyMeshengerVideoStreamId,
 } from './meshenger-video-library';
-import { emptyInventoryCoverage } from './video-space/completeness';
+import { emptyInventoryCoverage, emptyInventoryMediaCounts } from './video-space/completeness';
 
 const secret = '12345678901234567890123456789012';
 const grant = {
@@ -1195,6 +1195,7 @@ describe('Meshenger video library', () => {
         retryRateLimited: 0,
         retrying: 0,
         coverage: emptyInventoryCoverage,
+        media: { ...emptyInventoryMediaCounts, unresolved: {} },
       });
       const serialized = JSON.stringify(workspace.completeness);
       expect(serialized).not.toMatch(/@missing|@group|chat-ok|Indexed clip/i);
@@ -1364,6 +1365,7 @@ describe('Meshenger video library', () => {
         retryRateLimited: 0,
         retrying: 0,
         coverage: emptyInventoryCoverage,
+        media: { ...emptyInventoryMediaCounts, unresolved: {} },
       });
     } finally {
       vi.unstubAllGlobals();
@@ -1563,6 +1565,7 @@ describe('Meshenger video library', () => {
         retryRateLimited: 0,
         retrying: 0,
         coverage: emptyInventoryCoverage,
+        media: { ...emptyInventoryMediaCounts, unresolved: {} },
       });
       expect(
         fetcher.mock.calls.some(
@@ -1694,6 +1697,7 @@ describe('Meshenger video library', () => {
         retryRateLimited: 0,
         retrying: 0,
         coverage: emptyInventoryCoverage,
+        media: { ...emptyInventoryMediaCounts, unresolved: {} },
       });
     } finally {
       vi.unstubAllGlobals();
@@ -2796,6 +2800,72 @@ describe('Meshenger video library', () => {
       expect(result.items.map((item) => item.title)).toContain('Member-only take.mp4');
       expect(result.completeness.coverage?.groupManifestPages).toBeGreaterThanOrEqual(2);
       expect(result.completeness.coverage?.filePages).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('inventories a type=file attachment without filename or MIME via documented metaEnvelope resolution', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const body = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (body.includes('MeshengerVideoEnvelope') || body.includes('metaEnvelope(id')) {
+          return json({
+            data: {
+              metaEnvelope: {
+                id: 'bare-clip',
+                ontology: 'w3ds-file-v1',
+                parsed: { contentType: 'video/mp4' },
+              },
+            },
+          });
+        }
+        if (body.includes('550e8400-e29b-41d4-a716-446655440004')) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'file-message-bare',
+                      ontology: '550e8400-e29b-41d4-a716-446655440004',
+                      parsed: {
+                        type: 'file',
+                        mediaUrl: 'w3ds://file?id=@person.w3id/bare-clip',
+                      },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      const result = await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', onSnapshot: () => undefined },
+      );
+      expect(result.items.some((item) => item.kind === 'video-message')).toBe(true);
+      expect(result.completeness.media?.accepted).toBeGreaterThan(0);
+      expect(result.completeness.media?.candidates).toBeGreaterThan(0);
+      expect(JSON.stringify(result.completeness.media)).not.toMatch(/@|https?:\/\//i);
     } finally {
       vi.unstubAllGlobals();
     }

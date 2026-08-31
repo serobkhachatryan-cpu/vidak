@@ -38,6 +38,27 @@ export const emptyInventoryCoverage: InventoryCoverage = {
   officialChatGrants: 0,
 };
 
+/** Counts-only media eligibility. Reasons are documented classes, never record IDs. */
+export type InventoryUnresolvedReason =
+  | 'missing_w3ds_file_uri'
+  | 'resolver_denied'
+  | 'resolver_missing'
+  | 'resolver_unavailable';
+
+export interface InventoryMediaCounts {
+  candidates: number;
+  accepted: number;
+  excludedNonVideo: number;
+  unresolved: Partial<Record<InventoryUnresolvedReason, number>>;
+}
+
+export const emptyInventoryMediaCounts: InventoryMediaCounts = {
+  candidates: 0,
+  accepted: 0,
+  excludedNonVideo: 0,
+  unresolved: {},
+};
+
 export function coveragePageTotal(coverage: InventoryCoverage | undefined): number {
   if (!coverage) return 0;
   return (
@@ -65,6 +86,7 @@ export interface InventoryCompleteness {
   /** Sources currently queued for background retry. Zero once the scan is terminal. */
   retrying?: number;
   coverage?: InventoryCoverage;
+  media?: InventoryMediaCounts;
 }
 
 export const completeInventory: InventoryCompleteness = {
@@ -80,6 +102,7 @@ export const completeInventory: InventoryCompleteness = {
   retryRateLimited: 0,
   retrying: 0,
   coverage: { ...emptyInventoryCoverage },
+  media: { ...emptyInventoryMediaCounts, unresolved: {} },
 };
 
 export function inventoryCompletenessCopy(state: InventoryCompleteness): string {
@@ -107,6 +130,7 @@ export function createInventoryCompletenessTracker() {
   let retryRateLimited = 0;
   let retrying = 0;
   const coverage: InventoryCoverage = { ...emptyInventoryCoverage };
+  const media: InventoryMediaCounts = { ...emptyInventoryMediaCounts, unresolved: {} };
 
   return {
     expectSpace() {
@@ -155,6 +179,37 @@ export function createInventoryCompletenessTracker() {
       if (kind === 'reference') coverage.referenceGrants += 1;
       else coverage.officialChatGrants += 1;
     },
+    recordCandidate() {
+      media.candidates += 1;
+    },
+    recordAccepted() {
+      media.accepted += 1;
+    },
+    recordExcludedNonVideo() {
+      media.excludedNonVideo += 1;
+    },
+    recordUnresolved(reason: InventoryUnresolvedReason) {
+      media.unresolved[reason] = (media.unresolved[reason] ?? 0) + 1;
+    },
+    hydrate(state: InventoryCompleteness) {
+      expected = state.expected;
+      indexed = state.indexed;
+      denied = state.denied;
+      missing = state.missing;
+      failed = state.failed ?? 0;
+      retryNeeded = state.retryNeeded;
+      retryUnavailable = state.retryUnavailable;
+      retryRejected = state.retryRejected;
+      retryRateLimited = state.retryRateLimited;
+      retrying = state.retrying ?? 0;
+      if (state.coverage) Object.assign(coverage, state.coverage);
+      if (state.media) {
+        media.candidates = state.media.candidates;
+        media.accepted = state.media.accepted;
+        media.excludedNonVideo = state.media.excludedNonVideo;
+        media.unresolved = { ...state.media.unresolved };
+      }
+    },
     snapshot(): InventoryCompleteness {
       const classified = indexed + denied + missing + failed;
       const complete = classified === expected && retrying === 0 && !retryNeeded;
@@ -171,6 +226,7 @@ export function createInventoryCompletenessTracker() {
         retryRateLimited,
         retrying,
         coverage: { ...coverage },
+        media: { ...media, unresolved: { ...media.unresolved } },
       };
     },
   };

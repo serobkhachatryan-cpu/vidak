@@ -101,6 +101,7 @@ export function createInventoryCoordinator(options?: {
     user: Pick<AuthUser, 'eName' | 'eVaultUri'>,
     scope: InventoryScope,
     previous?: CacheEntry,
+    refresh?: boolean,
   ): CacheEntry {
     let resolveFirst: () => void = () => undefined;
     const firstReady = new Promise<void>((resolve) => {
@@ -124,6 +125,7 @@ export function createInventoryCoordinator(options?: {
     const inflight = getScanner()
       .scanLibrary(user, {
         scope,
+        ...(refresh ? { refresh: true } : {}),
         onSnapshot: (library, phase, counts) => {
           entry.snapshot = mergeLibraries(entry.snapshot, library);
           entry.sourceCounts = counts;
@@ -247,7 +249,7 @@ export function createInventoryCoordinator(options?: {
         if (entry?.inflight && entry.scanning) {
           return serve(user, entry, requestStarted, 'coalesced');
         }
-        entry = startScan(user, input.scope, entry);
+        entry = startScan(user, input.scope, entry, true);
         return serve(user, entry, requestStarted, 'miss');
       }
 
@@ -277,6 +279,22 @@ export function createInventoryCoordinator(options?: {
     reset() {
       entries.clear();
       scanner = undefined;
+    },
+
+    /** Continues persisted jobs without an open browser tab. */
+    async pumpRunning(): Promise<void> {
+      try {
+        const { getInventoryJobStore } = await import('./job-store');
+        const running = await getInventoryJobStore().listRunning();
+        for (const job of running) {
+          const key = keyFor(job.ownerEName, 'all');
+          const entry = entries.get(key);
+          if (entry?.inflight && entry.scanning) continue;
+          startScan({ eName: job.ownerEName, eVaultUri: job.ownerEVaultUri }, 'all', entry);
+        }
+      } catch {
+        // Pump must never crash the Node process.
+      }
     },
   };
 }

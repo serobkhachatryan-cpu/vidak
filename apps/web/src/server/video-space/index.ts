@@ -44,6 +44,14 @@ export {
   documentedVideoSources,
 } from './documented-sources';
 export {
+  classifyAuthorizedMedia,
+  classifyResolvedEnvelope,
+  constructW3dsFileUri,
+  documentedMediaFileUris,
+  type MediaDecision,
+  type MediaUnresolvedReason,
+} from './media-eligibility';
+export {
   type VideoSpaceAccessScope,
   type VideoSpaceVisibility,
   videoSpaceVisibilityLabels,
