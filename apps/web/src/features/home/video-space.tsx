@@ -119,11 +119,11 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   }, [load]);
 
   useEffect(() => {
-    if (library.discovery !== 'refreshing') return;
-    const timer = window.setTimeout(() => {
+    if (library.discovery !== 'refreshing' && library.discovery !== 'partial') return;
+    const timer = window.setInterval(() => {
       void loadEvault(false);
     }, 1500);
-    return () => window.clearTimeout(timer);
+    return () => window.clearInterval(timer);
   }, [library.discovery, loadEvault]);
 
   const setTab = (next: VideoSpaceTab) => {

@@ -9,7 +9,7 @@ import {
   discoverVideoMessageVideos,
   discoverW3dsFileVideos,
 } from './video-space/adapters';
-import { retryWithExponentialBackoff } from './video-space/backoff';
+import { parseRetryAfter, retryDelayMs, retryWithExponentialBackoff } from './video-space/backoff';
 import { assembleVideoSpaceCatalogue } from './video-space/catalogue';
 import {
   createInventoryCompletenessTracker,
@@ -30,6 +30,7 @@ import {
 import { mapPool } from './video-space/map-pool';
 import { collectPaginatedEnvelopes } from './video-space/pagination';
 import type { VideoSpaceAccessScope, VideoSpaceVisibility } from './video-space/visibility';
+import { type DeferredWork, drainDeferredQueue } from './video-space/work-queue';
 import { parseW3dsFileUri } from './w3ds-official-file-client';
 
 const callSessionOntology = documentedOntologyId('call-recording');
@@ -41,10 +42,11 @@ const w3dsFileOntology = documentedOntologyId('w3ds-file');
 const pageSize = 100;
 const maxPages = 30;
 const requestTimeoutMs = 12_000;
-const sharedSpaceConcurrency = 3;
-const personalSourceConcurrency = 3;
-/** Fail-fast first, then one exponential-backoff pass before a source is terminal. */
-const maxBackgroundAttempts = 2;
+const sharedSpaceConcurrency = 1;
+const personalSourceConcurrency = 1;
+/** Fail-fast first, then Retry-After / exponential backoff until the page succeeds or is terminal. */
+const maxRateLimitAttempts = 24;
+const maxRejectedAttempts = 4;
 // Call recordings are stored as ~45-second files. A multi-hour recording must
 // remain playable through its final segment, while the authenticated stream
 // route still verifies the current user on every request.
@@ -119,6 +121,7 @@ export class MeshengerVideoLibraryError extends Error {
       | 'stream_expired'
       | 'unsafe_media_url',
     public readonly status: number,
+    public readonly retryAfterMs?: number,
   ) {
     super(message);
     this.name = 'MeshengerVideoLibraryError';
@@ -177,6 +180,12 @@ interface GroupDiscovery {
   retryNeeded: boolean;
   pendingAuthors?: Array<{ authorEName: string; chatId: string }>;
   retryClass?: 'unavailable' | 'rate_limited' | 'rejected';
+  retryAfterMs?: number;
+  vault?: ResolvedVault;
+  currentMember?: boolean;
+  openedChatIds?: string[];
+  chatsComplete?: boolean;
+  chatsCursor?: string;
 }
 interface ResolvedVault {
   ownerEName: string;
@@ -586,41 +595,42 @@ export class MeshengerVideoLibrary {
       },
     ];
 
-    type OwnedWork = { source: (typeof sources)[number]; after: string | null; attempts: number };
+    type OwnedWork = DeferredWork & {
+      source: (typeof sources)[number];
+      after: string | null;
+      retryAfterMs?: number;
+    };
     const queue: OwnedWork[] = sources.map((source) => ({ source, after: null, attempts: 0 }));
 
-    while (queue.length) {
-      const batch = queue.splice(0, queue.length);
-      await mapPool(batch, personalSourceConcurrency, async (item) => {
-        const rateLimit: RateLimitMode = item.attempts === 0 ? 'fail-fast' : 'backoff';
-        const page = await this.readSource(
-          () =>
-            this.listEnvelopes(
-              ownVault.ownerEName,
-              ownVault.eVaultUri,
-              item.source.ontologyId,
-              undefined,
-              { maxPages: 1, after: item.after, rateLimit },
-            ),
-          { items: [] as Envelope[], complete: false },
-        );
-        if (isRetryFailure(page.failure)) {
-          this.queueOrFailRetry(completeness, item, page.failure, queue, counts);
-          snapshot('batch');
-          return;
-        }
-        if (item.attempts > 0) completeness.finishRetry();
-        counts.personalPages += 1;
-        await item.source.ingest(page.value.items);
-        if (!page.value.complete && page.value.endCursor) {
-          queue.push({ source: item.source, after: page.value.endCursor, attempts: 0 });
-        } else if (!page.value.complete) {
-          completeness.markRetry();
-        }
+    await drainDeferredQueue(queue, personalSourceConcurrency, async (item) => {
+      const page = await this.readSource(
+        () =>
+          this.listEnvelopes(
+            ownVault.ownerEName,
+            ownVault.eVaultUri,
+            item.source.ontologyId,
+            undefined,
+            { maxPages: 1, after: item.after, rateLimit: 'fail-fast' },
+          ),
+        { items: [] as Envelope[], complete: false },
+      );
+      if (isRetryFailure(page.failure)) {
+        this.queueOrFailRetry(completeness, item, page.failure, queue, counts, page.retryAfterMs);
         snapshot('batch');
-      });
-    }
-    return snapshot(emitDone ? 'done' : 'batch');
+        return;
+      }
+      if (item.attempts > 0) completeness.finishRetry();
+      counts.personalPages += 1;
+      await item.source.ingest(page.value.items);
+      if (!page.value.complete && page.value.endCursor) {
+        queue.push({ source: item.source, after: page.value.endCursor, attempts: 0 });
+      } else if (!page.value.complete) {
+        completeness.markRetry();
+      }
+      snapshot('batch');
+    });
+    const done = emitDone && completeness.snapshot().complete;
+    return snapshot(done ? 'done' : 'batch');
   }
 
   private async scanSharedProgressive(
@@ -654,12 +664,79 @@ export class MeshengerVideoLibrary {
       return library;
     };
 
-    type SharedWork =
-      | { type: 'chats'; after: string | null; attempts: number }
-      | { type: 'messages'; after: string | null; attempts: number }
-      | { type: 'group'; groupEName: string; chatIds: Set<string>; attempts: number }
-      | { type: 'direct'; ownerEName: string; chatIds: Set<string>; attempts: number }
-      | { type: 'author'; authorEName: string; chatId: string; attempts: number };
+    type SharedWork = DeferredWork &
+      (
+        | { type: 'chats'; after: string | null; retryAfterMs?: number }
+        | { type: 'messages'; after: string | null; retryAfterMs?: number }
+        | { type: 'group-open'; groupEName: string; retryAfterMs?: number }
+        | {
+            type: 'group-chats';
+            spaceKey: string;
+            groupEName: string;
+            owner: string;
+            eVaultUri: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
+            type: 'group-messages';
+            spaceKey: string;
+            groupEName: string;
+            owner: string;
+            eVaultUri: string;
+            chatId: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
+            type: 'group-calls';
+            spaceKey: string;
+            groupEName: string;
+            owner: string;
+            eVaultUri: string;
+            chatIds: string[];
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
+            type: 'group-files';
+            spaceKey: string;
+            groupEName: string;
+            owner: string;
+            eVaultUri: string;
+            ontologyId: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | { type: 'direct-open'; ownerEName: string; retryAfterMs?: number }
+        | {
+            type: 'direct-messages';
+            spaceKey: string;
+            ownerEName: string;
+            owner: string;
+            eVaultUri: string;
+            chatId: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
+            type: 'direct-calls';
+            spaceKey: string;
+            ownerEName: string;
+            owner: string;
+            eVaultUri: string;
+            chatIds: string[];
+            after: string | null;
+            retryAfterMs?: number;
+          }
+        | {
+            type: 'author-messages';
+            authorEName: string;
+            chatId: string;
+            after: string | null;
+            retryAfterMs?: number;
+          }
+      );
 
     const queue: SharedWork[] = [
       { type: 'chats', after: null, attempts: 0 },
@@ -668,27 +745,148 @@ export class MeshengerVideoLibrary {
     const scheduledGroupChats = new Map<string, Set<string>>();
     const scheduledDirectChats = new Map<string, Set<string>>();
     const scheduledAuthors = new Set<string>();
+    const remaining = new Map<string, number>();
+    const settled = new Set<string>();
+    const failedSpaces = new Set<string>();
+    const openedGroups = new Map<string, { vault: ResolvedVault; member: boolean }>();
+    const openedDirects = new Map<string, ResolvedVault>();
+
+    const addSpaceWork = (key: string, n = 1) => {
+      remaining.set(key, (remaining.get(key) ?? 0) + n);
+    };
+    const finishSpaceWork = (key: string) => {
+      const next = (remaining.get(key) ?? 1) - 1;
+      remaining.set(key, next);
+      if (next > 0 || settled.has(key)) return;
+      settled.add(key);
+      remaining.delete(key);
+      if (failedSpaces.has(key)) {
+        completeness.failSpace();
+        counts.failed += 1;
+        return;
+      }
+      completeness.indexSpace();
+      counts.sharedSpaces += 1;
+    };
+    const closeSpace = (key: string, outcome: 'denied' | 'missing') => {
+      if (settled.has(key)) return;
+      settled.add(key);
+      remaining.delete(key);
+      if (outcome === 'denied') completeness.denySpace();
+      else completeness.missSpace();
+    };
+    const failSpacePage = (
+      key: string,
+      item: SharedWork,
+      failure: 'unavailable' | 'rate_limited' | 'rejected',
+      retryAfterMs?: number,
+    ) => {
+      this.queueOrFailRetry(completeness, item, failure, queue, counts, retryAfterMs, () => {
+        failedSpaces.add(key);
+        finishSpaceWork(key);
+      });
+    };
+    const continueOrFinishPage = <T extends SharedWork & { after: string | null }>(
+      key: string,
+      item: T,
+      page: { complete: boolean; endCursor?: string },
+    ) => {
+      if (!page.complete && page.endCursor) {
+        const { notBefore: _notBefore, ...rest } = item;
+        queue.push({ ...rest, after: page.endCursor, attempts: 0 } as T);
+        return;
+      }
+      if (!page.complete) {
+        failedSpaces.add(key);
+        completeness.markRetry();
+      }
+      finishSpaceWork(key);
+    };
+    const failOpenTerminal = (key: string) => {
+      if (settled.has(key)) return;
+      settled.add(key);
+      remaining.delete(key);
+      completeness.failSpace();
+    };
+
+    const referencedGroupChats = new Map<string, Set<string>>();
+    const referencedDirectChats = new Map<string, Set<string>>();
+
+    const enqueueGroupMessages = (
+      groupEName: string,
+      vault: ResolvedVault,
+      chatIds: Iterable<string>,
+    ) => {
+      const seen = scheduledGroupChats.get(groupEName) ?? new Set<string>();
+      for (const chatId of chatIds) {
+        if (seen.has(chatId)) continue;
+        seen.add(chatId);
+        addSpaceWork(groupEName);
+        queue.push({
+          type: 'group-messages',
+          spaceKey: groupEName,
+          groupEName,
+          owner: vault.ownerEName,
+          eVaultUri: vault.eVaultUri,
+          chatId,
+          after: null,
+          attempts: 0,
+        });
+      }
+      scheduledGroupChats.set(groupEName, seen);
+    };
 
     const enqueueGroup = (groupEName: string, chatIds: Iterable<string>) => {
-      const seen = scheduledGroupChats.get(groupEName) ?? new Set<string>();
-      const fresh = [...chatIds].filter((id) => !seen.has(id));
-      if (fresh.length === 0) return;
-      const isNew = seen.size === 0;
-      for (const id of fresh) seen.add(id);
-      scheduledGroupChats.set(groupEName, seen);
-      if (isNew) completeness.expectSpace();
-      queue.push({ type: 'group', groupEName, chatIds: new Set(fresh), attempts: 0 });
+      if (settled.has(groupEName) && !openedGroups.has(groupEName)) return;
+      const referenced = referencedGroupChats.get(groupEName) ?? new Set<string>();
+      const fresh = [...chatIds].filter((id) => !referenced.has(id));
+      for (const id of chatIds) referenced.add(id);
+      referencedGroupChats.set(groupEName, referenced);
+      const isNew = !remaining.has(groupEName) && !settled.has(groupEName);
+      if (isNew) {
+        completeness.expectSpace();
+        remaining.set(groupEName, 1);
+        queue.push({ type: 'group-open', groupEName, attempts: 0 });
+        return;
+      }
+      const opened = openedGroups.get(groupEName);
+      if (opened && fresh.length) enqueueGroupMessages(groupEName, opened.vault, fresh);
     };
     const enqueueDirect = (ownerEName: string, chatIds: Iterable<string>) => {
       if (ownerEName === eName) return;
-      const seen = scheduledDirectChats.get(ownerEName) ?? new Set<string>();
-      const fresh = [...chatIds].filter((id) => !seen.has(id));
-      if (fresh.length === 0) return;
-      const isNew = seen.size === 0;
-      for (const id of fresh) seen.add(id);
-      scheduledDirectChats.set(ownerEName, seen);
-      if (isNew) completeness.expectSpace();
-      queue.push({ type: 'direct', ownerEName, chatIds: new Set(fresh), attempts: 0 });
+      if (settled.has(ownerEName) && !openedDirects.has(ownerEName)) return;
+      const referenced = referencedDirectChats.get(ownerEName) ?? new Set<string>();
+      const fresh = [...chatIds].filter((id) => !referenced.has(id));
+      for (const id of chatIds) referenced.add(id);
+      referencedDirectChats.set(ownerEName, referenced);
+      const isNew = !remaining.has(ownerEName) && !settled.has(ownerEName);
+      if (isNew) {
+        completeness.expectSpace();
+        remaining.set(ownerEName, 1);
+        scheduledDirectChats.set(ownerEName, new Set(referenced));
+        queue.push({ type: 'direct-open', ownerEName, attempts: 0 });
+        return;
+      }
+      const opened = openedDirects.get(ownerEName);
+      if (opened && fresh.length) {
+        const seen = scheduledDirectChats.get(ownerEName) ?? new Set<string>();
+        for (const chatId of fresh) {
+          if (seen.has(chatId)) continue;
+          seen.add(chatId);
+          addSpaceWork(ownerEName);
+          queue.push({
+            type: 'direct-messages',
+            spaceKey: ownerEName,
+            ownerEName,
+            owner: opened.ownerEName,
+            eVaultUri: opened.eVaultUri,
+            chatId,
+            after: null,
+            attempts: 0,
+          });
+        }
+        scheduledDirectChats.set(ownerEName, seen);
+      }
     };
     const enqueueAuthor = (authorEName: string, chatId: string, alreadyFailed = false) => {
       const key = `${authorEName}\u0000${chatId}`;
@@ -697,9 +895,10 @@ export class MeshengerVideoLibrary {
       scheduledAuthors.add(key);
       if (alreadyFailed) completeness.queueRetry();
       queue.push({
-        type: 'author',
+        type: 'author-messages',
         authorEName,
         chatId,
+        after: null,
         attempts: alreadyFailed ? 1 : 0,
       });
     };
@@ -713,155 +912,471 @@ export class MeshengerVideoLibrary {
         if (reference.type !== 'group') enqueueDirect(reference.groupEName, [reference.chatId]);
       }
     };
+    const ingestMessagePage = (sourceEName: string, chatId: string, items: Envelope[]) => {
+      found.push(...this.discoverMessageVideos(items, referenced, eName, sourceEName));
+      messageRecords.push(...items.map((message) => toMeshengerMessage(sourceEName, message)));
+      mergeAuthorMap(historicalAuthors, authorsFromMessages(items));
+      for (const author of historicalAuthors.get(chatId) ?? []) {
+        if (sameEName(author, sourceEName) || sameEName(author, eName)) continue;
+        enqueueAuthor(author, chatId);
+      }
+    };
 
-    while (queue.length) {
-      const batch = queue.splice(0, queue.length);
-      await mapPool(batch, sharedSpaceConcurrency, async (item) => {
-        const rateLimit: RateLimitMode = item.attempts === 0 ? 'fail-fast' : 'backoff';
-        if (item.type === 'chats' || item.type === 'messages') {
-          const ontologyId = item.type === 'chats' ? chatOntology : messageOntology;
-          const page = await this.readSource(
-            () =>
-              this.listEnvelopes(ownVault.ownerEName, ownVault.eVaultUri, ontologyId, undefined, {
+    await drainDeferredQueue(queue, sharedSpaceConcurrency, async (item) => {
+      if (item.type === 'chats' || item.type === 'messages') {
+        const ontologyId = item.type === 'chats' ? chatOntology : messageOntology;
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(ownVault.ownerEName, ownVault.eVaultUri, ontologyId, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          this.queueOrFailRetry(completeness, item, page.failure, queue, counts, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        counts.personalPages += 1;
+        if (item.type === 'chats') ingestReferences(page.value.items);
+        else {
+          messageRecords.push(
+            ...page.value.items.map((message) => toMeshengerMessage(eName, message)),
+          );
+          mergeAuthorMap(historicalAuthors, authorsFromMessages(page.value.items));
+          for (const [chatId, authors] of historicalAuthors) {
+            for (const author of authors) enqueueAuthor(author, chatId);
+          }
+        }
+        if (!page.value.complete && page.value.endCursor) {
+          queue.push({ type: item.type, after: page.value.endCursor, attempts: 0 });
+        } else if (!page.value.complete) {
+          completeness.markRetry();
+        }
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'group-open') {
+        const referencedIds = referencedGroupChats.get(item.groupEName) ?? new Set<string>();
+        const space = await this.readGroupSpace({
+          viewerEName: eName,
+          groupEName: item.groupEName,
+          chatIds: referencedIds,
+          referenced,
+          historicalAuthors,
+          completeness,
+          rateLimit: 'fail-fast',
+          silenceRetries: true,
+          mode: 'open',
+        });
+        if (space.outcome === 'retry') {
+          this.queueOrFailRetry(
+            completeness,
+            item,
+            space.retryClass ?? 'rate_limited',
+            queue,
+            counts,
+            space.retryAfterMs,
+            () => failOpenTerminal(item.groupEName),
+          );
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        if (space.outcome === 'denied') {
+          closeSpace(item.groupEName, 'denied');
+          snapshot('batch');
+          return;
+        }
+        if (space.outcome === 'missing') {
+          closeSpace(item.groupEName, 'missing');
+          snapshot('batch');
+          return;
+        }
+        const vault = space.vault;
+        if (!vault) {
+          closeSpace(item.groupEName, 'missing');
+          snapshot('batch');
+          return;
+        }
+        openedGroups.set(item.groupEName, { vault, member: space.currentMember === true });
+        conversations.push(...space.conversations);
+        const chatIds = new Set([...referencedIds, ...(space.openedChatIds ?? [])]);
+        enqueueGroupMessages(item.groupEName, vault, chatIds);
+        addSpaceWork(item.groupEName);
+        queue.push({
+          type: 'group-calls',
+          spaceKey: item.groupEName,
+          groupEName: item.groupEName,
+          owner: vault.ownerEName,
+          eVaultUri: vault.eVaultUri,
+          chatIds: [...chatIds],
+          after: null,
+          attempts: 0,
+        });
+        if (space.currentMember) {
+          for (const ontologyId of [fileOntology, w3dsFileOntology]) {
+            addSpaceWork(item.groupEName);
+            queue.push({
+              type: 'group-files',
+              spaceKey: item.groupEName,
+              groupEName: item.groupEName,
+              owner: vault.ownerEName,
+              eVaultUri: vault.eVaultUri,
+              ontologyId,
+              after: null,
+              attempts: 0,
+            });
+          }
+        }
+        if (space.chatsComplete === false && space.chatsCursor) {
+          addSpaceWork(item.groupEName);
+          queue.push({
+            type: 'group-chats',
+            spaceKey: item.groupEName,
+            groupEName: item.groupEName,
+            owner: vault.ownerEName,
+            eVaultUri: vault.eVaultUri,
+            after: space.chatsCursor,
+            attempts: 0,
+          });
+        }
+        finishSpaceWork(item.groupEName);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'group-chats') {
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(item.owner, item.eVaultUri, chatOntology, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        const opened = openedGroups.get(item.groupEName);
+        if (opened) {
+          const chatIds = page.value.items
+            .map((chat) => optionalString(chat.parsed.id) ?? chat.id)
+            .filter(Boolean);
+          enqueueGroupMessages(item.groupEName, opened.vault, chatIds);
+        }
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'group-messages') {
+        const page = await this.readSource(
+          () =>
+            this.listMessagesForChat(
+              item.owner,
+              item.eVaultUri,
+              item.chatId,
+              undefined,
+              'fail-fast',
+              {
                 maxPages: 1,
                 after: item.after,
-                rateLimit,
-              }),
-            { items: [] as Envelope[], complete: false },
+              },
+            ),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        ingestMessagePage(item.groupEName, item.chatId, page.value.items);
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'group-calls') {
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(item.owner, item.eVaultUri, callSessionOntology, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        found.push(
+          ...(await this.discoverCallVideos({
+            viewerEName: eName,
+            sourceEName: item.groupEName,
+            sourceEVaultUri: item.eVaultUri,
+            calls: page.value.items,
+            chatIds: new Set(item.chatIds),
+            referenced,
+          })),
+        );
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'group-files') {
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(item.owner, item.eVaultUri, item.ontologyId, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        if (item.ontologyId === w3dsFileOntology) {
+          found.push(
+            ...this.discoverRawFileVideos(item.owner, page.value.items, referenced, eName),
           );
-          if (isRetryFailure(page.failure)) {
-            this.queueOrFailRetry(completeness, item, page.failure, queue, counts);
-            snapshot('batch');
-            return;
-          }
-          if (item.attempts > 0) completeness.finishRetry();
-          counts.personalPages += 1;
-          if (item.type === 'chats') ingestReferences(page.value.items);
-          else {
-            messageRecords.push(
-              ...page.value.items.map((message) => toMeshengerMessage(eName, message)),
-            );
-            mergeAuthorMap(historicalAuthors, authorsFromMessages(page.value.items));
-            for (const [chatId, authors] of historicalAuthors) {
-              for (const author of authors) enqueueAuthor(author, chatId);
-            }
-          }
-          if (!page.value.complete && page.value.endCursor) {
-            queue.push({ type: item.type, after: page.value.endCursor, attempts: 0 });
-          } else if (!page.value.complete) {
-            completeness.markRetry();
-          }
-          snapshot('batch');
-          return;
+        } else {
+          found.push(...this.discoverFileVideos(item.owner, page.value.items, referenced, eName));
         }
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
 
-        if (item.type === 'group') {
-          const space = await this.readGroupSpace({
-            viewerEName: eName,
-            groupEName: item.groupEName,
-            chatIds: item.chatIds,
-            referenced,
-            historicalAuthors,
+      if (item.type === 'direct-open') {
+        const referencedIds = referencedDirectChats.get(item.ownerEName) ?? new Set<string>();
+        const space = await this.readDirectSpace({
+          viewerEName: eName,
+          ownerEName: item.ownerEName,
+          chatIds: referencedIds,
+          referenced,
+          completeness,
+          rateLimit: 'fail-fast',
+          silenceRetries: true,
+          mode: 'open',
+        });
+        if (space.outcome === 'retry') {
+          this.queueOrFailRetry(
             completeness,
-            rateLimit,
-            silenceRetries: true,
-          });
-          found.push(...space.videos);
-          conversations.push(...space.conversations);
-          messageRecords.push(...space.messages);
-          if (space.outcome !== 'retry') {
-            for (const author of space.pendingAuthors ?? []) {
-              enqueueAuthor(author.authorEName, author.chatId, true);
-            }
-          }
-          this.settleSharedSpace(completeness, item, space, queue, counts);
+            item,
+            space.retryClass ?? 'rate_limited',
+            queue,
+            counts,
+            space.retryAfterMs,
+            () => failOpenTerminal(item.ownerEName),
+          );
           snapshot('batch');
           return;
         }
-
-        if (item.type === 'direct') {
-          const space = await this.readDirectSpace({
-            viewerEName: eName,
+        if (item.attempts > 0) completeness.finishRetry();
+        if (space.outcome === 'denied') {
+          closeSpace(item.ownerEName, 'denied');
+          snapshot('batch');
+          return;
+        }
+        if (space.outcome === 'missing') {
+          closeSpace(item.ownerEName, 'missing');
+          snapshot('batch');
+          return;
+        }
+        const vault = space.vault;
+        if (!vault) {
+          closeSpace(item.ownerEName, 'missing');
+          snapshot('batch');
+          return;
+        }
+        openedDirects.set(item.ownerEName, vault);
+        conversations.push(...space.conversations);
+        const chatIds = space.openedChatIds ?? [...referencedIds];
+        for (const chatId of chatIds) {
+          addSpaceWork(item.ownerEName);
+          queue.push({
+            type: 'direct-messages',
+            spaceKey: item.ownerEName,
             ownerEName: item.ownerEName,
-            chatIds: item.chatIds,
-            referenced,
-            completeness,
-            rateLimit,
-            silenceRetries: true,
+            owner: vault.ownerEName,
+            eVaultUri: vault.eVaultUri,
+            chatId,
+            after: null,
+            attempts: 0,
           });
-          found.push(...space.videos);
-          conversations.push(...space.conversations);
-          messageRecords.push(...space.messages);
-          this.settleSharedSpace(completeness, item, space, queue, counts);
+        }
+        addSpaceWork(item.ownerEName);
+        queue.push({
+          type: 'direct-calls',
+          spaceKey: item.ownerEName,
+          ownerEName: item.ownerEName,
+          owner: vault.ownerEName,
+          eVaultUri: vault.eVaultUri,
+          chatIds,
+          after: null,
+          attempts: 0,
+        });
+        finishSpaceWork(item.ownerEName);
+        snapshot('batch');
+        return;
+      }
+
+      if (item.type === 'direct-messages') {
+        const page = await this.readSource(
+          () =>
+            this.listMessagesForChat(
+              item.owner,
+              item.eVaultUri,
+              item.chatId,
+              undefined,
+              'fail-fast',
+              {
+                maxPages: 1,
+                after: item.after,
+              },
+            ),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
           snapshot('batch');
           return;
         }
+        if (item.attempts > 0) completeness.finishRetry();
+        ingestMessagePage(item.ownerEName, item.chatId, page.value.items);
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
 
-        const authorRead = await this.readSource(async () => {
+      if (item.type === 'direct-calls') {
+        const page = await this.readSource(
+          () =>
+            this.listEnvelopes(item.owner, item.eVaultUri, callSessionOntology, undefined, {
+              maxPages: 1,
+              after: item.after,
+              rateLimit: 'fail-fast',
+            }),
+          { items: [] as Envelope[], complete: false },
+        );
+        if (isRetryFailure(page.failure)) {
+          failSpacePage(item.spaceKey, item, page.failure, page.retryAfterMs);
+          snapshot('batch');
+          return;
+        }
+        if (item.attempts > 0) completeness.finishRetry();
+        found.push(
+          ...(await this.discoverCallVideos({
+            viewerEName: eName,
+            sourceEName: item.ownerEName,
+            sourceEVaultUri: item.eVaultUri,
+            calls: page.value.items,
+            chatIds: new Set(item.chatIds),
+            referenced,
+          })),
+        );
+        continueOrFinishPage(item.spaceKey, item, page.value);
+        snapshot('batch');
+        return;
+      }
+
+      const authorRead = await this.readSource(
+        async () => {
           const authorVault = await this.resolveEVault(item.authorEName);
           return this.listMessagesForChat(
             authorVault.ownerEName,
             authorVault.eVaultUri,
             item.chatId,
             undefined,
-            rateLimit,
+            'fail-fast',
+            { maxPages: 1, after: item.after },
           );
-        }, [] as Envelope[]);
-        if (isRetryFailure(authorRead.failure)) {
-          this.queueOrFailRetry(completeness, item, authorRead.failure, queue, counts);
-          snapshot('batch');
-          return;
-        }
-        if (item.attempts > 0) completeness.finishRetry();
-        if (!authorRead.failure) {
-          found.push(
-            ...this.discoverMessageVideos(authorRead.value, referenced, eName, item.authorEName),
-          );
-          messageRecords.push(
-            ...authorRead.value.map((message) => toMeshengerMessage(item.authorEName, message)),
-          );
-        }
+        },
+        { items: [] as Envelope[], complete: false },
+      );
+      if (isRetryFailure(authorRead.failure)) {
+        this.queueOrFailRetry(
+          completeness,
+          item,
+          authorRead.failure,
+          queue,
+          counts,
+          authorRead.retryAfterMs,
+        );
         snapshot('batch');
-      });
-    }
-    return snapshot(emitDone ? 'done' : 'batch');
+        return;
+      }
+      if (item.attempts > 0) completeness.finishRetry();
+      if (!authorRead.failure) {
+        found.push(
+          ...this.discoverMessageVideos(
+            authorRead.value.items,
+            referenced,
+            eName,
+            item.authorEName,
+          ),
+        );
+        messageRecords.push(
+          ...authorRead.value.items.map((message) => toMeshengerMessage(item.authorEName, message)),
+        );
+        if (!authorRead.value.complete && authorRead.value.endCursor) {
+          const { notBefore: _notBefore, ...rest } = item;
+          queue.push({
+            ...rest,
+            after: authorRead.value.endCursor,
+            attempts: 0,
+          });
+        }
+      }
+      snapshot('batch');
+    });
+    const done = emitDone && completeness.snapshot().complete;
+    return snapshot(done ? 'done' : 'batch');
   }
 
-  private queueOrFailRetry<T extends { attempts: number }>(
+  private queueOrFailRetry<T extends DeferredWork>(
     completeness: InventoryCompletenessTracker,
     item: T,
     failure: 'unavailable' | 'rate_limited' | 'rejected',
     queue: T[],
     counts: InventorySourceCounts,
+    retryAfterMs?: number,
+    onTerminal?: () => void,
   ): void {
     if (item.attempts === 0) completeness.queueRetry();
     item.attempts += 1;
-    if (item.attempts < maxBackgroundAttempts) {
+    const cap = failure === 'rate_limited' ? maxRateLimitAttempts : maxRejectedAttempts;
+    if (item.attempts < cap) {
+      item.notBefore =
+        Date.now() +
+        retryDelayMs({
+          attempt: item.attempts,
+          ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+        });
       queue.push(item);
       return;
     }
     completeness.failRetry(retryClassFromFailure(failure));
     counts.failed += 1;
-  }
-
-  private settleSharedSpace<T extends { attempts: number }>(
-    completeness: InventoryCompletenessTracker,
-    item: T,
-    space: GroupDiscovery,
-    queue: T[],
-    counts: InventorySourceCounts,
-  ): void {
-    if (space.outcome === 'retry') {
-      this.queueOrFailRetry(completeness, item, space.retryClass ?? 'rate_limited', queue, counts);
-      return;
-    }
-    if (item.attempts > 0) completeness.finishRetry();
-    if (space.outcome === 'denied') completeness.denySpace();
-    else if (space.outcome === 'missing') completeness.missSpace();
-    else {
-      completeness.indexSpace();
-      counts.sharedSpaces += 1;
-    }
+    onTerminal?.();
   }
 
   private async resolveCall(
@@ -948,6 +1463,7 @@ export class MeshengerVideoLibrary {
     completeness: InventoryCompletenessTracker;
     rateLimit?: RateLimitMode;
     silenceRetries?: boolean;
+    mode?: 'open' | 'full';
   }): Promise<GroupDiscovery> {
     const videos: DiscoveredVideo[] = [];
     const conversations: MeshengerConversation[] = [];
@@ -972,6 +1488,80 @@ export class MeshengerVideoLibrary {
     const vault = vaultRead.value;
     const owner = vault.ownerEName;
     const groupEVaultUri = vault.eVaultUri;
+
+    if (input.mode === 'open') {
+      const manifestsRead = await this.readSource(
+        () =>
+          this.listEnvelopes(owner, groupEVaultUri, groupManifestOntology, undefined, {
+            maxPages: 1,
+            rateLimit: 'fail-fast',
+          }),
+        { items: [] as Envelope[], complete: false },
+      );
+      if (manifestsRead.failure === 'denied') return emptySpace('denied');
+      if (manifestsRead.failure === 'missing') return emptySpace('missing');
+      if (isRetryFailure(manifestsRead.failure)) {
+        return emptySpace(
+          'retry',
+          retryClassFromOptionalFailure(manifestsRead.failure),
+          manifestsRead.retryAfterMs,
+        );
+      }
+      const currentManifest = manifestsRead.value.items.find((item) =>
+        isCurrentGroupMember(item.parsed, input.viewerEName),
+      );
+      const manifest = currentManifest ?? manifestsRead.value.items[0];
+      const currentMember = Boolean(currentManifest);
+      if (manifest && currentMember) {
+        const participantCount = groupParticipantCount(manifest.parsed);
+        const role = groupRole(manifest.parsed, input.viewerEName);
+        const updatedAt = optionalString(manifest.parsed.updatedAt);
+        for (const chatId of input.chatIds) {
+          conversations.push({
+            id: `${input.groupEName}:${chatId}`,
+            ownerEName: input.groupEName,
+            chatId,
+            kind: 'group',
+            title: optionalString(manifest.parsed.name) ?? 'Group',
+            ...(participantCount ? { participantCount } : {}),
+            ...(role ? { role } : {}),
+            ...(updatedAt ? { updatedAt } : {}),
+          });
+        }
+      }
+      const chatsRead = await this.readSource(
+        () =>
+          this.listEnvelopes(owner, groupEVaultUri, chatOntology, undefined, {
+            maxPages: 1,
+            rateLimit: 'fail-fast',
+          }),
+        { items: [] as Envelope[], complete: false },
+      );
+      if (chatsRead.failure === 'denied') return emptySpace('denied');
+      if (chatsRead.failure === 'missing') return emptySpace('missing');
+      if (isRetryFailure(chatsRead.failure)) {
+        return emptySpace(
+          'retry',
+          retryClassFromOptionalFailure(chatsRead.failure),
+          chatsRead.retryAfterMs,
+        );
+      }
+      const openedChatIds = currentMember
+        ? chatsRead.value.items.map((chat) => optionalString(chat.parsed.id) ?? chat.id)
+        : [...input.chatIds];
+      return {
+        videos: [],
+        conversations,
+        messages: [],
+        outcome: 'indexed',
+        retryNeeded: false,
+        vault,
+        currentMember,
+        openedChatIds,
+        chatsComplete: chatsRead.value.complete,
+        ...(chatsRead.value.endCursor ? { chatsCursor: chatsRead.value.endCursor } : {}),
+      };
+    }
 
     const manifests = await this.tryListEnvelopes(
       owner,
@@ -1065,7 +1655,7 @@ export class MeshengerVideoLibrary {
             failureTracker,
             input.rateLimit ?? 'fail-fast',
           ),
-        [] as Envelope[],
+        { items: [] as Envelope[], complete: false },
         failureTracker,
       );
       if (messageRead.failure === 'denied') scopedDenied = true;
@@ -1075,16 +1665,18 @@ export class MeshengerVideoLibrary {
         messagesOk += 1;
         videos.push(
           ...this.discoverMessageVideos(
-            messageRead.value,
+            messageRead.value.items,
             input.referenced,
             input.viewerEName,
             input.groupEName,
           ),
         );
         messageRecords.push(
-          ...messageRead.value.map((message) => toMeshengerMessage(input.groupEName, message)),
+          ...messageRead.value.items.map((message) =>
+            toMeshengerMessage(input.groupEName, message),
+          ),
         );
-        for (const author of authorsFromMessages(messageRead.value).get(chatId) ?? []) {
+        for (const author of authorsFromMessages(messageRead.value.items).get(chatId) ?? []) {
           messageSources.add(author);
         }
       }
@@ -1092,8 +1684,8 @@ export class MeshengerVideoLibrary {
 
     let outcome: SharedSpaceOutcome = 'indexed';
     const callOk = !callsRead.failure;
-    if (callOk || messagesOk > 0) outcome = 'indexed';
-    else if (retryNeeded) outcome = 'retry';
+    if (retryNeeded) outcome = 'retry';
+    else if (callOk || messagesOk > 0) outcome = 'indexed';
     else if (scopedDenied) outcome = 'denied';
     else if (scopedMissing) outcome = 'missing';
 
@@ -1113,14 +1705,14 @@ export class MeshengerVideoLibrary {
             );
             videos.push(
               ...this.discoverMessageVideos(
-                authorMessages,
+                authorMessages.items,
                 input.referenced,
                 input.viewerEName,
                 authorEName,
               ),
             );
             messageRecords.push(
-              ...authorMessages.map((message) => toMeshengerMessage(authorEName, message)),
+              ...authorMessages.items.map((message) => toMeshengerMessage(authorEName, message)),
             );
           },
           undefined,
@@ -1222,6 +1814,7 @@ export class MeshengerVideoLibrary {
     completeness: InventoryCompletenessTracker;
     rateLimit?: RateLimitMode;
     silenceRetries?: boolean;
+    mode?: 'open' | 'full';
   }): Promise<GroupDiscovery> {
     const videos: DiscoveredVideo[] = [];
     const conversations: MeshengerConversation[] = [];
@@ -1255,7 +1848,11 @@ export class MeshengerVideoLibrary {
     if (chatsRead.failure === 'denied') return emptySpace('denied');
     if (chatsRead.failure === 'missing') return emptySpace('missing');
     if (isRetryFailure(chatsRead.failure)) {
-      return emptySpace('retry', retryClassFromOptionalFailure(chatsRead.failure));
+      return emptySpace(
+        'retry',
+        retryClassFromOptionalFailure(chatsRead.failure),
+        chatsRead.retryAfterMs,
+      );
     }
 
     const canonicalChats = new Map<string, Envelope>();
@@ -1283,6 +1880,18 @@ export class MeshengerVideoLibrary {
       });
     }
 
+    if (input.mode === 'open') {
+      return {
+        videos: [],
+        conversations,
+        messages: [],
+        outcome: 'indexed',
+        retryNeeded: false,
+        vault: vaultRead.value,
+        openedChatIds: [...canonicalChats.keys()],
+      };
+    }
+
     let retryNeeded = false;
     let retryClass: 'unavailable' | 'rate_limited' | 'rejected' | undefined;
     for (const chatId of canonicalChats.keys()) {
@@ -1295,7 +1904,7 @@ export class MeshengerVideoLibrary {
             failureTracker,
             input.rateLimit ?? 'fail-fast',
           ),
-        [] as Envelope[],
+        { items: [] as Envelope[], complete: false },
         failureTracker,
       );
       if (isRetryFailure(messageRead.failure)) {
@@ -1305,14 +1914,14 @@ export class MeshengerVideoLibrary {
       if (messageRead.failure === 'denied' || messageRead.failure === 'missing') continue;
       videos.push(
         ...this.discoverMessageVideos(
-          messageRead.value,
+          messageRead.value.items,
           input.referenced,
           input.viewerEName,
           input.ownerEName,
         ),
       );
       messages.push(
-        ...messageRead.value.map((message) => toMeshengerMessage(input.ownerEName, message)),
+        ...messageRead.value.items.map((message) => toMeshengerMessage(input.ownerEName, message)),
       );
     }
 
@@ -1441,14 +2050,20 @@ export class MeshengerVideoLibrary {
     read: () => Promise<T>,
     fallback: T,
     completeness?: InventoryCompletenessTracker,
-  ): Promise<{ value: T; failure?: SourceFailure }> {
+  ): Promise<{ value: T; failure?: SourceFailure; retryAfterMs?: number }> {
     try {
       return { value: await read() };
     } catch (error) {
       const kind = sourceFailureClass(error);
       if (kind === 'fatal') throw error;
       if (isRetryFailure(kind)) completeness?.markRetryClass(retryClassFromFailure(kind));
-      return { value: fallback, failure: kind };
+      return {
+        value: fallback,
+        failure: kind,
+        ...(error instanceof MeshengerVideoLibraryError && error.retryAfterMs !== undefined
+          ? { retryAfterMs: error.retryAfterMs }
+          : {}),
+      };
     }
   }
 
@@ -1489,9 +2104,11 @@ export class MeshengerVideoLibrary {
     chatId: string,
     completeness?: InventoryCompletenessTracker,
     rateLimit: RateLimitMode = 'fail-fast',
-  ): Promise<Envelope[]> {
+    options?: { maxPages?: number; after?: string | null },
+  ): Promise<{ items: Envelope[]; complete: boolean; endCursor?: string }> {
     const page = await collectPaginatedEnvelopes({
-      maxPages,
+      maxPages: options?.maxPages ?? maxPages,
+      ...(options?.after !== undefined ? { after: options.after } : {}),
       readPage: async (after) => {
         const data = await this.graphql(
           owner,
@@ -1510,7 +2127,7 @@ export class MeshengerVideoLibrary {
       mapEdge: envelopeFromEdge,
     });
     if (!page.complete) completeness?.markRetry();
-    return page.items;
+    return page;
   }
 
   private async readEnvelope(owner: string, eVaultUri: string, id: string): Promise<Envelope> {
@@ -1645,6 +2262,7 @@ export class MeshengerVideoLibrary {
           'The W3DS video source is busy. Please try again shortly.',
           'rate_limited',
           429,
+          parseRetryAfter(response.headers.get('Retry-After')),
         );
       }
       if (response.status === 401 || response.status === 403) {
@@ -1680,6 +2298,8 @@ export class MeshengerVideoLibrary {
       maxAttempts: 4,
       baseMs: 250,
       capMs: 4_000,
+      retryAfterMs: (error) =>
+        error instanceof MeshengerVideoLibraryError ? error.retryAfterMs : undefined,
     });
   }
 }
@@ -1754,6 +2374,7 @@ function record(value: unknown): RecordValue | undefined {
 function emptySpace(
   outcome: SharedSpaceOutcome,
   retryClass?: 'unavailable' | 'rate_limited' | 'rejected',
+  retryAfterMs?: number,
 ): GroupDiscovery {
   return {
     videos: [],
@@ -1762,6 +2383,7 @@ function emptySpace(
     outcome,
     retryNeeded: outcome === 'retry',
     ...(retryClass ? { retryClass } : {}),
+    ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
   };
 }
 function sourceFailureClass(error: unknown): SourceFailure | 'fatal' {

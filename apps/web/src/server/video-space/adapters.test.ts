@@ -173,6 +173,36 @@ describe('video space adapters', () => {
     ]);
   });
 
+  it('does not inventory zip, office, or other non-video file attachments as video', () => {
+    expect(
+      discoverVideoMessageVideos(
+        [
+          {
+            id: 'zip-message',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'file',
+              mediaUrl: 'w3ds://file?id=@owner.w3id/archive-1',
+              mimeType: 'application/zip',
+              file: { name: 'clips.zip' },
+            },
+          },
+          {
+            id: 'doc-message',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'file',
+              mediaUrl: 'w3ds://file?id=@owner.w3id/doc-2',
+              file: { name: 'notes.docx' },
+            },
+          },
+        ],
+        new Set(),
+        viewer,
+      ),
+    ).toEqual([]);
+  });
+
   it('does not inventory an official image or pdf attachment as video', () => {
     expect(
       discoverVideoMessageVideos(

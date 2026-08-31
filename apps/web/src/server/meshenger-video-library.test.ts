@@ -22,6 +22,13 @@ function json(value: unknown): Response {
   });
 }
 
+function rateLimited(retryAfter = '0'): Response {
+  return new Response('too many requests', {
+    status: 429,
+    headers: { 'Retry-After': retryAfter },
+  });
+}
+
 function configuredLibrary() {
   return createMeshengerVideoLibrary({
     W3DS_AUTH_PLATFORM_NAME: 'vidak',
@@ -1179,6 +1186,7 @@ describe('Meshenger video library', () => {
         expected: 2,
         denied: 0,
         missing: 1,
+        failed: 0,
         complete: true,
         retryNeeded: false,
         retryUnavailable: 0,
@@ -1346,6 +1354,7 @@ describe('Meshenger video library', () => {
         expected: 1,
         denied: 0,
         missing: 0,
+        failed: 0,
         complete: true,
         retryNeeded: false,
         retryUnavailable: 0,
@@ -1543,6 +1552,7 @@ describe('Meshenger video library', () => {
         expected: 1,
         denied: 1,
         missing: 0,
+        failed: 0,
         complete: true,
         retryNeeded: false,
         retryUnavailable: 0,
@@ -1672,6 +1682,7 @@ describe('Meshenger video library', () => {
         expected: 1,
         denied: 0,
         missing: 0,
+        failed: 0,
         complete: true,
         retryNeeded: false,
         retryUnavailable: 0,
@@ -2265,6 +2276,220 @@ describe('Meshenger video library', () => {
       expect(
         fetcher.mock.calls.some(([url]) => (url as URL).hostname === 'group-vault.example'),
       ).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('resumes a 429 group history page after Retry-After without dropping earlier videos', async () => {
+    const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
+    const messageOntology = '550e8400-e29b-41d4-a716-446655440004';
+    const manifestOntology = 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e';
+    let messagePages = 0;
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@group.w3id', uri: 'https://group-vault.example' });
+      }
+      const body = JSON.parse(String(init.body ?? '{}')) as {
+        variables?: { ontologyId?: string; after?: string | null; chatId?: string };
+      };
+      const ontologyId = body.variables?.ontologyId;
+      if (url.hostname === 'person-vault.example' && ontologyId === chatOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'ref-1',
+                    ontology: chatOntology,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: '@group.w3id',
+                      canonicalChatId: 'chat-history',
+                      type: 'group',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (url.hostname === 'group-vault.example' && ontologyId === manifestOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'manifest-1',
+                    ontology: manifestOntology,
+                    parsed: { owner: '@group.w3id', members: ['@person.w3id'] },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (url.hostname === 'group-vault.example' && ontologyId === chatOntology) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'group-chat-1',
+                    ontology: chatOntology,
+                    parsed: { id: 'chat-history', type: 'group' },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'group-vault.example' &&
+        ontologyId === messageOntology &&
+        body.variables?.chatId === 'chat-history'
+      ) {
+        if (!body.variables.after) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'msg-page-1',
+                      ontology: messageOntology,
+                      parsed: {
+                        chatId: 'chat-history',
+                        type: 'file',
+                        mediaUrl: 'w3ds://file?id=@group.w3id/page-one',
+                        file: { name: 'History page one.mp4' },
+                      },
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: true, endCursor: 'msgs-2' },
+              },
+            },
+          });
+        }
+        messagePages += 1;
+        if (messagePages === 1) return rateLimited();
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'msg-page-2',
+                    ontology: messageOntology,
+                    parsed: {
+                      chatId: 'chat-history',
+                      type: 'file',
+                      mediaUrl: 'w3ds://file?id=@group.w3id/page-two',
+                      file: { name: 'History page two.mp4' },
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const snapshots: string[][] = [];
+      const result = await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        {
+          scope: 'shared',
+          onSnapshot: (library) => {
+            snapshots.push(library.items.map((item) => item.title));
+          },
+        },
+      );
+      expect(snapshots.some((page) => page.includes('History page one.mp4'))).toBe(true);
+      expect(result.items.map((item) => item.title)).toEqual(
+        expect.arrayContaining(['History page one.mp4', 'History page two.mp4']),
+      );
+      expect(result.completeness).toMatchObject({
+        indexed: 1,
+        expected: 1,
+        complete: true,
+        retryNeeded: false,
+        retrying: 0,
+      });
+      expect(messagePages).toBeGreaterThanOrEqual(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not surface zip or document attachments as video cards', async () => {
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      const body = JSON.parse(String(init.body ?? '{}')) as { variables?: { ontologyId?: string } };
+      if (body.variables?.ontologyId === '550e8400-e29b-41d4-a716-446655440004') {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'zip-1',
+                    ontology: '550e8400-e29b-41d4-a716-446655440004',
+                    parsed: {
+                      type: 'file',
+                      mediaUrl: 'w3ds://file?id=@person.w3id/archive',
+                      mimeType: 'application/zip',
+                      file: { name: 'bundle.zip' },
+                    },
+                  },
+                },
+                {
+                  node: {
+                    id: 'vid-1',
+                    ontology: '550e8400-e29b-41d4-a716-446655440004',
+                    parsed: {
+                      type: 'file',
+                      mediaUrl: 'w3ds://file?id=@person.w3id/clip',
+                      file: { name: 'Keep this.mp4' },
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const result = await configuredLibrary().scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'owned', onSnapshot: () => undefined },
+      );
+      expect(result.items.map((item) => item.title)).toEqual(['Keep this.mp4']);
     } finally {
       vi.unstubAllGlobals();
     }

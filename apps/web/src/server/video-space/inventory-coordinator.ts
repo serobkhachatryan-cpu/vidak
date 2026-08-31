@@ -256,7 +256,13 @@ export function createInventoryCoordinator(options?: {
       }
 
       if (entry && !entry.scanning && entry.completedAt && now() - entry.completedAt < ttlMs) {
-        return serve(user, entry, requestStarted, 'hit');
+        const discovery = inventoryDiscovery({
+          scanning: false,
+          completeness: entry.snapshot.completeness,
+        });
+        if (discovery === 'complete') {
+          return serve(user, entry, requestStarted, 'hit');
+        }
       }
 
       entry = startScan(user, input.scope, entry);
