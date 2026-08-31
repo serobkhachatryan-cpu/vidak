@@ -10,6 +10,24 @@ export interface DeferredWork {
   notBefore?: number;
 }
 
+/** Keep one copy of each work item. Last write wins (updated attempts / notBefore). */
+export function upsertWork<T>(queue: T[], item: T, key: (item: T) => string): void {
+  const id = key(item);
+  const index = queue.findIndex((existing) => key(existing) === id);
+  if (index >= 0) {
+    queue[index] = item;
+    return;
+  }
+  queue.push(item);
+}
+
+export function dedupeWork<T>(queue: T[], key: (item: T) => string): void {
+  const unique = new Map<string, T>();
+  for (const item of queue) unique.set(key(item), item);
+  queue.length = 0;
+  queue.push(...unique.values());
+}
+
 export async function drainDeferredQueue<T extends DeferredWork>(
   queue: T[],
   concurrency: number,
@@ -61,6 +79,7 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
     maxVaultsPerWave?: number;
     vaultNotBefore?: (vaultKey: string, now: number) => number | Promise<number>;
     persist?: (queue: T[]) => void | Promise<void>;
+    workKey?: (item: T) => string;
   },
 ): Promise<void> {
   const now = options.now ?? (() => Date.now());
@@ -68,6 +87,9 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxWaitMs = options.maxWaitMs ?? 5_000;
   const maxVaults = options.maxVaultsPerWave ?? 8;
+  const compact = () => {
+    if (options.workKey) dedupeWork(queue, options.workKey);
+  };
 
   while (queue.length) {
     const timestamp = now();
@@ -86,6 +108,7 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
     }
     queue.length = 0;
     queue.push(...waiting);
+    compact();
     if (readyByVault.size === 0) {
       const gatedTimes = await Promise.all(
         waiting.map(async (item) => {
@@ -113,7 +136,9 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
       deferred.push(...items);
     }
     queue.push(...deferred);
+    compact();
     await mapPool(chosen, chosen.length || 1, process);
+    compact();
     await options.persist?.(queue);
   }
 }

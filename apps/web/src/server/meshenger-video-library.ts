@@ -15,7 +15,6 @@ import {
   createInventoryCompletenessTracker,
   type InventoryCompleteness,
   type InventoryCompletenessTracker,
-  inventoryCompletenessCopy,
 } from './video-space/completeness';
 import type {
   InventoryScanPhase,
@@ -46,7 +45,12 @@ import {
 } from './video-space/media-eligibility';
 import { collectPaginatedEnvelopes } from './video-space/pagination';
 import type { VideoSpaceAccessScope, VideoSpaceVisibility } from './video-space/visibility';
-import { type DeferredWork, drainFairVaultQueue } from './video-space/work-queue';
+import {
+  type DeferredWork,
+  dedupeWork,
+  drainFairVaultQueue,
+  upsertWork,
+} from './video-space/work-queue';
 import { parseW3dsFileUri } from './w3ds-official-file-client';
 
 const callSessionOntology = documentedOntologyId('call-recording');
@@ -364,6 +368,7 @@ export class MeshengerVideoLibrary {
     options: {
       scope: InventoryScope;
       refresh?: boolean;
+      drain?: boolean;
       onSnapshot: (
         library: MeshengerLibrary,
         phase: InventoryScanPhase,
@@ -384,14 +389,15 @@ export class MeshengerVideoLibrary {
     const ownVault = user.eVaultUri
       ? { ownerEName: eName, eVaultUri: httpUrl(user.eVaultUri) }
       : await this.resolveEVault(eName);
+    const drain = options.drain !== false;
     const counts = emptySourceCounts();
     if (options.scope === 'owned') {
-      return this.scanOwnedProgressive(eName, ownVault, counts, options.onSnapshot);
+      return this.scanOwnedProgressive(eName, ownVault, counts, options.onSnapshot, { drain });
     }
     if (options.scope === 'shared') {
-      return this.scanSharedProgressive(eName, ownVault, counts, options.onSnapshot);
+      return this.scanSharedProgressive(eName, ownVault, counts, options.onSnapshot, { drain });
     }
-    return this.scanCompleteProgressive(eName, ownVault, counts, options.onSnapshot);
+    return this.scanCompleteProgressive(eName, ownVault, counts, options.onSnapshot, { drain });
   }
 
   /**
@@ -516,11 +522,6 @@ export class MeshengerVideoLibrary {
     messages: MeshengerMessage[];
   }): MeshengerLibrary {
     const completenessState = input.completeness;
-    if (completenessState.expected > 0) {
-      console.info(
-        `video-space-inventory ${inventoryCompletenessCopy(completenessState)} unavailable=${completenessState.retryUnavailable} rejected=${completenessState.retryRejected} rate_limited=${completenessState.retryRateLimited}`,
-      );
-    }
     const catalogue = assembleVideoSpaceCatalogue({
       records: input.found,
       completeness: completenessState,
@@ -550,6 +551,7 @@ export class MeshengerVideoLibrary {
       phase: InventoryScanPhase,
       counts: InventorySourceCounts,
     ) => void,
+    options?: { drain?: boolean },
   ): Promise<MeshengerLibrary> {
     const accumulators: ProgressiveAccumulators = {
       completeness: createInventoryCompletenessTracker(),
@@ -562,6 +564,7 @@ export class MeshengerVideoLibrary {
       accumulators,
       emitDone: true,
       includeOwned: true,
+      drain: options?.drain !== false,
     });
   }
 
@@ -574,7 +577,7 @@ export class MeshengerVideoLibrary {
       phase: InventoryScanPhase,
       counts: InventorySourceCounts,
     ) => void,
-    options?: { accumulators?: ProgressiveAccumulators; emitDone?: boolean },
+    options?: { accumulators?: ProgressiveAccumulators; emitDone?: boolean; drain?: boolean },
   ): Promise<MeshengerLibrary> {
     const completeness =
       options?.accumulators?.completeness ?? createInventoryCompletenessTracker();
@@ -639,15 +642,19 @@ export class MeshengerVideoLibrary {
     type OwnedWork = DeferredWork & {
       type: 'owned-source';
       source: (typeof sources)[number];
+      ontologyId: string;
       after: string | null;
       retryAfterMs?: number;
     };
     const queue: OwnedWork[] = sources.map((source) => ({
       type: 'owned-source',
       source,
+      ontologyId: source.ontologyId,
       after: null,
       attempts: 0,
     }));
+
+    if (options?.drain === false) return snapshot('batch');
 
     await drainFairVaultQueue(
       queue,
@@ -685,6 +692,7 @@ export class MeshengerVideoLibrary {
           queue.push({
             type: 'owned-source',
             source: item.source,
+            ontologyId: item.source.ontologyId,
             after: page.value.endCursor,
             attempts: 0,
           });
@@ -699,6 +707,7 @@ export class MeshengerVideoLibrary {
         now: this.now,
         maxVaultsPerWave: 1,
         vaultNotBefore: (vault, timestamp) => this.jobStore.vaultNotBefore(vault, timestamp),
+        workKey: (item) => inventoryTaskKey(item, ownVault.ownerEName),
       },
     );
     const done = emitDone && completeness.snapshot().complete;
@@ -718,6 +727,7 @@ export class MeshengerVideoLibrary {
       accumulators?: ProgressiveAccumulators;
       emitDone?: boolean;
       includeOwned?: boolean;
+      drain?: boolean;
     },
   ): Promise<MeshengerLibrary> {
     const completeness =
@@ -999,9 +1009,9 @@ export class MeshengerVideoLibrary {
         updatedAt: this.now(),
         ...(terminal ? { completedAt: this.now() } : {}),
       });
-      for (const item of queue) {
+      const open = queue.map((item) => {
         const vaultKey = inventoryVaultKey(item, ownVault.ownerEName);
-        await this.jobStore.saveTask({
+        return {
           id: inventoryTaskKey(item, vaultKey),
           jobId,
           taskKey: inventoryTaskKey(item, vaultKey),
@@ -1013,11 +1023,12 @@ export class MeshengerVideoLibrary {
           cursorAfter: 'after' in item ? item.after : null,
           attempts: item.attempts,
           notBefore: item.notBefore ?? 0,
-          status: 'pending',
+          status: 'pending' as const,
           priority: inventoryWorkPriority(item.type),
           payload: item as unknown as Record<string, unknown>,
-        });
-      }
+        };
+      });
+      await this.jobStore.replaceOpenTasks(jobId, open);
     };
 
     const restoreStringSet = (value: unknown, target: Set<string>) => {
@@ -1114,6 +1125,14 @@ export class MeshengerVideoLibrary {
       for (const task of openTasks) queue.push(task.payload as unknown as SharedWork);
     } else {
       seedInitialQueue();
+    }
+    const workKey = (item: SharedWork) =>
+      inventoryTaskKey(item, inventoryVaultKey(item, ownVault.ownerEName));
+    dedupeWork(queue, workKey);
+
+    if (options?.drain === false) {
+      await persistCheckpoint();
+      return snapshot('batch');
     }
 
     const enqueueGroupMessages = (
@@ -2067,6 +2086,7 @@ export class MeshengerVideoLibrary {
           now: this.now,
           maxVaultsPerWave: sharedSpaceConcurrency,
           vaultNotBefore: (vault, timestamp) => this.jobStore.vaultNotBefore(vault, timestamp),
+          workKey,
           persist: async () => {
             await this.jobStore.heartbeatDrain(jobId, this.now());
             await persistCheckpoint();
@@ -2105,7 +2125,9 @@ export class MeshengerVideoLibrary {
       if (vaultKey) {
         void this.jobStore.setVaultGate(vaultKey, item.notBefore);
       }
-      queue.push(item);
+      upsertWork(queue, item, (existing) =>
+        inventoryTaskKey(existing, vaultKey ?? inventoryVaultKey(existing, '')),
+      );
       return;
     }
     completeness.failRetry(retryClassFromFailure(failure));

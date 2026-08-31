@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createMemoryInventoryJobStore } from './job-store';
-import { type DeferredWork, drainFairVaultQueue } from './work-queue';
+import { type DeferredWork, drainFairVaultQueue, upsertWork } from './work-queue';
 
 type Work = DeferredWork & {
   type: string;
@@ -145,5 +145,84 @@ describe('durable inventory checkpoints', () => {
     expect(await store.tryClaimDrain(job.id, 1_000)).toBe(false);
     await store.releaseDrain(job.id);
     expect(await store.tryClaimDrain(job.id, 2_000)).toBe(true);
+  });
+
+  it('replaces open tasks so completed cursors are not revived on resume', async () => {
+    const store = createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveTask({
+      id: 'old',
+      jobId: job.id,
+      taskKey: 'chats\u0000@viewer.w3id\u0000\u0000\u0000cursor-1',
+      kind: 'chats',
+      vaultKey: '@viewer.w3id',
+      cursorAfter: 'cursor-1',
+      attempts: 1,
+      notBefore: 0,
+      status: 'pending',
+      priority: 30,
+      payload: { type: 'chats', after: 'cursor-1', attempts: 1 },
+    });
+    await store.replaceOpenTasks(job.id, [
+      {
+        id: 'current',
+        jobId: job.id,
+        taskKey: 'chats\u0000@viewer.w3id\u0000\u0000\u0000cursor-2',
+        kind: 'chats',
+        vaultKey: '@viewer.w3id',
+        cursorAfter: 'cursor-2',
+        attempts: 0,
+        notBefore: 0,
+        status: 'pending',
+        priority: 30,
+        payload: { type: 'chats', after: 'cursor-2', attempts: 0 },
+      },
+    ]);
+    const open = await store.loadOpenTasks(job.id);
+    expect(open).toHaveLength(1);
+    expect(open[0]?.cursorAfter).toBe('cursor-2');
+    expect(open.some((task) => task.cursorAfter === 'cursor-1')).toBe(false);
+  });
+
+  it('keeps one queued copy when the same cursor is rate-limited three times', async () => {
+    let now = 1_000;
+    const keyOf = (item: Work) => `${item.type}\u0000${item.vaultKey}\u0000${item.after ?? ''}`;
+    const queue: Work[] = [
+      {
+        type: 'messages',
+        vaultKey: '@limited.w3id',
+        after: 'stay-here',
+        attempts: 0,
+        id: 'limited',
+      },
+    ];
+    const lengths: number[] = [];
+    let hits = 0;
+    await drainFairVaultQueue(
+      queue,
+      async (item) => {
+        hits += 1;
+        item.attempts += 1;
+        item.notBefore = now + 5;
+        upsertWork(queue, item, keyOf);
+        lengths.push(queue.length);
+        if (hits >= 3) queue.length = 0;
+      },
+      {
+        vaultKey: (item) => item.vaultKey,
+        priority: () => 60,
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+        maxWaitMs: 5,
+        workKey: keyOf,
+      },
+    );
+    expect(hits).toBe(3);
+    expect(Math.max(...lengths)).toBe(1);
   });
 });
