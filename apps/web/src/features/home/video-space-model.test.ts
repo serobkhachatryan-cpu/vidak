@@ -182,6 +182,33 @@ describe('video space home model', () => {
       '11 videos found · 7 of 7 spaces indexed · retrying 1 · 12 histories · 4 directs · 34 pages scanned',
     );
     expect(
+      libraryProgressCopy({
+        itemCount: 8,
+        shared: true,
+        discovery: 'refreshing',
+        completeness: {
+          indexed: 9,
+          expected: 12,
+          denied: 0,
+          missing: 0,
+          complete: false,
+          retryNeeded: false,
+          retryUnavailable: 0,
+          retryRejected: 0,
+          retryRateLimited: 0,
+          retrying: 3,
+          media: {
+            candidates: 20,
+            accepted: 8,
+            excludedNonVideo: 9,
+            unresolved: { missing_w3ds_file_uri: 2, resolver_denied: 1 },
+          },
+        },
+      }),
+    ).toBe(
+      '8 shared videos found · 9 of 12 spaces indexed · retrying 3 · 20 media records · 8 playable · 9 non-video · unresolved 2 missing_w3ds_file_uri, 1 resolver_denied',
+    );
+    expect(
       libraryDiscoveryBanner({
         discovery: 'refreshing',
         itemCount: 4,

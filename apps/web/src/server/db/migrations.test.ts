@@ -32,6 +32,10 @@ const requiredTables = [
   'video_preview_assets',
   'video_view_events',
   'user_preferences',
+  'video_space_inventory_jobs',
+  'video_space_inventory_tasks',
+  'video_space_inventory_items',
+  'video_space_vault_gates',
 ] as const;
 
 const requiredIndexes = [
@@ -99,6 +103,14 @@ const requiredIndexes = [
   'video_preview_assets_status_idx',
   'video_view_events_public_video_viewer_uidx',
   'video_view_events_video_id_idx',
+  'video_space_inventory_jobs_owner_uidx',
+  'video_space_inventory_jobs_status_idx',
+  'video_space_inventory_tasks_job_key_uidx',
+  'video_space_inventory_tasks_claim_idx',
+  'video_space_inventory_tasks_job_status_idx',
+  'video_space_inventory_tasks_vault_idx',
+  'video_space_inventory_items_job_key_uidx',
+  'video_space_inventory_items_job_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -140,7 +152,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(22);
+    expect(applied.rows).toHaveLength(23);
 
     const preferenceColumns = await client.query<{ column_name: string }>(
       `select column_name from information_schema.columns
@@ -388,6 +400,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(22);
+    expect(Number(applied.rows[0]?.count)).toBe(23);
   });
 });

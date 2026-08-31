@@ -11,6 +11,9 @@ export async function register(): Promise<void> {
   const { validateServerConfigAtStartup } = await import('./server/server-config');
   const config = validateServerConfigAtStartup();
 
+  const { startInventoryJobPump } = await import('./server/video-space/inventory-pump');
+  startInventoryJobPump();
+
   // This is deliberately opt-in and server-only. It creates/reuses Vidak's
   // platform eVault; it never changes the user eID authentication flow.
   if (config.w3ds?.platformEVault) {

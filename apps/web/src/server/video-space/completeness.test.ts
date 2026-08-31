@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   createInventoryCompletenessTracker,
   emptyInventoryCoverage,
+  emptyInventoryMediaCounts,
   inventoryCompletenessCopy,
 } from './completeness';
 
@@ -26,6 +27,7 @@ describe('inventory completeness', () => {
       retryRateLimited: 0,
       retrying: 0,
       coverage: emptyInventoryCoverage,
+      media: { ...emptyInventoryMediaCounts, unresolved: {} },
     });
     expect(inventoryCompletenessCopy(state)).toBe('1 of 2 shared spaces indexed; retry needed.');
     expect(inventoryCompletenessCopy(state)).not.toMatch(/@|[a-f0-9-]{8,}|group|chat|title/i);
@@ -53,6 +55,7 @@ describe('inventory completeness', () => {
       retryRateLimited: 0,
       retrying: 0,
       coverage: emptyInventoryCoverage,
+      media: { ...emptyInventoryMediaCounts, unresolved: {} },
     });
     expect(inventoryCompletenessCopy(state)).toBe(
       '1 of 3 shared spaces indexed; 1 denied by current access; 1 not found.',
@@ -125,5 +128,22 @@ describe('inventory completeness', () => {
       referenceGrants: 1,
       officialChatGrants: 1,
     });
+  });
+
+  it('counts candidate, accepted, excluded, and unresolved media without identifiers', () => {
+    const tracker = createInventoryCompletenessTracker();
+    tracker.recordCandidate();
+    tracker.recordCandidate();
+    tracker.recordCandidate();
+    tracker.recordAccepted();
+    tracker.recordExcludedNonVideo();
+    tracker.recordUnresolved('missing_w3ds_file_uri');
+    expect(tracker.snapshot().media).toEqual({
+      candidates: 3,
+      accepted: 1,
+      excludedNonVideo: 1,
+      unresolved: { missing_w3ds_file_uri: 1 },
+    });
+    expect(JSON.stringify(tracker.snapshot().media)).not.toMatch(/@|http|w3ds:\/\//i);
   });
 });

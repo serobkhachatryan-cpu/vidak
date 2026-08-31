@@ -115,6 +115,16 @@ export function libraryProgressCopy(input: {
     const pages = coveragePageTotal(coverage);
     if (pages > 0) parts.push(`${pages} pages scanned`);
   }
+  const media = completeness?.media;
+  if (media && (media.candidates > 0 || media.accepted > 0 || media.excludedNonVideo > 0)) {
+    parts.push(`${media.candidates} media records`);
+    parts.push(`${media.accepted} playable`);
+    if (media.excludedNonVideo > 0) parts.push(`${media.excludedNonVideo} non-video`);
+    const unresolvedParts = Object.entries(media.unresolved)
+      .filter(([, count]) => count > 0)
+      .map(([reason, count]) => `${count} ${reason}`);
+    if (unresolvedParts.length) parts.push(`unresolved ${unresolvedParts.join(', ')}`);
+  }
   return parts.join(' · ');
 }
 

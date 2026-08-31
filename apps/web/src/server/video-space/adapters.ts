@@ -1,5 +1,10 @@
 import { parseW3dsFileUri } from '../w3ds-official-file-client';
 import { documentedOntologyId } from './documented-sources';
+import {
+  classifyAuthorizedMedia,
+  constructW3dsFileUri,
+  documentedMediaFileUris,
+} from './media-eligibility';
 import type { VideoSpaceAccessScope } from './visibility';
 
 export type VideoSpaceKind = 'call-recording' | 'video-message' | 'file';
@@ -146,10 +151,16 @@ export function discoverW3dsFileVideos(
   const discovered: DiscoveredVideoRecord[] = [];
   for (const file of files) {
     if (file.ontology !== ontology && file.ontology !== 'w3ds-file-v1') continue;
+    const fileUri = constructW3dsFileUri(vaultOwnerEName, file.id);
+    if (!fileUri || referenced.has(fileUri)) continue;
     const contentType = optionalString(file.parsed.contentType);
-    if (!contentType?.toLowerCase().startsWith('video/')) continue;
-    const fileUri = `w3ds://file?id=${vaultOwnerEName}/${file.id}`;
-    if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
+    const decision = classifyAuthorizedMedia({
+      payload: { type: 'file', ...file.parsed, mediaUri: fileUri },
+      vaultOwnerEName,
+      ...(contentType ? { resolvedContentType: contentType } : {}),
+      resolvedOntology: file.ontology,
+    });
+    if (decision.status !== 'accept') continue;
     const accessScope = scopeForRecord({
       viewerEName,
       payload: file.parsed,
@@ -184,14 +195,19 @@ export function discoverFileRecordVideos(
   const discovered: DiscoveredVideoRecord[] = [];
   for (const file of files) {
     if (file.ontology && file.ontology !== ontology) continue;
-    const contentType =
-      optionalString(file.parsed.contentType) ?? optionalString(file.parsed.mimeType);
-    if (!contentType?.toLowerCase().startsWith('video/')) continue;
     const fileUri =
       optionalW3dsFileUri(file.parsed.uri) ??
       optionalW3dsFileUri(file.parsed.url) ??
-      `w3ds://file?id=${vaultOwnerEName}/${file.id}`;
-    if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
+      constructW3dsFileUri(vaultOwnerEName, file.id);
+    if (!fileUri || !parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
+    const mime = optionalString(file.parsed.contentType) ?? optionalString(file.parsed.mimeType);
+    const decision = classifyAuthorizedMedia({
+      payload: { type: 'file', ...file.parsed, mediaUri: fileUri },
+      vaultOwnerEName,
+      ...(mime ? { resolvedContentType: mime } : {}),
+      resolvedOntology: file.ontology || ontology,
+    });
+    if (decision.status !== 'accept') continue;
     const accessScope = scopeForRecord({
       viewerEName,
       payload: file.parsed,
@@ -267,8 +283,12 @@ export function discoverVideoMessageVideos(
 ): DiscoveredVideoRecord[] {
   const discovered: DiscoveredVideoRecord[] = [];
   for (const message of messages) {
-    const fileUris = messageVideoFileUris(message.parsed);
-    if (!fileUris.length) continue;
+    const decision = classifyAuthorizedMedia({
+      payload: message.parsed,
+      ...(sourceSpaceKey ? { vaultOwnerEName: sourceSpaceKey } : {}),
+    });
+    if (decision.status !== 'accept') continue;
+    const fileUris = [decision.fileUri];
     for (const fileUri of fileUris) referenced.add(fileUri);
     const file = record(message.parsed.file);
     const shape = optionalString(message.parsed.shape) ?? optionalString(message.parsed.type);
@@ -327,53 +347,20 @@ export function orderedRecordingFileUris(recording: Record<string, unknown>): st
  * Official Message.type is text | image | file | system with mediaUrl on
  * image/file. This repo also already stores video/circle on the same ontology.
  */
-export function messageVideoFileUris(message: Record<string, unknown>): string[] {
-  if (!isDocumentedVideoAttachment(message)) return [];
-
-  const file = record(message.file);
-  const candidates = [
-    ...asArray(message.mediaSegments),
-    message.fileId,
-    message.mediaUri,
-    message.mediaUrl,
-    file?.uri,
-    file?.fileUri,
-    file?.url,
-  ];
-  const unique = new Set<string>();
-  for (const value of candidates) {
-    const fileUri = optionalW3dsFileUri(value);
-    if (fileUri) unique.add(fileUri);
-  }
-  return [...unique];
+export function messageVideoFileUris(
+  message: Record<string, unknown>,
+  vaultOwnerEName?: string,
+): string[] {
+  const decision = classifyAuthorizedMedia({
+    payload: message,
+    ...(vaultOwnerEName ? { vaultOwnerEName } : {}),
+  });
+  if (decision.status === 'accept' || decision.status === 'resolve') return [decision.fileUri];
+  return documentedMediaFileUris(message, vaultOwnerEName);
 }
 
 export function isDocumentedVideoAttachment(message: Record<string, unknown>): boolean {
-  const type = optionalString(message.type)?.toLowerCase();
-  const file = record(message.file);
-  const contentType =
-    optionalString(file?.contentType) ??
-    optionalString(file?.mimeType) ??
-    optionalString(message.contentType) ??
-    optionalString(message.mimeType);
-  const mime = contentType?.toLowerCase();
-  const filename = attachmentFilename(message);
-  if (isExplicitlyNonVideoMime(mime)) return false;
-  if (filename && nonVideoFilenamePattern.test(filename)) return false;
-  if (type === 'video' || type === 'circle') return true;
-  if (mime?.startsWith('video/') === true) return true;
-  if (type === 'file' && filename && videoFilenamePattern.test(filename)) return true;
-  return false;
-}
-
-function attachmentFilename(message: Record<string, unknown>): string | undefined {
-  const file = record(message.file);
-  return (
-    optionalString(file?.filename) ??
-    optionalString(file?.name) ??
-    optionalString(message.filename) ??
-    optionalString(message.name)
-  );
+  return classifyAuthorizedMedia({ payload: message }).status === 'accept';
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -397,29 +384,4 @@ function asArray(value: unknown): unknown[] {
 function optionalW3dsFileUri(value: unknown): string | undefined {
   const fileUri = optionalString(value);
   return fileUri && parseW3dsFileUri(fileUri) ? fileUri : undefined;
-}
-
-const videoFilenamePattern = /\.(mp4|webm|mov|m4v|mkv|ogv|avi)(?:$|\?)/i;
-const nonVideoFilenamePattern =
-  /\.(zip|pdf|docx?|xlsx?|pptx?|txt|csv|json|xml|rar|7z|gz|tar)(?:$|\?)/i;
-
-function isExplicitlyNonVideoMime(mime: string | undefined): boolean {
-  if (!mime) return false;
-  if (mime.startsWith('video/')) return false;
-  if (
-    mime.startsWith('image/') ||
-    mime.startsWith('audio/') ||
-    mime.startsWith('text/') ||
-    mime === 'application/pdf' ||
-    mime === 'application/zip' ||
-    mime === 'application/x-zip-compressed' ||
-    mime === 'application/x-7z-compressed' ||
-    mime === 'application/gzip' ||
-    mime === 'application/x-tar' ||
-    mime.startsWith('application/msword') ||
-    mime.startsWith('application/vnd.')
-  ) {
-    return true;
-  }
-  return mime.startsWith('application/') || mime.startsWith('multipart/');
 }

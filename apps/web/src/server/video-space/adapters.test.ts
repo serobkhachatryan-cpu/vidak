@@ -203,6 +203,25 @@ describe('video space adapters', () => {
     ).toEqual([]);
   });
 
+  it('does not drop a type=file video that still needs documented metaEnvelope resolution', () => {
+    expect(
+      discoverVideoMessageVideos(
+        [
+          {
+            id: 'bare-file',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'file',
+              mediaUrl: fileUri,
+            },
+          },
+        ],
+        new Set(),
+        viewer,
+      ),
+    ).toEqual([]);
+  });
+
   it('does not inventory an official image or pdf attachment as video', () => {
     expect(
       discoverVideoMessageVideos(

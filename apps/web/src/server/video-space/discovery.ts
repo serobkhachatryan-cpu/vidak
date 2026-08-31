@@ -79,5 +79,22 @@ export function formatInventoryMetricsLog(input: {
     `pages_w3ds_file=${coverage?.w3dsFilePages ?? 0}`,
     `pages_manifest=${coverage?.groupManifestPages ?? 0}`,
     `pages_call=${coverage?.callSessionPages ?? 0}`,
+    `media_candidates=${input.completeness.media?.candidates ?? 0}`,
+    `media_accepted=${input.completeness.media?.accepted ?? 0}`,
+    `media_excluded_non_video=${input.completeness.media?.excludedNonVideo ?? 0}`,
+    `media_unresolved=${unresolvedTotal(input.completeness.media?.unresolved)}`,
+    ...unresolvedReasonParts(input.completeness.media?.unresolved),
   ].join(' ');
+}
+
+function unresolvedTotal(unresolved: Record<string, number> | undefined): number {
+  if (!unresolved) return 0;
+  return Object.values(unresolved).reduce((sum, count) => sum + count, 0);
+}
+
+function unresolvedReasonParts(unresolved: Record<string, number> | undefined): string[] {
+  if (!unresolved) return [];
+  return Object.entries(unresolved)
+    .filter(([, count]) => count > 0)
+    .map(([reason, count]) => `unresolved_${reason}=${count}`);
 }
