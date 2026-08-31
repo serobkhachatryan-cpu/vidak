@@ -195,6 +195,8 @@ export function createInventoryCompletenessTracker() {
     /** The work queue is empty; remaining space gaps are terminal, not pending. */
     markScanFinished() {
       scanFinished = true;
+      retrying = 0;
+      retryNeeded = false;
     },
     hydrate(state: InventoryCompleteness) {
       expected = state.expected;
