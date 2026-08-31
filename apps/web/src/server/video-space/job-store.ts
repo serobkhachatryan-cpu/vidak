@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { and, eq, isNull, lte, or } from 'drizzle-orm';
-import { getW3dsDatabase } from '../db/client';
+import { getW3dsDatabase, type W3dsDatabase } from '../db/client';
 import {
   type VideoSpaceInventoryJobStatus,
   type VideoSpaceInventoryTaskStatus,
@@ -323,6 +323,44 @@ function taskFromRow(row: typeof videoSpaceInventoryTasks.$inferSelect): Persist
   };
 }
 
+async function upsertInventoryTask(
+  executor: Pick<W3dsDatabase, 'insert'>,
+  task: PersistedInventoryTask,
+): Promise<void> {
+  await executor
+    .insert(videoSpaceInventoryTasks)
+    .values({
+      id: task.id,
+      jobId: task.jobId,
+      taskKey: task.taskKey,
+      kind: task.kind,
+      vaultKey: task.vaultKey,
+      ontologyId: task.ontologyId,
+      cursorAfter: task.cursorAfter,
+      attempts: task.attempts,
+      notBefore: new Date(task.notBefore),
+      status: task.status,
+      priority: task.priority,
+      payload: task.payload,
+      lockedUntil: task.lockedUntil ? new Date(task.lockedUntil) : null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [videoSpaceInventoryTasks.jobId, videoSpaceInventoryTasks.taskKey],
+      set: {
+        cursorAfter: task.cursorAfter,
+        attempts: task.attempts,
+        notBefore: new Date(task.notBefore),
+        status: task.status,
+        priority: task.priority,
+        payload: task.payload,
+        lockedUntil: task.lockedUntil ? new Date(task.lockedUntil) : null,
+        updatedAt: new Date(),
+      },
+    });
+}
+
 export function createDrizzleInventoryJobStore(): InventoryJobStore {
   const db = () => getW3dsDatabase();
 
@@ -499,52 +537,23 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
       return rows.map(taskFromRow);
     },
     async saveTask(task) {
-      await db()
-        .insert(videoSpaceInventoryTasks)
-        .values({
-          id: task.id,
-          jobId: task.jobId,
-          taskKey: task.taskKey,
-          kind: task.kind,
-          vaultKey: task.vaultKey,
-          ontologyId: task.ontologyId,
-          cursorAfter: task.cursorAfter,
-          attempts: task.attempts,
-          notBefore: new Date(task.notBefore),
-          status: task.status,
-          priority: task.priority,
-          payload: task.payload,
-          lockedUntil: task.lockedUntil ? new Date(task.lockedUntil) : null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        })
-        .onConflictDoUpdate({
-          target: [videoSpaceInventoryTasks.jobId, videoSpaceInventoryTasks.taskKey],
-          set: {
-            cursorAfter: task.cursorAfter,
-            attempts: task.attempts,
-            notBefore: new Date(task.notBefore),
-            status: task.status,
-            priority: task.priority,
-            payload: task.payload,
-            lockedUntil: task.lockedUntil ? new Date(task.lockedUntil) : null,
-            updatedAt: new Date(),
-          },
-        });
+      await upsertInventoryTask(db(), task);
     },
     async replaceOpenTasks(jobId, next) {
-      await db()
-        .delete(videoSpaceInventoryTasks)
-        .where(
-          and(
-            eq(videoSpaceInventoryTasks.jobId, jobId),
-            or(
-              eq(videoSpaceInventoryTasks.status, 'pending'),
-              eq(videoSpaceInventoryTasks.status, 'in_progress'),
+      await db().transaction(async (tx) => {
+        await tx
+          .delete(videoSpaceInventoryTasks)
+          .where(
+            and(
+              eq(videoSpaceInventoryTasks.jobId, jobId),
+              or(
+                eq(videoSpaceInventoryTasks.status, 'pending'),
+                eq(videoSpaceInventoryTasks.status, 'in_progress'),
+              ),
             ),
-          ),
-        );
-      for (const task of next) await this.saveTask(task);
+          );
+        for (const task of next) await upsertInventoryTask(tx, task);
+      });
     },
     async recoverStaleLocks(now, stale = staleLockMs) {
       const cutoff = new Date(now - stale);

@@ -54,6 +54,13 @@ export function inventoryVaultKey(item: object, ownVaultKey: string): string {
   return ownVaultKey;
 }
 
+/** Unit separator: Postgres text rejects NUL (`\\u0000`) bytes. */
+const taskKeySeparator = '\u001f';
+
+function taskKeySegment(value: string): string {
+  return value.replaceAll('\u0000', '').replaceAll(taskKeySeparator, ' ');
+}
+
 export function inventoryTaskKey(item: object, vaultKey: string): string {
   const record = item as Record<string, unknown>;
   const type = typeof record.type === 'string' ? record.type : '';
@@ -62,7 +69,9 @@ export function inventoryTaskKey(item: object, vaultKey: string): string {
   const chatId = typeof record.chatId === 'string' ? record.chatId : '';
   const fileUri = typeof record.fileUri === 'string' ? record.fileUri : '';
   const envelopeId = typeof record.envelopeId === 'string' ? record.envelopeId : '';
-  return [type, vaultKey, ontologyId, chatId, after ?? '', fileUri || envelopeId].join('\u0000');
+  return [type, vaultKey, ontologyId, chatId, after ?? '', fileUri || envelopeId]
+    .map((part) => taskKeySegment(String(part)))
+    .join(taskKeySeparator);
 }
 
 export type InventoryWork = DeferredWork & { type: string };

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { inventoryTaskKey } from './inventory-schedule';
 import { createMemoryInventoryJobStore } from './job-store';
 import { type DeferredWork, drainFairVaultQueue, upsertWork } from './work-queue';
 
@@ -224,5 +225,20 @@ describe('durable inventory checkpoints', () => {
     );
     expect(hits).toBe(3);
     expect(Math.max(...lengths)).toBe(1);
+  });
+
+  it('builds postgres-safe task keys without NUL bytes', () => {
+    const key = inventoryTaskKey(
+      {
+        type: 'resolve-media',
+        after: 'cursor-1',
+        ontologyId: 'file',
+        chatId: 'chat-1',
+        fileUri: 'w3ds://file?id=@owner.w3id/abc',
+      },
+      '@vault.w3id',
+    );
+    expect(key.includes('\u0000')).toBe(false);
+    expect(key.split('\u001f')).toHaveLength(6);
   });
 });

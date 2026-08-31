@@ -3148,6 +3148,9 @@ describe('Meshenger video library', () => {
       expect(Array.isArray(seeded?.ledger.queue) ? seeded.ledger.queue.length : 0).toBeGreaterThan(
         0,
       );
+      const seededOpen = seeded ? await store.loadOpenTasks(seeded.id) : [];
+      expect(seededOpen.length).toBeGreaterThan(0);
+      expect(seededOpen.every((task) => !task.taskKey.includes('\u0000'))).toBe(true);
 
       await library.scanLibrary(
         { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
@@ -3203,6 +3206,42 @@ describe('Meshenger video library', () => {
       expect(job).toBeDefined();
       const open = job ? await store.loadOpenTasks(job.id) : [];
       expect(open.filter((task) => task.kind === 'chats')).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps draining when open-task persistence fails', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    store.replaceOpenTasks = async () => {
+      throw new Error('invalid byte sequence for encoding "UTF8": 0x00');
+    };
+    let chatPages = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const raw = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (raw.includes('550e8400-e29b-41d4-a716-446655440003')) chatPages += 1;
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', drain: true, onSnapshot: () => undefined },
+      );
+      expect(chatPages).toBeGreaterThan(0);
     } finally {
       vi.unstubAllGlobals();
     }
