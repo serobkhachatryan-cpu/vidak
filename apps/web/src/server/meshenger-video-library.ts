@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import 'server-only';
 
 import type { AuthUser } from '@w3ds/auth';
@@ -972,47 +972,57 @@ export class MeshengerVideoLibrary {
         conversations,
         messages: messageRecords,
       });
-      await this.jobStore.saveJob({
-        id: jobId,
-        ownerEName: eName,
-        ownerEVaultUri: ownVault.eVaultUri,
-        status: terminal ? 'complete' : 'running',
-        completeness: snapshotState,
-        ledger: {
-          queue,
-          found,
-          drainFinished: terminal,
-          remaining: [...remaining],
-          settled: [...settled],
-          failedSpaces: [...failedSpaces],
-          openedGroups: [...openedGroups],
-          openedDirects: [...openedDirects],
-          scheduledGroupChats: [...scheduledGroupChats].map(([key, value]) => [key, [...value]]),
-          scheduledDirectChats: [...scheduledDirectChats].map(([key, value]) => [key, [...value]]),
-          scheduledAuthors: [...scheduledAuthors],
-          scheduledGroupFiles: [...scheduledGroupFiles],
-          scheduledGroupHistory: [...scheduledGroupHistory],
-          scheduledDirectHistory: [...scheduledDirectHistory],
-          referenced: [...referenced],
-          historicalAuthors: [...historicalAuthors].map(([key, value]) => [key, [...value]]),
-          referencedGroupChats: [...referencedGroupChats].map(([key, value]) => [key, [...value]]),
-          referencedDirectChats: [...referencedDirectChats].map(([key, value]) => [
-            key,
-            [...value],
-          ]),
-        },
-        items: library.items,
-        conversations: [...conversations],
-        messages: [...messageRecords],
-        sourceCounts: { ...counts },
-        createdAt: jobCreatedAt,
-        updatedAt: this.now(),
-        ...(terminal ? { completedAt: this.now() } : {}),
-      });
+      try {
+        await this.jobStore.saveJob({
+          id: jobId,
+          ownerEName: eName,
+          ownerEVaultUri: ownVault.eVaultUri,
+          status: terminal ? 'complete' : 'running',
+          completeness: snapshotState,
+          ledger: {
+            queue,
+            found,
+            drainFinished: terminal,
+            remaining: [...remaining],
+            settled: [...settled],
+            failedSpaces: [...failedSpaces],
+            openedGroups: [...openedGroups],
+            openedDirects: [...openedDirects],
+            scheduledGroupChats: [...scheduledGroupChats].map(([key, value]) => [key, [...value]]),
+            scheduledDirectChats: [...scheduledDirectChats].map(([key, value]) => [
+              key,
+              [...value],
+            ]),
+            scheduledAuthors: [...scheduledAuthors],
+            scheduledGroupFiles: [...scheduledGroupFiles],
+            scheduledGroupHistory: [...scheduledGroupHistory],
+            scheduledDirectHistory: [...scheduledDirectHistory],
+            referenced: [...referenced],
+            historicalAuthors: [...historicalAuthors].map(([key, value]) => [key, [...value]]),
+            referencedGroupChats: [...referencedGroupChats].map(([key, value]) => [
+              key,
+              [...value],
+            ]),
+            referencedDirectChats: [...referencedDirectChats].map(([key, value]) => [
+              key,
+              [...value],
+            ]),
+          },
+          items: library.items,
+          conversations: [...conversations],
+          messages: [...messageRecords],
+          sourceCounts: { ...counts },
+          createdAt: jobCreatedAt,
+          updatedAt: this.now(),
+          ...(terminal ? { completedAt: this.now() } : {}),
+        });
+      } catch {
+        // Keep draining due work even when the job row cannot be written.
+      }
       const open = queue.map((item) => {
         const vaultKey = inventoryVaultKey(item, ownVault.ownerEName);
         return {
-          id: inventoryTaskKey(item, vaultKey),
+          id: randomUUID(),
           jobId,
           taskKey: inventoryTaskKey(item, vaultKey),
           kind: item.type,
@@ -1028,7 +1038,12 @@ export class MeshengerVideoLibrary {
           payload: item as unknown as Record<string, unknown>,
         };
       });
-      await this.jobStore.replaceOpenTasks(jobId, open);
+      try {
+        await this.jobStore.replaceOpenTasks(jobId, open);
+      } catch {
+        // Ledger.queue still has the work. Do not abort drain because task
+        // rows failed (Postgres rejects NUL bytes in text, for example).
+      }
     };
 
     const restoreStringSet = (value: unknown, target: Set<string>) => {
@@ -2088,8 +2103,12 @@ export class MeshengerVideoLibrary {
           vaultNotBefore: (vault, timestamp) => this.jobStore.vaultNotBefore(vault, timestamp),
           workKey,
           persist: async () => {
-            await this.jobStore.heartbeatDrain(jobId, this.now());
-            await persistCheckpoint();
+            try {
+              await this.jobStore.heartbeatDrain(jobId, this.now());
+              await persistCheckpoint();
+            } catch {
+              // Keep draining due work; the next pump retries persistence.
+            }
           },
         },
       );
