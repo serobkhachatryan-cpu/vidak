@@ -61,7 +61,8 @@ export function inventoryTaskKey(item: object, vaultKey: string): string {
   const ontologyId = typeof record.ontologyId === 'string' ? record.ontologyId : '';
   const chatId = typeof record.chatId === 'string' ? record.chatId : '';
   const fileUri = typeof record.fileUri === 'string' ? record.fileUri : '';
-  return [type, vaultKey, ontologyId, chatId, after ?? '', fileUri].join('\u0000');
+  const envelopeId = typeof record.envelopeId === 'string' ? record.envelopeId : '';
+  return [type, vaultKey, ontologyId, chatId, after ?? '', fileUri || envelopeId].join('\u0000');
 }
 
 export type InventoryWork = DeferredWork & { type: string };

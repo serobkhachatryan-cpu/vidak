@@ -2870,4 +2870,190 @@ describe('Meshenger video library', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('inventories type=file media referenced only through documented envelopes, not parsed w3ds://file', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const body = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (body.includes('MeshengerVideoEnvelope') || body.includes('metaEnvelope(id')) {
+          return json({
+            data: {
+              metaEnvelope: {
+                id: 'envelope-clip',
+                ontology: 'w3ds-file-v1',
+                parsed: { contentType: 'video/mp4' },
+                envelopes: [{ fieldKey: 'contentType', value: 'video/mp4', valueType: 'string' }],
+              },
+            },
+          });
+        }
+        if (body.includes('550e8400-e29b-41d4-a716-446655440004')) {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'file-message-envelopes',
+                      ontology: '550e8400-e29b-41d4-a716-446655440004',
+                      parsed: { type: 'file' },
+                      envelopes: [
+                        {
+                          fieldKey: 'mediaUrl',
+                          value: 'w3ds://file?id=@person.w3id/envelope-clip',
+                          valueType: 'string',
+                        },
+                      ],
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      const result = await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', onSnapshot: () => undefined },
+      );
+      expect(result.items.some((item) => item.kind === 'video-message')).toBe(true);
+      expect(result.completeness.media?.accepted).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('resumes the exact unfinished chats cursor instead of restarting that ontology', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'running',
+      ledger: {
+        queue: [{ type: 'chats', after: 'cursor-chat-2', attempts: 0 }],
+        drainFinished: false,
+      },
+    });
+    const afterValues: Array<string | null> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const raw = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (!raw.includes('{'))
+          return json({
+            data: {
+              metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
+            },
+          });
+        const body = JSON.parse(raw) as {
+          variables?: { ontologyId?: string; after?: string | null };
+        };
+        if (body.variables?.ontologyId === '550e8400-e29b-41d4-a716-446655440003') {
+          afterValues.push(body.variables.after ?? null);
+        }
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', onSnapshot: () => undefined },
+      );
+      expect(afterValues).toContain('cursor-chat-2');
+      expect(afterValues).not.toContain(null);
+      const finished = await store.getByOwner('@person.w3id');
+      expect(finished?.ledger.drainFinished).toBe(true);
+      expect(finished?.status).toBe('complete');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not treat a complete row without drainFinished as a finished inventory', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: {
+        indexed: 0,
+        expected: 0,
+        denied: 0,
+        missing: 0,
+        failed: 0,
+        complete: true,
+        retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
+        retrying: 0,
+      },
+      ledger: { queue: [] },
+    });
+    let chatPages = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const raw = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (raw.includes('550e8400-e29b-41d4-a716-446655440003')) chatPages += 1;
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', onSnapshot: () => undefined },
+      );
+      expect(chatPages).toBeGreaterThan(0);
+      const finished = await store.getByOwner('@person.w3id');
+      expect(finished?.ledger.drainFinished).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

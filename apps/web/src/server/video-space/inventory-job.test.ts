@@ -134,4 +134,16 @@ describe('durable inventory checkpoints', () => {
       seen.indexOf('@limited.w3id:stay-here:1'),
     );
   });
+
+  it('claims one drain lock so a second worker observes instead of reseeding', async () => {
+    const store = createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    expect(await store.tryClaimDrain(job.id, 1_000)).toBe(true);
+    expect(await store.tryClaimDrain(job.id, 1_000)).toBe(false);
+    await store.releaseDrain(job.id);
+    expect(await store.tryClaimDrain(job.id, 2_000)).toBe(true);
+  });
 });

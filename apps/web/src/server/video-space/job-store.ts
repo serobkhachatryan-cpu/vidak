@@ -99,6 +99,15 @@ export interface InventoryJobStore {
   vaultNotBefore(vaultKey: string, now: number): Promise<number>;
   setVaultGate(vaultKey: string, notBefore: number, inflightUntil?: number): Promise<void>;
   clearVaultInflight(vaultKey: string): Promise<void>;
+  tryClaimDrain(jobId: string, now: number, ttlMs?: number): Promise<boolean>;
+  heartbeatDrain(jobId: string, now: number, ttlMs?: number): Promise<void>;
+  releaseDrain(jobId: string): Promise<void>;
+}
+
+const drainLockTtlMs = 45_000;
+
+export function inventoryDrainGateKey(jobId: string): string {
+  return `inventory-drain:${jobId}`;
 }
 
 const staleLockMs = 60_000;
@@ -248,6 +257,21 @@ export function createMemoryInventoryJobStore(): InventoryJobStore {
       const previous = gates.get(vaultKey);
       if (!previous) return;
       gates.set(vaultKey, { notBefore: previous.notBefore });
+    },
+    async tryClaimDrain(jobId, now, ttlMs = drainLockTtlMs) {
+      const key = inventoryDrainGateKey(jobId);
+      const gate = gates.get(key);
+      if ((gate?.inflightUntil ?? 0) > now) return false;
+      gates.set(key, { notBefore: gate?.notBefore ?? 0, inflightUntil: now + ttlMs });
+      return true;
+    },
+    async heartbeatDrain(jobId, now, ttlMs = drainLockTtlMs) {
+      const key = inventoryDrainGateKey(jobId);
+      const gate = gates.get(key);
+      gates.set(key, { notBefore: gate?.notBefore ?? 0, inflightUntil: now + ttlMs });
+    },
+    async releaseDrain(jobId) {
+      await this.clearVaultInflight(inventoryDrainGateKey(jobId));
     },
   };
 }
@@ -557,6 +581,18 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
         .update(videoSpaceVaultGates)
         .set({ inflightUntil: null, updatedAt: new Date() })
         .where(eq(videoSpaceVaultGates.vaultKey, vaultKey));
+    },
+    async tryClaimDrain(jobId, now, ttlMs = drainLockTtlMs) {
+      const gated = await this.vaultNotBefore(inventoryDrainGateKey(jobId), now);
+      if (gated === Number.POSITIVE_INFINITY) return false;
+      await this.setVaultGate(inventoryDrainGateKey(jobId), 0, now + ttlMs);
+      return true;
+    },
+    async heartbeatDrain(jobId, now, ttlMs = drainLockTtlMs) {
+      await this.setVaultGate(inventoryDrainGateKey(jobId), 0, now + ttlMs);
+    },
+    async releaseDrain(jobId) {
+      await this.clearVaultInflight(inventoryDrainGateKey(jobId));
     },
   };
 }

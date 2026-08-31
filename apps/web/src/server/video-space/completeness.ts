@@ -129,6 +129,7 @@ export function createInventoryCompletenessTracker() {
   let retryRejected = 0;
   let retryRateLimited = 0;
   let retrying = 0;
+  let scanFinished = false;
   const coverage: InventoryCoverage = { ...emptyInventoryCoverage };
   const media: InventoryMediaCounts = { ...emptyInventoryMediaCounts, unresolved: {} };
 
@@ -191,6 +192,10 @@ export function createInventoryCompletenessTracker() {
     recordUnresolved(reason: InventoryUnresolvedReason) {
       media.unresolved[reason] = (media.unresolved[reason] ?? 0) + 1;
     },
+    /** The work queue is empty; remaining space gaps are terminal, not pending. */
+    markScanFinished() {
+      scanFinished = true;
+    },
     hydrate(state: InventoryCompleteness) {
       expected = state.expected;
       indexed = state.indexed;
@@ -212,7 +217,9 @@ export function createInventoryCompletenessTracker() {
     },
     snapshot(): InventoryCompleteness {
       const classified = indexed + denied + missing + failed;
-      const complete = classified === expected && retrying === 0 && !retryNeeded;
+      const complete = scanFinished
+        ? retrying === 0
+        : classified === expected && retrying === 0 && !retryNeeded;
       return {
         indexed,
         expected,
@@ -220,7 +227,7 @@ export function createInventoryCompletenessTracker() {
         missing,
         failed,
         complete,
-        retryNeeded: retryNeeded || classified + retrying < expected,
+        retryNeeded: scanFinished ? false : retryNeeded || classified + retrying < expected,
         retryUnavailable,
         retryRejected,
         retryRateLimited,

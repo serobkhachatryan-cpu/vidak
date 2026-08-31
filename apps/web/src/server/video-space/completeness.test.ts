@@ -146,4 +146,14 @@ describe('inventory completeness', () => {
     });
     expect(JSON.stringify(tracker.snapshot().media)).not.toMatch(/@|http|w3ds:\/\//i);
   });
+
+  it('becomes terminal only after the scan queue is finished, even when no spaces were expected yet', () => {
+    const tracker = createInventoryCompletenessTracker();
+    expect(tracker.snapshot().complete).toBe(true);
+    tracker.markRetry();
+    expect(tracker.snapshot().complete).toBe(false);
+    tracker.markScanFinished();
+    expect(tracker.snapshot().complete).toBe(true);
+    expect(tracker.snapshot().retryNeeded).toBe(false);
+  });
 });
