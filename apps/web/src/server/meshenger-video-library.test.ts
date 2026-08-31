@@ -3113,4 +3113,98 @@ describe('Meshenger video library', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('keeps paging after an HTTP hydrate when only drain continues', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    let chatPages = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const raw = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (raw.includes('550e8400-e29b-41d4-a716-446655440003')) chatPages += 1;
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      const library = createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      );
+      await library.scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', drain: false, onSnapshot: () => undefined },
+      );
+      expect(chatPages).toBe(0);
+      const seeded = await store.getByOwner('@person.w3id');
+      expect(seeded?.status).toBe('running');
+      expect(Array.isArray(seeded?.ledger.queue) ? seeded.ledger.queue.length : 0).toBeGreaterThan(
+        0,
+      );
+
+      await library.scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', drain: true, onSnapshot: () => undefined },
+      );
+      expect(chatPages).toBeGreaterThan(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not grow retries when the same chats cursor is rate-limited three times', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const chatOntology = '550e8400-e29b-41d4-a716-446655440003';
+    let chatHits = 0;
+    let maxRetrying = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init: RequestInit) => {
+        const raw = String(init.body ?? '');
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        if (raw.includes(chatOntology)) {
+          chatHits += 1;
+          if (chatHits <= 3) return rateLimited('0');
+        }
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      const result = await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        {
+          scope: 'all',
+          onSnapshot: (library) => {
+            maxRetrying = Math.max(maxRetrying, library.completeness.retrying ?? 0);
+          },
+        },
+      );
+      expect(chatHits).toBe(4);
+      expect(maxRetrying).toBe(1);
+      expect(result.completeness.retrying).toBe(0);
+      const job = await store.getByOwner('@person.w3id');
+      expect(job).toBeDefined();
+      const open = job ? await store.loadOpenTasks(job.id) : [];
+      expect(open.filter((task) => task.kind === 'chats')).toHaveLength(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });

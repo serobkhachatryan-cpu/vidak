@@ -95,6 +95,7 @@ export interface InventoryJobStore {
   ): Promise<boolean>;
   loadOpenTasks(jobId: string): Promise<PersistedInventoryTask[]>;
   saveTask(task: PersistedInventoryTask): Promise<void>;
+  replaceOpenTasks(jobId: string, tasks: PersistedInventoryTask[]): Promise<void>;
   recoverStaleLocks(now: number, staleMs?: number): Promise<void>;
   vaultNotBefore(vaultKey: string, now: number): Promise<number>;
   setVaultGate(vaultKey: string, notBefore: number, inflightUntil?: number): Promise<void>;
@@ -223,6 +224,9 @@ export function createMemoryInventoryJobStore(): InventoryJobStore {
       const index = list.findIndex((item) => item.taskKey === task.taskKey);
       if (index === -1) list.push(cloneTask(task));
       else list[index] = cloneTask(task);
+    },
+    async replaceOpenTasks(jobId, next) {
+      tasks.set(jobId, next.map(cloneTask));
     },
     async recoverStaleLocks(now, staleMs = staleLockMs) {
       for (const list of tasks.values()) {
@@ -527,6 +531,20 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
             updatedAt: new Date(),
           },
         });
+    },
+    async replaceOpenTasks(jobId, next) {
+      await db()
+        .delete(videoSpaceInventoryTasks)
+        .where(
+          and(
+            eq(videoSpaceInventoryTasks.jobId, jobId),
+            or(
+              eq(videoSpaceInventoryTasks.status, 'pending'),
+              eq(videoSpaceInventoryTasks.status, 'in_progress'),
+            ),
+          ),
+        );
+      for (const task of next) await this.saveTask(task);
     },
     async recoverStaleLocks(now, stale = staleLockMs) {
       const cutoff = new Date(now - stale);

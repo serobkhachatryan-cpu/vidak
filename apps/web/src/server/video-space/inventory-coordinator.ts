@@ -41,6 +41,8 @@ export interface InventoryScanner {
     user: Pick<AuthUser, 'eName' | 'eVaultUri'>,
     options: {
       scope: InventoryScope;
+      refresh?: boolean;
+      drain?: boolean;
       onSnapshot: (
         library: MeshengerLibrary,
         phase: InventoryScanPhase,
@@ -87,6 +89,7 @@ export function createInventoryCoordinator(options?: {
   const createScanner = options?.createScanner ?? (() => createMeshengerVideoLibrary());
   const entries = new Map<string, CacheEntry>();
   let scanner: InventoryScanner | undefined;
+  let pumpChain: Promise<void> = Promise.resolve();
 
   function getScanner(): InventoryScanner {
     scanner ??= createScanner();
@@ -125,6 +128,7 @@ export function createInventoryCoordinator(options?: {
     const inflight = getScanner()
       .scanLibrary(user, {
         scope,
+        drain: false,
         ...(refresh ? { refresh: true } : {}),
         onSnapshot: (library, phase, counts) => {
           entry.snapshot = mergeLibraries(entry.snapshot, library);
@@ -140,10 +144,12 @@ export function createInventoryCoordinator(options?: {
       })
       .then((library) => {
         entry.snapshot = mergeLibraries(entry.snapshot, library);
-        entry.scanning = false;
-        entry.completedAt = now();
         entry.spaces = spacesFromItems(entry.snapshot.items, scope);
         entry.resolveFirst();
+        if (library.completeness.complete) {
+          entry.scanning = false;
+          entry.completedAt = now();
+        }
       })
       .catch(() => {
         entry.scanning = false;
@@ -165,7 +171,7 @@ export function createInventoryCoordinator(options?: {
   ): Promise<InventorySnapshot> {
     if (entry.firstResultAt === undefined) await entry.firstReady;
     let snapshot = entry.snapshot;
-    if (entry.scope === 'shared' || entry.scope === 'all') {
+    if (!entry.scanning && (entry.scope === 'shared' || entry.scope === 'all')) {
       snapshot = await revalidateShared(user, entry);
     }
     const discovery = inventoryDiscovery({
@@ -236,6 +242,70 @@ export function createInventoryCoordinator(options?: {
     return next;
   }
 
+  async function pumpOnce(): Promise<void> {
+    try {
+      const { getInventoryJobStore } = await import('./job-store');
+      const store = getInventoryJobStore();
+      await store.recoverStaleLocks(now());
+      const running = await store.listRunning();
+      for (const job of running) {
+        const key = keyFor(job.ownerEName, 'all');
+        const previous = entries.get(key);
+        let resolveFirst = previous?.resolveFirst ?? (() => undefined);
+        const firstReady =
+          previous?.firstReady ??
+          new Promise<void>((resolve) => {
+            resolveFirst = () => resolve();
+          });
+        const entry: CacheEntry = previous ?? {
+          scope: 'all',
+          snapshot: emptyLibrary(),
+          scanning: true,
+          firstReady,
+          resolveFirst,
+          startedAt: now(),
+          sourceCounts: emptySourceCounts(),
+          spaces: [],
+        };
+        if (!previous) {
+          entry.scanning = true;
+          entries.set(key, entry);
+        }
+        await getScanner().scanLibrary(
+          { eName: job.ownerEName, eVaultUri: job.ownerEVaultUri },
+          {
+            scope: 'all',
+            drain: true,
+            onSnapshot: (library, phase, counts) => {
+              entry.snapshot = mergeLibraries(entry.snapshot, library);
+              entry.sourceCounts = counts;
+              entry.spaces = spacesFromItems(entry.snapshot.items, 'all');
+              if (entry.firstResultAt === undefined) entry.firstResultAt = now();
+              entry.resolveFirst();
+              if (phase === 'done' || library.completeness.complete) {
+                entry.scanning = false;
+                entry.completedAt = now();
+              } else {
+                entry.scanning = true;
+              }
+            },
+          },
+        );
+      }
+    } catch {
+      // Pump must never crash the Node process.
+    }
+  }
+
+  function pumpRunning(): Promise<void> {
+    const next = pumpChain.then(pumpOnce, pumpOnce);
+    pumpChain = next.then(
+      () => undefined,
+      () => undefined,
+    );
+    return next;
+  }
+
   return {
     async getSnapshot(
       user: Pick<AuthUser, 'eName' | 'eVaultUri'>,
@@ -247,13 +317,16 @@ export function createInventoryCoordinator(options?: {
 
       if (input.refresh) {
         if (entry?.inflight && entry.scanning) {
+          void pumpRunning();
           return serve(user, entry, requestStarted, 'coalesced');
         }
         entry = startScan(user, input.scope, entry, true);
+        void pumpRunning();
         return serve(user, entry, requestStarted, 'miss');
       }
 
       if (entry?.inflight && entry.scanning) {
+        void pumpRunning();
         return serve(user, entry, requestStarted, 'coalesced');
       }
 
@@ -268,6 +341,7 @@ export function createInventoryCoordinator(options?: {
       }
 
       entry = startScan(user, input.scope, entry);
+      void pumpRunning();
       return serve(user, entry, requestStarted, 'miss');
     },
 
@@ -279,23 +353,11 @@ export function createInventoryCoordinator(options?: {
     reset() {
       entries.clear();
       scanner = undefined;
+      pumpChain = Promise.resolve();
     },
 
     /** Continues persisted jobs without an open browser tab. */
-    async pumpRunning(): Promise<void> {
-      try {
-        const { getInventoryJobStore } = await import('./job-store');
-        const running = await getInventoryJobStore().listRunning();
-        for (const job of running) {
-          const key = keyFor(job.ownerEName, 'all');
-          const entry = entries.get(key);
-          if (entry?.inflight && entry.scanning) continue;
-          startScan({ eName: job.ownerEName, eVaultUri: job.ownerEVaultUri }, 'all', entry);
-        }
-      } catch {
-        // Pump must never crash the Node process.
-      }
-    },
+    pumpRunning,
   };
 }
 

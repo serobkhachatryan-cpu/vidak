@@ -1,10 +1,11 @@
 vi.mock('server-only', () => ({}));
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MeshengerLibrary, MeshengerVideo } from '../meshenger-video-library';
 import { completeInventory } from './completeness';
 import type { InventorySourceCounts } from './discovery';
 import { createInventoryCoordinator, publicLibraryItems } from './inventory-coordinator';
+import { createMemoryInventoryJobStore, setInventoryJobStoreForTests } from './job-store';
 
 type SnapshotHandler = (
   library: MeshengerLibrary,
@@ -29,8 +30,13 @@ function library(items: MeshengerVideo[], completeness = completeInventory): Mes
 }
 
 describe('inventory coordinator', () => {
+  beforeEach(() => {
+    setInventoryJobStoreForTests(createMemoryInventoryJobStore());
+  });
+
   afterEach(() => {
     vi.useRealTimers();
+    setInventoryJobStoreForTests(undefined);
   });
 
   it('scopes owned and shared scans and coalesces in-flight work', async () => {
@@ -421,5 +427,106 @@ describe('inventory coordinator', () => {
     expect(secondSnap.items.map((item) => item.title)).toEqual(
       expect.arrayContaining(['First clip', 'Later clip']),
     );
+  });
+
+  it('hydrates over HTTP without draining and lets the pump continue after polls stop', async () => {
+    const clip = video({ id: 'shared-1', title: 'Later clip', accessScope: 'shared' });
+    const refreshing = {
+      indexed: 0,
+      expected: 1,
+      denied: 0,
+      missing: 0,
+      complete: false,
+      retryNeeded: false,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 0,
+      retrying: 0,
+    };
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    const scanLibrary = vi.fn(
+      async (_user: unknown, options: { drain?: boolean; onSnapshot: SnapshotHandler }) => {
+        if (options.drain === true) {
+          options.onSnapshot(library([clip], refreshing), 'batch', {
+            personalPages: 2,
+            sharedSpaces: 1,
+            failed: 0,
+          });
+          return library([clip], refreshing);
+        }
+        options.onSnapshot(library([], refreshing), 'batch', {
+          personalPages: 0,
+          sharedSpaces: 0,
+          failed: 0,
+        });
+        return library([], refreshing);
+      },
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary,
+        probeSharedSpaceAccess: vi.fn(),
+      }),
+      log: () => undefined,
+    });
+    const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    expect(first.discovery).toBe('refreshing');
+    expect(first.items).toEqual([]);
+    expect(
+      scanLibrary.mock.calls.every((call) => (call[1] as { drain?: boolean }).drain !== true),
+    ).toBe(true);
+
+    await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await coordinator.pumpRunning();
+    const afterPump = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    expect(afterPump.items.map((item) => item.title)).toEqual(['Later clip']);
+    expect(afterPump.discovery).toBe('refreshing');
+    expect(
+      scanLibrary.mock.calls.some((call) => (call[1] as { drain?: boolean }).drain === true),
+    ).toBe(true);
+  });
+
+  it('does not start a second drain when two polls overlap', async () => {
+    const refreshing = {
+      indexed: 0,
+      expected: 1,
+      denied: 0,
+      missing: 0,
+      complete: false,
+      retryNeeded: false,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 0,
+      retrying: 1,
+    };
+    const scanLibrary = vi.fn(
+      async (_user: unknown, options: { drain?: boolean; onSnapshot: SnapshotHandler }) => {
+        expect(options.drain).not.toBe(true);
+        options.onSnapshot(library([], refreshing), 'batch', {
+          personalPages: 0,
+          sharedSpaces: 0,
+          failed: 0,
+        });
+        return library([], refreshing);
+      },
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary,
+        probeSharedSpaceAccess: vi.fn(),
+      }),
+      log: () => undefined,
+    });
+    const first = coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    const second = coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    await Promise.all([first, second]);
+    expect(
+      scanLibrary.mock.calls.every((call) => (call[1] as { drain?: boolean }).drain !== true),
+    ).toBe(true);
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
   });
 });
