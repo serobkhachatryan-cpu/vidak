@@ -309,4 +309,56 @@ describe('inventory coordinator', () => {
     expect(JSON.stringify(items)).not.toMatch(/@secret|cookie|Bearer|https:\/\//i);
     expect(items[0]).not.toHaveProperty('sourceSpaceKey');
   });
+
+  it('inventories owned messenger/call videos plus authorized shared videos without duplicates', async () => {
+    const ownedCall = video({
+      id: 'call-1',
+      title: 'Call recording · 2026-08-24',
+      kind: 'call-recording',
+      accessScope: 'personal',
+    });
+    const sharedClip = video({
+      id: 'shared-1',
+      title: 'Friend briefing',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+    });
+    const scanLibrary = vi.fn(
+      async (_user: unknown, options: { scope: string; onSnapshot: SnapshotHandler }) => {
+        expect(options.scope).toBe('all');
+        options.onSnapshot(library([ownedCall]), 'batch', {
+          personalPages: 2,
+          sharedSpaces: 0,
+          failed: 0,
+        });
+        options.onSnapshot(
+          library([ownedCall, sharedClip, { ...ownedCall, id: 'call-1' }]),
+          'done',
+          {
+            personalPages: 2,
+            sharedSpaces: 1,
+            failed: 0,
+          },
+        );
+        return library([ownedCall, sharedClip]);
+      },
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary,
+        probeSharedSpaceAccess: vi.fn().mockResolvedValue({ access: 'ok', member: true }),
+      }),
+      log: () => undefined,
+    });
+    const snapshot = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    expect(snapshot.scope).toBe('all');
+    expect(snapshot.items.map((item) => item.title).sort()).toEqual([
+      'Call recording · 2026-08-24',
+      'Friend briefing',
+    ]);
+    expect(
+      snapshot.items.filter((item) => item.title === 'Call recording · 2026-08-24'),
+    ).toHaveLength(1);
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+  });
 });

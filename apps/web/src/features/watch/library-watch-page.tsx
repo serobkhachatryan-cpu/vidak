@@ -20,7 +20,7 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
     let cancelled = false;
     void (async () => {
       try {
-        const response = await fetch('/api/evault/videos?scope=owned', { cache: 'no-store' });
+        const response = await fetch('/api/evault/videos?scope=all', { cache: 'no-store' });
         const body = (await response.json()) as { items?: VideoSpaceLibraryItem[] };
         if (!response.ok || !Array.isArray(body.items)) throw new Error();
         if (cancelled) return;
@@ -30,15 +30,8 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
           setStatus('ready');
           return;
         }
-        const sharedResponse = await fetch('/api/evault/videos?scope=shared', {
-          cache: 'no-store',
-        });
-        const sharedBody = (await sharedResponse.json()) as { items?: VideoSpaceLibraryItem[] };
-        if (!sharedResponse.ok || !Array.isArray(sharedBody.items)) throw new Error();
-        if (cancelled) return;
-        const shared = sharedBody.items.find((candidate) => candidate.id === itemId);
-        setItem(shared);
-        setStatus(shared ? 'ready' : 'missing');
+        setItem(undefined);
+        setStatus('missing');
       } catch {
         if (!cancelled) setStatus('error');
       }

@@ -61,7 +61,7 @@ export interface MeshengerVideo {
   durationSeconds?: number;
   shape?: string;
   createdAt?: string;
-  /** Whether the video is in the person's vault or an authorised shared vault. */
+  /** Personal when the record owner/subject matches the authenticated eName. */
   accessScope: EVaultVideoAccessScope;
   /** Viewer-facing visibility. Never inferred as public from a missing ACL. */
   visibility: VideoSpaceVisibility;
@@ -126,6 +126,13 @@ export class MeshengerVideoLibraryError extends Error {
 }
 
 type RecordValue = Record<string, unknown>;
+type ProgressiveAccumulators = {
+  completeness: InventoryCompletenessTracker;
+  referenced: Set<string>;
+  found: DiscoveredVideoRecord[];
+  conversations: MeshengerConversation[];
+  messages: MeshengerMessage[];
+};
 interface Envelope {
   id: string;
   ontology: string;
@@ -270,9 +277,9 @@ export class MeshengerVideoLibrary {
           referenced,
         })),
       );
-      found.push(...this.discoverMessageVideos(messages, referenced, 'personal', eName));
-      found.push(...this.discoverFileVideos(eName, files, referenced, 'personal'));
-      found.push(...this.discoverRawFileVideos(eName, rawFiles, referenced, 'personal'));
+      found.push(...this.discoverMessageVideos(messages, referenced, eName, eName));
+      found.push(...this.discoverFileVideos(eName, files, referenced, eName));
+      found.push(...this.discoverRawFileVideos(eName, rawFiles, referenced, eName));
     }
     const group = includeShared
       ? await this.discoverGroupVideos(
@@ -330,7 +337,10 @@ export class MeshengerVideoLibrary {
     if (options.scope === 'owned') {
       return this.scanOwnedProgressive(eName, ownVault, counts, options.onSnapshot);
     }
-    return this.scanSharedProgressive(eName, ownVault, counts, options.onSnapshot);
+    if (options.scope === 'shared') {
+      return this.scanSharedProgressive(eName, ownVault, counts, options.onSnapshot);
+    }
+    return this.scanCompleteProgressive(eName, ownVault, counts, options.onSnapshot);
   }
 
   /**
@@ -480,7 +490,7 @@ export class MeshengerVideoLibrary {
     };
   }
 
-  private async scanOwnedProgressive(
+  private async scanCompleteProgressive(
     eName: string,
     ownVault: ResolvedVault,
     counts: InventorySourceCounts,
@@ -490,16 +500,47 @@ export class MeshengerVideoLibrary {
       counts: InventorySourceCounts,
     ) => void,
   ): Promise<MeshengerLibrary> {
-    const completeness = createInventoryCompletenessTracker();
-    const referenced = new Set<string>();
-    const found: DiscoveredVideo[] = [];
-    const messages: MeshengerMessage[] = [];
+    const accumulators: ProgressiveAccumulators = {
+      completeness: createInventoryCompletenessTracker(),
+      referenced: new Set<string>(),
+      found: [],
+      conversations: [],
+      messages: [],
+    };
+    await this.scanOwnedProgressive(eName, ownVault, counts, onSnapshot, {
+      accumulators,
+      emitDone: false,
+    });
+    return this.scanSharedProgressive(eName, ownVault, counts, onSnapshot, {
+      accumulators,
+      emitDone: true,
+    });
+  }
+
+  private async scanOwnedProgressive(
+    eName: string,
+    ownVault: ResolvedVault,
+    counts: InventorySourceCounts,
+    onSnapshot: (
+      library: MeshengerLibrary,
+      phase: InventoryScanPhase,
+      counts: InventorySourceCounts,
+    ) => void,
+    options?: { accumulators?: ProgressiveAccumulators; emitDone?: boolean },
+  ): Promise<MeshengerLibrary> {
+    const completeness =
+      options?.accumulators?.completeness ?? createInventoryCompletenessTracker();
+    const referenced = options?.accumulators?.referenced ?? new Set<string>();
+    const found = options?.accumulators?.found ?? [];
+    const messages = options?.accumulators?.messages ?? [];
+    const conversations = options?.accumulators?.conversations ?? [];
+    const emitDone = options?.emitDone !== false;
     const snapshot = (phase: InventoryScanPhase) => {
       const library = this.assembleLibrary({
         eName,
         found,
         completeness: completeness.snapshot(),
-        conversations: [],
+        conversations,
         messages,
       });
       onSnapshot(library, phase, { ...counts });
@@ -527,20 +568,20 @@ export class MeshengerVideoLibrary {
       {
         ontologyId: messageOntology,
         ingest: (envelopes) => {
-          found.push(...this.discoverMessageVideos(envelopes, referenced, 'personal', eName));
+          found.push(...this.discoverMessageVideos(envelopes, referenced, eName, eName));
           messages.push(...envelopes.map((message) => toMeshengerMessage(eName, message)));
         },
       },
       {
         ontologyId: fileOntology,
         ingest: (envelopes) => {
-          found.push(...this.discoverFileVideos(eName, envelopes, referenced, 'personal'));
+          found.push(...this.discoverFileVideos(eName, envelopes, referenced, eName));
         },
       },
       {
         ontologyId: w3dsFileOntology,
         ingest: (envelopes) => {
-          found.push(...this.discoverRawFileVideos(eName, envelopes, referenced, 'personal'));
+          found.push(...this.discoverRawFileVideos(eName, envelopes, referenced, eName));
         },
       },
     ];
@@ -579,7 +620,7 @@ export class MeshengerVideoLibrary {
         snapshot('batch');
       });
     }
-    return snapshot('done');
+    return snapshot(emitDone ? 'done' : 'batch');
   }
 
   private async scanSharedProgressive(
@@ -591,12 +632,15 @@ export class MeshengerVideoLibrary {
       phase: InventoryScanPhase,
       counts: InventorySourceCounts,
     ) => void,
+    options?: { accumulators?: ProgressiveAccumulators; emitDone?: boolean },
   ): Promise<MeshengerLibrary> {
-    const completeness = createInventoryCompletenessTracker();
-    const referenced = new Set<string>();
-    const found: DiscoveredVideo[] = [];
-    const conversations: MeshengerConversation[] = [];
-    const messageRecords: MeshengerMessage[] = [];
+    const completeness =
+      options?.accumulators?.completeness ?? createInventoryCompletenessTracker();
+    const referenced = options?.accumulators?.referenced ?? new Set<string>();
+    const found = options?.accumulators?.found ?? [];
+    const conversations = options?.accumulators?.conversations ?? [];
+    const messageRecords = options?.accumulators?.messages ?? [];
+    const emitDone = options?.emitDone !== false;
     const historicalAuthors = new Map<string, Set<string>>();
     const snapshot = (phase: InventoryScanPhase) => {
       const library = this.assembleLibrary({
@@ -771,7 +815,7 @@ export class MeshengerVideoLibrary {
         if (item.attempts > 0) completeness.finishRetry();
         if (!authorRead.failure) {
           found.push(
-            ...this.discoverMessageVideos(authorRead.value, referenced, 'shared', item.authorEName),
+            ...this.discoverMessageVideos(authorRead.value, referenced, eName, item.authorEName),
           );
           messageRecords.push(
             ...authorRead.value.map((message) => toMeshengerMessage(item.authorEName, message)),
@@ -780,7 +824,7 @@ export class MeshengerVideoLibrary {
         snapshot('batch');
       });
     }
-    return snapshot('done');
+    return snapshot(emitDone ? 'done' : 'batch');
   }
 
   private queueOrFailRetry<T extends { attempts: number }>(
@@ -1033,7 +1077,7 @@ export class MeshengerVideoLibrary {
           ...this.discoverMessageVideos(
             messageRead.value,
             input.referenced,
-            'shared',
+            input.viewerEName,
             input.groupEName,
           ),
         );
@@ -1071,7 +1115,7 @@ export class MeshengerVideoLibrary {
               ...this.discoverMessageVideos(
                 authorMessages,
                 input.referenced,
-                'shared',
+                input.viewerEName,
                 authorEName,
               ),
             );
@@ -1097,7 +1141,7 @@ export class MeshengerVideoLibrary {
         failureTracker,
         input.rateLimit ?? 'fail-fast',
       );
-      videos.push(...this.discoverFileVideos(owner, files, input.referenced, 'shared'));
+      videos.push(...this.discoverFileVideos(owner, files, input.referenced, input.viewerEName));
       const rawFiles = await this.tryListEnvelopes(
         owner,
         groupEVaultUri,
@@ -1105,7 +1149,9 @@ export class MeshengerVideoLibrary {
         failureTracker,
         input.rateLimit ?? 'fail-fast',
       );
-      videos.push(...this.discoverRawFileVideos(owner, rawFiles, input.referenced, 'shared'));
+      videos.push(
+        ...this.discoverRawFileVideos(owner, rawFiles, input.referenced, input.viewerEName),
+      );
     }
     return {
       videos,
@@ -1261,7 +1307,7 @@ export class MeshengerVideoLibrary {
         ...this.discoverMessageVideos(
           messageRead.value,
           input.referenced,
-          'shared',
+          input.viewerEName,
           input.ownerEName,
         ),
       );
@@ -1342,19 +1388,19 @@ export class MeshengerVideoLibrary {
   private discoverMessageVideos(
     messages: Envelope[],
     referenced: Set<string>,
-    accessScope: EVaultVideoAccessScope,
+    viewerEName: string,
     sourceSpaceKey?: string,
   ): DiscoveredVideo[] {
-    return discoverVideoMessageVideos(messages, referenced, accessScope, sourceSpaceKey);
+    return discoverVideoMessageVideos(messages, referenced, viewerEName, sourceSpaceKey);
   }
 
   private discoverFileVideos(
     ownerEName: string,
     files: Envelope[],
     referenced: Set<string>,
-    accessScope: EVaultVideoAccessScope,
+    viewerEName: string,
   ): DiscoveredVideo[] {
-    return discoverFileRecordVideos(ownerEName, files, referenced, accessScope);
+    return discoverFileRecordVideos(ownerEName, files, referenced, viewerEName);
   }
 
   /** Discovers authorised video directly from the W3DS uploadFile record. */
@@ -1362,9 +1408,9 @@ export class MeshengerVideoLibrary {
     ownerEName: string,
     files: Envelope[],
     referenced: Set<string>,
-    accessScope: EVaultVideoAccessScope,
+    viewerEName: string,
   ): DiscoveredVideo[] {
-    return discoverW3dsFileVideos(ownerEName, files, referenced, accessScope);
+    return discoverW3dsFileVideos(ownerEName, files, referenced, viewerEName);
   }
 
   private recordSpaceOutcome(completeness: InventoryCompletenessTracker, space: GroupDiscovery) {

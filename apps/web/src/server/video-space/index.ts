@@ -1,10 +1,12 @@
 export {
+  accessScopeForViewer,
   type DiscoveredVideoRecord,
   dedupeDiscoveredVideos,
   discoverCallRecordingVideos,
   discoverFileRecordVideos,
   discoverVideoMessageVideos,
   discoverW3dsFileVideos,
+  documentedRecordOwnerEName,
   isAuthorizedCallParticipant,
   type VideoAccessBasis,
   type VideoSpaceEnvelope,

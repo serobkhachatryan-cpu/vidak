@@ -33,12 +33,83 @@ const kindRank: Record<VideoSpaceKind, number> = {
   file: 1,
 };
 
+const eNamePattern = /^@[^\s@/]+$/;
+
+/**
+ * Documented payload keys that identify the record subject/owner as an eName.
+ * Official File.ownerId and Message.senderId are UUID-formatted in Ontology;
+ * this repo already stores W3IDs in those fields and in senderEName/initiator.
+ * Binding-document `subject` is included when present. Discovery vault, chat,
+ * and group are never used here.
+ */
+const documentedOwnerKeys = [
+  'ownerEName',
+  'ownerId',
+  'subject',
+  'senderEName',
+  'senderId',
+  'initiator',
+] as const;
+
 export function videoSpaceFileIdentity(fileUris: readonly string[]): string {
   return [...fileUris]
     .map((uri) => uri.trim())
     .filter((uri) => Boolean(parseW3dsFileUri(uri)))
     .sort()
     .join('\n');
+}
+
+function optionalEName(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const eName = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
+  return eNamePattern.test(eName) ? eName : undefined;
+}
+
+/**
+ * Owner of a video record: documented subject/owner on the payload, else the
+ * eName in a `w3ds://file` URI. Never the chat or group used to find it.
+ */
+export function documentedRecordOwnerEName(
+  payload: Record<string, unknown>,
+  fileUris: readonly string[] = [],
+): string | undefined {
+  for (const key of documentedOwnerKeys) {
+    const owner = optionalEName(payload[key]);
+    if (owner) return owner;
+  }
+  for (const fileUri of fileUris) {
+    const parsed = parseW3dsFileUri(fileUri);
+    if (parsed?.ownerEName) return parsed.ownerEName;
+  }
+  return undefined;
+}
+
+/**
+ * Personal only when a documented owner/subject matches the authenticated
+ * eName. Missing or foreign owners fail closed to shared (authorized, not mine).
+ */
+export function accessScopeForViewer(
+  viewerEName: string,
+  recordOwnerEName: string | undefined,
+): VideoSpaceAccessScope {
+  const viewer = optionalEName(viewerEName);
+  const owner = optionalEName(recordOwnerEName);
+  if (viewer && owner && viewer === owner) return 'personal';
+  return 'shared';
+}
+
+function scopeForRecord(input: {
+  viewerEName: string;
+  payload: Record<string, unknown>;
+  fileUris?: readonly string[];
+  vaultOwnerEName?: string;
+}): VideoSpaceAccessScope {
+  const owner =
+    documentedRecordOwnerEName(input.payload, input.fileUris ?? []) ??
+    optionalEName(input.vaultOwnerEName);
+  return accessScopeForViewer(input.viewerEName, owner);
 }
 
 /**
@@ -66,10 +137,10 @@ export function dedupeDiscoveredVideos(
 }
 
 export function discoverW3dsFileVideos(
-  ownerEName: string,
+  vaultOwnerEName: string,
   files: readonly VideoSpaceEnvelope[],
   referenced: Set<string>,
-  accessScope: VideoSpaceAccessScope,
+  viewerEName: string,
 ): DiscoveredVideoRecord[] {
   const ontology = documentedOntologyId('w3ds-file');
   const discovered: DiscoveredVideoRecord[] = [];
@@ -77,10 +148,16 @@ export function discoverW3dsFileVideos(
     if (file.ontology !== ontology && file.ontology !== 'w3ds-file-v1') continue;
     const contentType = optionalString(file.parsed.contentType);
     if (!contentType?.toLowerCase().startsWith('video/')) continue;
-    const fileUri = `w3ds://file?id=${ownerEName}/${file.id}`;
+    const fileUri = `w3ds://file?id=${vaultOwnerEName}/${file.id}`;
     if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
+    const accessScope = scopeForRecord({
+      viewerEName,
+      payload: file.parsed,
+      fileUris: [fileUri],
+      vaultOwnerEName,
+    });
     discovered.push({
-      key: `w3ds-file:${ownerEName}:${file.id}`,
+      key: `w3ds-file:${vaultOwnerEName}:${file.id}`,
       fileUris: [fileUri],
       kind: 'file',
       title: optionalString(file.parsed.filename) ?? 'Video',
@@ -89,7 +166,7 @@ export function discoverW3dsFileVideos(
         : {}),
       accessScope,
       sourceId: 'w3ds-file',
-      sourceSpaceKey: ownerEName,
+      sourceSpaceKey: vaultOwnerEName,
       accessBasis: accessScope === 'personal' ? 'personal' : 'membership',
     });
     referenced.add(fileUri);
@@ -98,10 +175,10 @@ export function discoverW3dsFileVideos(
 }
 
 export function discoverFileRecordVideos(
-  ownerEName: string,
+  vaultOwnerEName: string,
   files: readonly VideoSpaceEnvelope[],
   referenced: Set<string>,
-  accessScope: VideoSpaceAccessScope,
+  viewerEName: string,
 ): DiscoveredVideoRecord[] {
   const ontology = documentedOntologyId('file-record');
   const discovered: DiscoveredVideoRecord[] = [];
@@ -113,10 +190,16 @@ export function discoverFileRecordVideos(
     const fileUri =
       optionalW3dsFileUri(file.parsed.uri) ??
       optionalW3dsFileUri(file.parsed.url) ??
-      `w3ds://file?id=${ownerEName}/${file.id}`;
+      `w3ds://file?id=${vaultOwnerEName}/${file.id}`;
     if (!parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
+    const accessScope = scopeForRecord({
+      viewerEName,
+      payload: file.parsed,
+      fileUris: [fileUri],
+      vaultOwnerEName,
+    });
     discovered.push({
-      key: `file:${ownerEName}:${file.id}:${fileUri}`,
+      key: `file:${vaultOwnerEName}:${file.id}:${fileUri}`,
       fileUris: [fileUri],
       kind: 'file',
       title: optionalString(file.parsed.filename) ?? optionalString(file.parsed.name) ?? 'Video',
@@ -125,7 +208,7 @@ export function discoverFileRecordVideos(
         : {}),
       accessScope,
       sourceId: 'file-record',
-      sourceSpaceKey: ownerEName,
+      sourceSpaceKey: vaultOwnerEName,
       accessBasis: accessScope === 'personal' ? 'personal' : 'membership',
     });
     referenced.add(fileUri);
@@ -154,6 +237,12 @@ export function discoverCallRecordingVideos(input: {
     for (const fileUri of fileUris) input.referenced.add(fileUri);
     const startedAt = optionalString(call.parsed.startedAt);
     const durationSeconds = number(call.parsed.durationSec);
+    const accessScope = scopeForRecord({
+      viewerEName: input.viewerEName,
+      payload: call.parsed,
+      fileUris,
+      vaultOwnerEName: input.sourceEName,
+    });
     discovered.push({
       key: `call:${input.sourceEName}:${call.id}`,
       fileUris,
@@ -161,10 +250,10 @@ export function discoverCallRecordingVideos(input: {
       title: startedAt ? `Call recording · ${startedAt.slice(0, 10)}` : 'Call recording',
       ...(durationSeconds !== undefined ? { durationSeconds } : {}),
       ...(startedAt ? { createdAt: startedAt } : {}),
-      accessScope: input.sourceEName === input.viewerEName ? 'personal' : 'shared',
+      accessScope,
       sourceId: 'call-recording',
       sourceSpaceKey: input.sourceEName,
-      accessBasis: input.sourceEName === input.viewerEName ? 'personal' : 'history',
+      accessBasis: accessScope === 'personal' ? 'personal' : 'history',
     });
   }
   return discovered;
@@ -173,7 +262,7 @@ export function discoverCallRecordingVideos(input: {
 export function discoverVideoMessageVideos(
   messages: readonly VideoSpaceEnvelope[],
   referenced: Set<string>,
-  accessScope: VideoSpaceAccessScope,
+  viewerEName: string,
   sourceSpaceKey?: string,
 ): DiscoveredVideoRecord[] {
   const discovered: DiscoveredVideoRecord[] = [];
@@ -183,6 +272,12 @@ export function discoverVideoMessageVideos(
     for (const fileUri of fileUris) referenced.add(fileUri);
     const file = record(message.parsed.file);
     const shape = optionalString(message.parsed.shape) ?? optionalString(message.parsed.type);
+    const accessScope = scopeForRecord({
+      viewerEName,
+      payload: message.parsed,
+      fileUris,
+      ...(sourceSpaceKey ? { vaultOwnerEName: sourceSpaceKey } : {}),
+    });
     discovered.push({
       key: `message:${message.id}:${fileUris.join(',')}`,
       fileUris,

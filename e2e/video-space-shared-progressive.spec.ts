@@ -1,118 +1,88 @@
 import { expect, test } from '@playwright/test';
 import { expectNoVerifiedNameOverlay, signInTo } from './helpers';
 
-test('Shared with you grows from partial results to complete without a refresh', async ({
+function libraryBody(items: unknown[], discovery: 'refreshing' | 'complete', extra?: object) {
+  return {
+    items,
+    conversations: [],
+    messages: [],
+    completeness: {
+      indexed: discovery === 'complete' ? 2 : 1,
+      expected: 2,
+      denied: 0,
+      missing: 0,
+      complete: discovery === 'complete',
+      retryNeeded: false,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 0,
+      retrying: discovery === 'refreshing' ? 1 : 0,
+    },
+    discovery,
+    scope: 'all',
+    metrics: {
+      cache: 'miss',
+      firstResultMs: 8,
+      sourceCounts: { personalPages: 2, sharedSpaces: items.length > 1 ? 1 : 0, failed: 0 },
+    },
+    ...extra,
+  };
+}
+
+const ownedCall = {
+  id: 'owned-call-e2e',
+  title: 'Call recording · 2026-08-24',
+  accessScope: 'personal',
+  visibility: 'private',
+  kind: 'call-recording',
+  streamIds: ['owned-call-stream'],
+  previewState: 'processing',
+};
+
+const firstShared = {
+  id: 'shared-e2e-1',
+  title: 'First authorised clip',
+  accessScope: 'shared',
+  visibility: 'shared-with-me',
+  kind: 'file',
+  streamIds: ['e2e-stream-1'],
+  previewState: 'processing',
+};
+
+const secondShared = {
+  id: 'shared-e2e-2',
+  title: 'Second authorised clip',
+  accessScope: 'shared',
+  visibility: 'shared-with-me',
+  kind: 'file',
+  streamIds: ['e2e-stream-2'],
+  previewState: 'processing',
+};
+
+test('All videos grows from a partial union to the complete result without a refresh', async ({
   page,
 }) => {
-  let sharedCalls = 0;
-  let ownedCalls = 0;
+  let allCalls = 0;
+  let otherScopeCalls = 0;
   await page.route('**/api/evault/videos**', async (route) => {
     const url = new URL(route.request().url());
-    const scope = url.searchParams.get('scope') ?? 'owned';
-    if (scope === 'shared') {
-      sharedCalls += 1;
-      const refreshing = sharedCalls < 3;
-      const items =
-        sharedCalls === 1
-          ? [
-              {
-                id: 'shared-e2e-1',
-                title: 'First authorised clip',
-                accessScope: 'shared',
-                visibility: 'shared-with-me',
-                kind: 'file',
-                streamIds: ['e2e-stream-1'],
-                previewState: 'processing',
-              },
-            ]
-          : [
-              {
-                id: 'shared-e2e-1',
-                title: 'First authorised clip',
-                accessScope: 'shared',
-                visibility: 'shared-with-me',
-                kind: 'file',
-                streamIds: ['e2e-stream-1'],
-                previewState: 'processing',
-              },
-              {
-                id: 'shared-e2e-2',
-                title: 'Second authorised clip',
-                accessScope: 'shared',
-                visibility: 'shared-with-me',
-                kind: 'file',
-                streamIds: ['e2e-stream-2'],
-                previewState: 'processing',
-              },
-            ];
+    const scope = url.searchParams.get('scope') ?? 'all';
+    if (scope !== 'all') {
+      otherScopeCalls += 1;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          items,
-          conversations: [],
-          messages: [],
-          completeness: {
-            indexed: refreshing ? 1 : 2,
-            expected: 2,
-            denied: 0,
-            missing: 0,
-            complete: !refreshing,
-            retryNeeded: false,
-            retryUnavailable: 0,
-            retryRejected: 0,
-            retryRateLimited: 0,
-            retrying: refreshing ? 1 : 0,
-          },
-          discovery: refreshing ? 'refreshing' : 'complete',
-          scope: 'shared',
-          metrics: {
-            cache: sharedCalls === 1 ? 'miss' : 'coalesced',
-            firstResultMs: 8,
-            sourceCounts: { personalPages: 1, sharedSpaces: items.length, failed: 0 },
-          },
-        }),
+        body: JSON.stringify(libraryBody([], 'complete', { scope })),
       });
       return;
     }
-    ownedCalls += 1;
+    allCalls += 1;
+    const refreshing = allCalls < 3;
+    const items = refreshing ? [ownedCall, firstShared] : [ownedCall, firstShared, secondShared];
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        items: [
-          {
-            id: 'owned-e2e',
-            title: 'Personal studio take',
-            accessScope: 'personal',
-            visibility: 'private',
-            kind: 'file',
-            streamIds: ['owned-stream'],
-            previewState: 'processing',
-          },
-        ],
-        conversations: [],
-        messages: [],
-        completeness: {
-          indexed: 0,
-          expected: 0,
-          denied: 0,
-          missing: 0,
-          complete: true,
-          retryNeeded: false,
-          retryUnavailable: 0,
-          retryRejected: 0,
-          retryRateLimited: 0,
-          retrying: 0,
-        },
-        discovery: 'complete',
-        scope: 'owned',
-        metrics: {
-          cache: 'hit',
-          firstResultMs: 0,
-          sourceCounts: { personalPages: 2, sharedSpaces: 0, failed: 0 },
-        },
-      }),
+      body: JSON.stringify(libraryBody(items, refreshing ? 'refreshing' : 'complete')),
     });
   });
   await page.route('**/api/videos/mine**', async (route) => {
@@ -125,94 +95,42 @@ test('Shared with you grows from partial results to complete without a refresh',
 
   await signInTo(page, '@viewer.w3id', '/');
   await expectNoVerifiedNameOverlay(page);
-  await expect(page.getByRole('heading', { name: 'Your videos' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Personal studio take' })).toBeVisible();
-  expect(sharedCalls).toBe(0);
-  expect(ownedCalls).toBeGreaterThan(0);
-  await expect(page.getByText('Finding video you can access')).toHaveCount(0);
-
-  const sharedStarted = Date.now();
-  await page.getByRole('button', { name: 'Shared with you' }).click();
-  await expect(page.getByRole('heading', { name: 'Shared with you' })).toBeVisible({
-    timeout: 2000,
-  });
-  expect(Date.now() - sharedStarted).toBeLessThan(2000);
-  await expect(page.getByRole('button', { name: 'Shared with you' })).toBeEnabled();
-  await expect(page.getByText(/shared videos found/i)).toBeVisible();
-  await expect(page.getByText('Finding video you can access')).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'All videos' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Call recording · 2026-08-24' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'First authorised clip' })).toBeVisible({
     timeout: 4000,
   });
+  expect(allCalls).toBeGreaterThan(0);
+  expect(otherScopeCalls).toBe(0);
+  await expect(page.getByText('Finding video you can access')).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Second authorised clip' })).toBeVisible({
     timeout: 8000,
   });
+  await expect(page.getByRole('heading', { name: 'Call recording · 2026-08-24' })).toHaveCount(1);
+  await expect(page.getByRole('heading', { name: 'First authorised clip' })).toHaveCount(1);
   await expect(page.getByRole('button', { name: 'Refresh your video space' })).toBeEnabled();
 });
 
-test('Your videos stays on owned inventory without opening Shared with you', async ({ page }) => {
-  let sharedCalls = 0;
+test('My videos and Shared with me filter the same complete inventory', async ({ page }) => {
+  let allCalls = 0;
+  let otherScopeCalls = 0;
   await page.route('**/api/evault/videos**', async (route) => {
     const url = new URL(route.request().url());
-    const scope = url.searchParams.get('scope') ?? 'owned';
-    if (scope === 'shared') {
-      sharedCalls += 1;
+    const scope = url.searchParams.get('scope') ?? 'all';
+    if (scope !== 'all') {
+      otherScopeCalls += 1;
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({
-          items: [],
-          conversations: [],
-          messages: [],
-          completeness: {
-            indexed: 0,
-            expected: 0,
-            denied: 0,
-            missing: 0,
-            complete: true,
-            retryNeeded: false,
-            retryUnavailable: 0,
-            retryRejected: 0,
-            retryRateLimited: 0,
-            retrying: 0,
-          },
-          discovery: 'complete',
-          scope: 'shared',
-        }),
+        body: JSON.stringify(libraryBody([], 'complete', { scope })),
       });
       return;
     }
+    allCalls += 1;
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({
-        items: [
-          {
-            id: 'owned-only',
-            title: 'Only mine',
-            accessScope: 'personal',
-            visibility: 'private',
-            kind: 'file',
-            streamIds: ['owned-only-stream'],
-            previewState: 'processing',
-          },
-        ],
-        conversations: [],
-        messages: [],
-        completeness: {
-          indexed: 0,
-          expected: 0,
-          denied: 0,
-          missing: 0,
-          complete: true,
-          retryNeeded: false,
-          retryUnavailable: 0,
-          retryRejected: 0,
-          retryRateLimited: 0,
-          retrying: 0,
-        },
-        discovery: 'complete',
-        scope: 'owned',
-      }),
+      body: JSON.stringify(libraryBody([ownedCall, firstShared, secondShared], 'complete')),
     });
   });
   await page.route('**/api/videos/mine**', async (route) => {
@@ -224,7 +142,24 @@ test('Your videos stays on owned inventory without opening Shared with you', asy
   });
 
   await signInTo(page, '@owner.w3id', '/');
-  await expect(page.getByRole('heading', { name: 'Only mine' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Your videos' })).toBeVisible();
-  expect(sharedCalls).toBe(0);
+  await expect(page.getByRole('heading', { name: 'All videos' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Call recording · 2026-08-24' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'First authorised clip' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Second authorised clip' })).toBeVisible();
+  const allCallCount = allCalls;
+
+  await page.getByRole('button', { name: 'My videos' }).click();
+  await expect(page.getByRole('heading', { name: 'My videos' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Call recording · 2026-08-24' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'First authorised clip' })).toHaveCount(0);
+  await expect(page.getByRole('heading', { name: 'Second authorised clip' })).toHaveCount(0);
+
+  await page.getByRole('button', { name: 'Shared with me' }).click();
+  await expect(page.getByRole('heading', { name: 'Shared with me' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'First authorised clip' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Second authorised clip' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Call recording · 2026-08-24' })).toHaveCount(0);
+
+  expect(allCalls).toBe(allCallCount);
+  expect(otherScopeCalls).toBe(0);
 });
