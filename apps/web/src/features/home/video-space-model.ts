@@ -4,6 +4,7 @@ import {
   type InventoryCompleteness,
   inventoryCompletenessCopy,
 } from '../../server/video-space/completeness';
+import type { InventoryDiscovery } from '../../server/video-space/discovery';
 import {
   type VideoSpaceVisibility,
   videoSpaceVisibilityLabels,
@@ -31,6 +32,7 @@ export {
   type InventoryCompleteness,
   inventoryCompletenessCopy,
 } from '../../server/video-space/completeness';
+export type { InventoryDiscovery } from '../../server/video-space/discovery';
 export { videoSpaceVisibilityLabels } from '../../server/video-space/visibility';
 export { completeInventory };
 
@@ -80,6 +82,20 @@ export function sharedInventoryBanner(
     return undefined;
   }
   return inventoryCompletenessCopy(completeness);
+}
+
+export function libraryUpdatingCopy(count: number): string {
+  return `Showing ${count} ${count === 1 ? 'video' : 'videos'} — updating your library…`;
+}
+
+export function libraryDiscoveryBanner(input: {
+  discovery?: InventoryDiscovery;
+  completeness?: InventoryCompleteness;
+  itemCount: number;
+}): string | undefined {
+  if (input.discovery === 'refreshing') return libraryUpdatingCopy(input.itemCount);
+  if (input.discovery === 'partial') return sharedInventoryBanner(input.completeness);
+  return undefined;
 }
 
 export function previewFallbackCopy(state: 'processing' | 'unavailable' | 'unsupported'): {

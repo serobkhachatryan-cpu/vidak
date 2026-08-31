@@ -1,10 +1,8 @@
 import { type NextRequest, NextResponse } from 'next/server';
-import {
-  createEVaultVideoLibrary,
-  EVaultVideoLibraryError,
-} from '../../../../server/evault-video-library';
+import { EVaultVideoLibraryError } from '../../../../server/evault-video-library';
 import { evaultVideoPreviewPath } from '../../../../server/video-preview/capture-time';
-import type { VideoPreviewService } from '../../../../server/video-preview/preview-service';
+import { parseInventoryScope } from '../../../../server/video-space/discovery';
+import { getInventoryCoordinator } from '../../../../server/video-space/inventory-coordinator';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -13,7 +11,6 @@ import {
 } from '../../../../server/w3ds-auth';
 
 export const runtime = 'nodejs';
-export const maxDuration = 300;
 
 export async function GET(request: NextRequest) {
   try {
@@ -22,35 +19,26 @@ export async function GET(request: NextRequest) {
     if (!accessToken)
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const session = await getW3dsAuthService().getSession(accessToken);
-    const library = await createEVaultVideoLibrary().listWithContext(session.user);
-    let preview: VideoPreviewService | undefined;
-    try {
-      const { getVideoPreviewService } = await import(
-        '../../../../server/video-preview/preview-runtime'
-      );
-      preview = getVideoPreviewService();
-    } catch {
-      preview = undefined;
-    }
-    const items = await Promise.all(
-      library.items.map(async (item) => {
-        const streamId = item.streamIds[0];
-        const previewState = streamId
-          ? preview
-            ? await preview
-                .peekLibraryPreview(session.user, streamId)
-                .catch(() => 'processing' as const)
-            : 'processing'
-          : ('unavailable' as const);
-        return {
-          ...item,
-          previewState,
-          ...(streamId ? { previewUrl: evaultVideoPreviewPath(streamId) } : {}),
-        };
-      }),
-    );
-    if (preview) void preview.scheduleLibraryBackfill(session.user, library.items);
-    return privateJson({ ...library, items });
+    const scope = parseInventoryScope(request.nextUrl.searchParams.get('scope')) ?? 'owned';
+    const refresh = request.nextUrl.searchParams.get('refresh') === '1';
+    const snapshot = await getInventoryCoordinator().getSnapshot(session.user, { scope, refresh });
+    const items = snapshot.items.map((item) => {
+      const streamId = item.streamIds[0];
+      return {
+        ...item,
+        previewState: streamId ? ('processing' as const) : ('unavailable' as const),
+        ...(streamId ? { previewUrl: evaultVideoPreviewPath(streamId) } : {}),
+      };
+    });
+    return privateJson({
+      items,
+      conversations: snapshot.conversations,
+      messages: snapshot.messages,
+      completeness: snapshot.completeness,
+      discovery: snapshot.discovery,
+      scope: snapshot.scope,
+      metrics: snapshot.metrics,
+    });
   } catch (error) {
     return privateJson(errorBody(error), errorStatus(error));
   }

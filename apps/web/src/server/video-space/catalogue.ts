@@ -1,4 +1,4 @@
-import type { DiscoveredVideoRecord, VideoSpaceKind } from './adapters';
+import type { DiscoveredVideoRecord, VideoAccessBasis, VideoSpaceKind } from './adapters';
 import { dedupeDiscoveredVideos } from './adapters';
 import type { InventoryCompleteness } from './completeness';
 import { documentedVideoSourceIds, documentedVideoSources } from './documented-sources';
@@ -22,6 +22,8 @@ export interface VideoSpaceCatalogueItem {
   accessScope: VideoSpaceAccessScope;
   visibility: VideoSpaceVisibility;
   streamIds: string[];
+  sourceSpaceKey?: string;
+  accessBasis?: VideoAccessBasis;
 }
 
 export interface VideoSpaceCatalogueSnapshot {
@@ -56,6 +58,8 @@ export function assembleVideoSpaceCatalogue(input: {
           viewerEName: input.viewerEName,
         }),
         streamIds: item.fileUris.map((fileUri) => input.toStreamId(fileUri)),
+        ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
+        ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
       }))
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
     completeness: input.completeness,

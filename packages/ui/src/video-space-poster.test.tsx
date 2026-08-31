@@ -83,6 +83,20 @@ describe('VideoSpacePoster', () => {
     expect(markup).not.toContain('<video');
   });
 
+  it('does not start a preview fetch until asked to load', () => {
+    const markup = renderToStaticMarkup(
+      <VideoSpacePoster
+        title="friends with hats"
+        posterUrl="/api/evault/videos/grant/preview"
+        state="processing"
+        loadWhenVisible
+      />,
+    );
+    expect(markup).not.toContain('<img');
+    expect(markup).toContain('Preparing preview');
+    expect(markup).not.toContain('<video');
+  });
+
   it('gives call recordings a poster cover with duration and lock badge', () => {
     const markup = renderToStaticMarkup(
       <VideoSpacePoster

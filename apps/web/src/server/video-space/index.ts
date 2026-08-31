@@ -6,6 +6,7 @@ export {
   discoverVideoMessageVideos,
   discoverW3dsFileVideos,
   isAuthorizedCallParticipant,
+  type VideoAccessBasis,
   type VideoSpaceEnvelope,
   type VideoSpaceKind,
   videoSpaceFileIdentity,
@@ -17,10 +18,19 @@ export {
   videoSpaceSourceAdapters,
   videoSpaceSourceIds,
 } from './catalogue';
+export type {
+  InventoryCacheOutcome,
+  InventoryDiscovery,
+  InventoryMetrics,
+  InventoryScope,
+  InventorySourceCounts,
+} from './discovery';
 export {
-  type InventoryCompleteness,
-  inventoryCompletenessCopy,
-} from './completeness';
+  emptySourceCounts,
+  formatInventoryMetricsLog,
+  inventoryDiscovery,
+  parseInventoryScope,
+} from './discovery';
 export {
   documentedAuthorizationOntologies,
   documentedMessageTypes,

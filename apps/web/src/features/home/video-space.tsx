@@ -23,11 +23,12 @@ import {
   evaultItemsForTab,
   formatSpaceDuration,
   type InventoryCompleteness,
+  type InventoryDiscovery,
   isVideoSpaceEmpty,
+  libraryDiscoveryBanner,
   ownedItemsForTab,
   ownedVideoSpaceVisibility,
   shareChangeConfirmation,
-  sharedInventoryBanner,
   type VideoSpaceLibraryItem,
   type VideoSpaceTab,
   videoSpaceEmptyCopy,
@@ -35,10 +36,12 @@ import {
   videoSpaceVisibilityLabels,
 } from './video-space-model';
 
-type LibraryState =
-  | { status: 'loading' }
-  | { status: 'ready'; items: VideoSpaceLibraryItem[]; completeness?: InventoryCompleteness }
-  | { status: 'error' };
+type LibraryState = {
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  items: VideoSpaceLibraryItem[];
+  completeness?: InventoryCompleteness;
+  discovery?: InventoryDiscovery;
+};
 
 type OwnedState =
   | { status: 'loading' }
@@ -55,27 +58,33 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const tab = tabFromSearch(searchParams.get('tab'));
-  const [library, setLibrary] = useState<LibraryState>({ status: 'loading' });
+  const [ownedLibrary, setOwnedLibrary] = useState<LibraryState>({ status: 'idle', items: [] });
+  const [sharedLibrary, setSharedLibrary] = useState<LibraryState>({ status: 'idle', items: [] });
   const [owned, setOwned] = useState<OwnedState>({ status: 'loading' });
   const [pendingVideoId, setPendingVideoId] = useState<string | undefined>();
   const [actionError, setActionError] = useState<string | undefined>();
 
-  const load = useCallback(async () => {
-    setLibrary({ status: 'loading' });
-    setOwned({ status: 'loading' });
-    setActionError(undefined);
-    void videoApiClient
-      .listOwnedVideos()
-      .then((items) => setOwned({ status: 'ready', items }))
-      .catch(() => setOwned({ status: 'error' }));
+  const loadEvault = useCallback(async (scope: 'owned' | 'shared', refresh = false) => {
+    const setState = scope === 'owned' ? setOwnedLibrary : setSharedLibrary;
+    setState((current) =>
+      current.items.length > 0
+        ? {
+            ...current,
+            discovery: 'refreshing',
+          }
+        : { status: 'loading', items: [] },
+    );
     try {
-      const response = await fetch('/api/evault/videos', { cache: 'no-store' });
+      const query = new URLSearchParams({ scope });
+      if (refresh) query.set('refresh', '1');
+      const response = await fetch(`/api/evault/videos?${query.toString()}`, { cache: 'no-store' });
       const body = (await response.json()) as {
         items?: VideoSpaceLibraryItem[];
         completeness?: InventoryCompleteness;
+        discovery?: InventoryDiscovery;
       };
       if (!response.ok || !Array.isArray(body.items)) throw new Error();
-      setLibrary({
+      setState({
         status: 'ready',
         items: body.items.map((item) => ({
           ...item,
@@ -83,15 +92,47 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
             item.visibility ?? (item.accessScope === 'shared' ? 'shared-with-me' : 'private'),
         })),
         ...(body.completeness ? { completeness: body.completeness } : {}),
+        ...(body.discovery ? { discovery: body.discovery } : {}),
       });
     } catch {
-      setLibrary({ status: 'error' });
+      setState((current) =>
+        current.items.length > 0 ? { ...current, status: 'error' } : { status: 'error', items: [] },
+      );
     }
   }, []);
 
+  const load = useCallback(
+    async (refresh = false) => {
+      setActionError(undefined);
+      if (tab === 'yours' || refresh) {
+        setOwned((current) => (current.status === 'ready' ? current : { status: 'loading' }));
+        void videoApiClient
+          .listOwnedVideos()
+          .then((items) => setOwned({ status: 'ready', items }))
+          .catch(() =>
+            setOwned((current) => (current.status === 'ready' ? current : { status: 'error' })),
+          );
+        await loadEvault('owned', refresh);
+      }
+      if (tab === 'shared') await loadEvault('shared', refresh);
+    },
+    [loadEvault, tab],
+  );
+
   useEffect(() => {
-    void load();
+    void load(false);
   }, [load]);
+
+  const library = tab === 'shared' ? sharedLibrary : ownedLibrary;
+
+  useEffect(() => {
+    if (library.discovery !== 'refreshing') return;
+    const scope = tab === 'shared' ? 'shared' : 'owned';
+    const timer = window.setTimeout(() => {
+      void loadEvault(scope, false);
+    }, 1500);
+    return () => window.clearTimeout(timer);
+  }, [library.discovery, loadEvault, tab]);
 
   const setTab = (next: VideoSpaceTab) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -101,11 +142,12 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
     router.replace(query ? `${pathname}?${query}` : pathname);
   };
 
-  const libraryItems = library.status === 'ready' ? library.items : [];
+  const libraryItems = library.items;
   const ownedItems = owned.status === 'ready' ? owned.items : [];
   const empty =
     library.status === 'ready' &&
-    owned.status === 'ready' &&
+    library.discovery !== 'refreshing' &&
+    (tab !== 'yours' || owned.status === 'ready') &&
     isVideoSpaceEmpty(libraryItems, ownedItems);
 
   return (
@@ -116,7 +158,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         containerSize="full"
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => void load()}>
+            <Button variant="secondary" onClick={() => void load(true)}>
               Refresh your video space
             </Button>
             <Button onClick={() => router.push('/upload')}>Upload</Button>
@@ -149,7 +191,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
               description={videoSpaceEmptyCopy.description}
               action={
                 <div className="flex flex-wrap justify-center gap-2">
-                  <Button variant="secondary" onClick={() => void load()}>
+                  <Button variant="secondary" onClick={() => void load(true)}>
                     Refresh your video space
                   </Button>
                   <Button onClick={() => router.push('/upload')}>Upload</Button>
@@ -163,7 +205,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
               owned={owned}
               {...(actionError ? { actionError } : {})}
               {...(pendingVideoId ? { pendingVideoId } : {})}
-              onRetry={() => void load()}
+              onRetry={() => void load(true)}
               onWatch={(video) => {
                 if (video.publicVideoId)
                   router.push(`/watch/${encodeURIComponent(video.publicVideoId)}`);
@@ -179,7 +221,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
                   try {
                     if (next === 'private') {
                       await videoApiClient.unpublishVideo(video.id);
-                      await load();
+                      await load(true);
                       return;
                     }
                     router.push(`/upload?draft=${encodeURIComponent(video.id)}`);
@@ -219,23 +261,34 @@ function PrivateLibraryPanel({
   onContinueDraft: (video: Video) => void;
   onChangeVisibility: (video: Video, next: 'private') => void;
 }) {
-  const libraryItems = library.status === 'ready' ? evaultItemsForTab(library.items, tab) : [];
+  const libraryItems = evaultItemsForTab(library.items, tab);
   const ownedItems = owned.status === 'ready' ? ownedItemsForTab(owned.items, tab) : [];
-  const completenessBanner =
-    tab === 'shared' && library.status === 'ready'
-      ? sharedInventoryBanner(library.completeness)
-      : undefined;
-  const loading = library.status === 'loading' || (tab === 'yours' && owned.status === 'loading');
+  const completenessBanner = libraryDiscoveryBanner({
+    ...(library.discovery ? { discovery: library.discovery } : {}),
+    ...(library.completeness ? { completeness: library.completeness } : {}),
+    itemCount: libraryItems.length + ownedItems.length,
+  });
+  const coldLoad =
+    library.items.length === 0 &&
+    ownedItems.length === 0 &&
+    (library.status === 'loading' || library.status === 'idle');
 
-  if (loading) {
+  if (coldLoad) {
     return (
-      <div className="flex min-h-56 items-center justify-center gap-2 text-sm text-muted-foreground">
-        <Spinner size="sm" /> Finding video you can access…
+      <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3" role="status">
+        {Array.from({ length: 6 }, (_, index) => (
+          <VideoCardSkeleton key={index} />
+        ))}
       </div>
     );
   }
 
-  if (library.status === 'error' && (tab === 'shared' || owned.status !== 'ready')) {
+  if (
+    library.status === 'error' &&
+    libraryItems.length === 0 &&
+    ownedItems.length === 0 &&
+    (tab === 'shared' || owned.status !== 'ready')
+  ) {
     return (
       <ErrorState
         title="Could not load your video space"
@@ -246,7 +299,13 @@ function PrivateLibraryPanel({
     );
   }
 
-  if (libraryItems.length === 0 && ownedItems.length === 0 && !completenessBanner) {
+  if (
+    libraryItems.length === 0 &&
+    ownedItems.length === 0 &&
+    !completenessBanner &&
+    library.discovery !== 'refreshing' &&
+    library.status !== 'loading'
+  ) {
     return (
       <EmptyState
         title={
@@ -351,6 +410,7 @@ function OwnedVideoCard({
         durationSeconds={video.durationSeconds}
         visibilityLabel={visibility.label}
         locked={visibility.id === 'private'}
+        loadWhenVisible
       />
       <div className="space-y-3 p-4">
         <div className="space-y-1">
@@ -406,6 +466,7 @@ function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
             : {})}
           visibilityLabel={visibilityLabel}
           locked={video.visibility === 'private'}
+          loadWhenVisible
         />
       </a>
       <div className="space-y-3 p-4">

@@ -46,3 +46,4 @@ export function createEVaultVideoLibrary(
 }
 
 export type EVaultVideoLibrary = ReturnType<typeof createEVaultVideoLibrary>;
+export type { InventoryDiscovery, InventoryMetrics, InventoryScope } from './video-space/discovery';

@@ -1679,4 +1679,82 @@ describe('Meshenger video library', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('does not scan shared spaces when the caller asks for owned scope', async () => {
+    const fetcher = vi.fn(async (url: URL, init: RequestInit) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@group.w3id', uri: 'https://group-vault.example' });
+      }
+      const body = JSON.parse(String(init.body ?? '{}')) as { variables?: { ontologyId?: string } };
+      if (
+        url.hostname === 'person-vault.example' &&
+        body.variables?.ontologyId === '550e8400-e29b-41d4-a716-446655440003'
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'group-ref',
+                    ontology: body.variables.ontologyId,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: '@group.w3id',
+                      canonicalChatId: 'chat-1',
+                      type: 'group',
+                    },
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (url.hostname === 'group-vault.example') {
+        throw new Error('owned scope must not read shared vaults');
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const workspace = await configuredLibrary().listWithContext(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { scope: 'owned' },
+      );
+      expect(workspace.items).toEqual([]);
+      expect(
+        fetcher.mock.calls.some(([url]) => (url as URL).hostname === 'group-vault.example'),
+      ).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('fails fast on 429 instead of retrying during the inventory request', async () => {
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/platforms/certification')
+        return json({ token: 'registry-platform-token' });
+      return new Response('too many requests', { status: 429 });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const started = Date.now();
+    try {
+      await expect(
+        configuredLibrary().list({
+          eName: '@person.w3id',
+          eVaultUri: 'https://vault.example',
+        }),
+      ).rejects.toMatchObject({ code: 'rate_limited', status: 429 });
+      expect(Date.now() - started).toBeLessThan(2_000);
+      expect(fetcher.mock.calls.length).toBeLessThan(12);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
