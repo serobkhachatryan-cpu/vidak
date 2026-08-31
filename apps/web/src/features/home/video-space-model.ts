@@ -39,7 +39,7 @@ export { completeInventory };
 export const videoSpaceTabs: ReadonlyArray<{ id: VideoSpaceTab; label: string }> = [
   { id: 'yours', label: 'Your videos' },
   { id: 'shared', label: 'Shared with you' },
-  { id: 'explore', label: 'Explore public videos' },
+  { id: 'explore', label: 'Public videos published in Vidak' },
 ];
 
 export const videoSpaceEmptyCopy = {
@@ -88,13 +88,40 @@ export function libraryUpdatingCopy(count: number): string {
   return `Showing ${count} ${count === 1 ? 'video' : 'videos'} — updating your library…`;
 }
 
+export function libraryProgressCopy(input: {
+  itemCount: number;
+  shared: boolean;
+  completeness?: InventoryCompleteness;
+  discovery?: InventoryDiscovery;
+}): string {
+  const noun = input.shared ? 'shared videos' : 'videos';
+  const found = `${input.itemCount} ${noun} found`;
+  const completeness = input.completeness;
+  const parts = [found];
+  if (completeness && completeness.expected > 0) {
+    parts.push(`${completeness.indexed} of ${completeness.expected} spaces indexed`);
+  }
+  const retrying = completeness?.retrying ?? 0;
+  if (retrying > 0) parts.push(`retrying ${retrying}`);
+  else if (input.discovery === 'partial' && completeness?.retryNeeded) parts.push('retry needed');
+  else if (input.discovery === 'refreshing') parts.push('updating your library');
+  return parts.join(' · ');
+}
+
 export function libraryDiscoveryBanner(input: {
   discovery?: InventoryDiscovery;
   completeness?: InventoryCompleteness;
   itemCount: number;
+  shared?: boolean;
 }): string | undefined {
-  if (input.discovery === 'refreshing') return libraryUpdatingCopy(input.itemCount);
-  if (input.discovery === 'partial') return sharedInventoryBanner(input.completeness);
+  if (input.discovery === 'refreshing' || input.discovery === 'partial') {
+    return libraryProgressCopy({
+      itemCount: input.itemCount,
+      shared: input.shared === true,
+      discovery: input.discovery,
+      ...(input.completeness ? { completeness: input.completeness } : {}),
+    });
+  }
   return undefined;
 }
 

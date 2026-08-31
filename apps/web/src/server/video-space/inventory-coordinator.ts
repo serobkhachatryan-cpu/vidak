@@ -16,6 +16,7 @@ import {
   type InventoryCacheOutcome,
   type InventoryDiscovery,
   type InventoryMetrics,
+  type InventoryScanPhase,
   type InventoryScope,
   type InventorySourceCounts,
   inventoryDiscovery,
@@ -42,7 +43,7 @@ export interface InventoryScanner {
       scope: InventoryScope;
       onSnapshot: (
         library: MeshengerLibrary,
-        phase: 'first' | 'done',
+        phase: InventoryScanPhase,
         counts: InventorySourceCounts,
       ) => void;
     },
@@ -124,9 +125,9 @@ export function createInventoryCoordinator(options?: {
       .scanLibrary(user, {
         scope,
         onSnapshot: (library, phase, counts) => {
-          entry.snapshot = library;
+          entry.snapshot = mergeLibraries(entry.snapshot, library);
           entry.sourceCounts = counts;
-          entry.spaces = spacesFromItems(library.items, scope);
+          entry.spaces = spacesFromItems(entry.snapshot.items, scope);
           if (entry.firstResultAt === undefined) entry.firstResultAt = now();
           entry.resolveFirst();
           if (phase === 'done') {
@@ -136,10 +137,10 @@ export function createInventoryCoordinator(options?: {
         },
       })
       .then((library) => {
-        entry.snapshot = library;
+        entry.snapshot = mergeLibraries(entry.snapshot, library);
         entry.scanning = false;
         entry.completedAt = now();
-        entry.spaces = spacesFromItems(library.items, scope);
+        entry.spaces = spacesFromItems(entry.snapshot.items, scope);
         entry.resolveFirst();
       })
       .catch(() => {
@@ -294,6 +295,21 @@ function emptyLibrary(): MeshengerLibrary {
     conversations: [],
     messages: [],
     completeness: completeInventory,
+  };
+}
+
+function mergeLibraries(previous: MeshengerLibrary, next: MeshengerLibrary): MeshengerLibrary {
+  const items = new Map(previous.items.map((item) => [item.id, item]));
+  for (const item of next.items) items.set(item.id, item);
+  const conversations = new Map(previous.conversations.map((item) => [item.id, item]));
+  for (const item of next.conversations) conversations.set(item.id, item);
+  const messages = new Map(previous.messages.map((item) => [item.id, item]));
+  for (const item of next.messages) messages.set(item.id, item);
+  return {
+    items: [...items.values()].sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
+    conversations: [...conversations.values()],
+    messages: [...messages.values()],
+    completeness: next.completeness,
   };
 }
 
