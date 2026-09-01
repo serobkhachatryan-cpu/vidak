@@ -3114,6 +3114,78 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('reseeds a falsely complete job that still has unsettled shared spaces', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: {
+        indexed: 0,
+        expected: 12,
+        denied: 0,
+        missing: 0,
+        failed: 1,
+        complete: true,
+        retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 10,
+        retrying: 0,
+      },
+      ledger: {
+        queue: [],
+        drainFinished: true,
+        remaining: [
+          ['@group-a.w3id', 2],
+          ['@group-b.w3id', 1],
+        ],
+        settled: ['@failed.w3id'],
+        referencedGroupChats: [['@group-a.w3id', ['chat-1']]],
+        referencedDirectChats: [['@direct-a.w3id', ['chat-2']]],
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      const result = await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', onSnapshot: () => undefined },
+      );
+      const saved = await store.getByOwner('@person.w3id');
+      expect(saved?.status).toBe('running');
+      expect(saved?.ledger.drainFinished).not.toBe(true);
+      expect(result.completeness.complete).toBe(false);
+      expect(result.completeness.expected).toBe(12);
+      expect(
+        result.completeness.indexed +
+          result.completeness.denied +
+          result.completeness.missing +
+          (result.completeness.failed ?? 0),
+      ).toBeLessThan(result.completeness.expected);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps paging after an HTTP hydrate when only drain continues', async () => {
     const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
     let chatPages = 0;
