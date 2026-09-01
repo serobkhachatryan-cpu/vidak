@@ -19,6 +19,7 @@ import {
   completeInventory,
   emptyInventoryCoverage,
   emptyInventoryMediaCounts,
+  inventoryJobNeedsDrain,
 } from './completeness';
 import type { InventorySourceCounts } from './discovery';
 import { emptySourceCounts } from './discovery';
@@ -193,7 +194,7 @@ export function createMemoryInventoryJobStore(): InventoryJobStore {
       return job ? cloneJob(job) : undefined;
     },
     async listRunning() {
-      return [...jobs.values()].filter((job) => job.status === 'running').map(cloneJob);
+      return [...jobs.values()].filter((job) => inventoryJobNeedsDrain(job)).map(cloneJob);
     },
     async createJob(input) {
       const existing = jobs.get(input.ownerEName);
@@ -419,22 +420,18 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
       );
     },
     async listRunning() {
-      const rows = await db()
-        .select()
-        .from(videoSpaceInventoryJobs)
-        .where(eq(videoSpaceInventoryJobs.status, 'running'));
+      const rows = await db().select().from(videoSpaceInventoryJobs);
       const jobs: InventoryJobRecord[] = [];
       for (const row of rows) {
         const extras = await loadJobExtras(row.id, row.ledger as Record<string, unknown>);
-        jobs.push(
-          asJobRecord(
-            row,
-            extras.items,
-            extras.conversations,
-            extras.messages,
-            extras.sourceCounts,
-          ),
+        const job = asJobRecord(
+          row,
+          extras.items,
+          extras.conversations,
+          extras.messages,
+          extras.sourceCounts,
         );
+        if (inventoryJobNeedsDrain(job)) jobs.push(job);
       }
       return jobs;
     },

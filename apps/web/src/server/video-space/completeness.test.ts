@@ -4,6 +4,7 @@ import {
   emptyInventoryCoverage,
   emptyInventoryMediaCounts,
   inventoryCompletenessCopy,
+  inventoryJobNeedsDrain,
 } from './completeness';
 
 describe('inventory completeness', () => {
@@ -171,5 +172,27 @@ describe('inventory completeness', () => {
       complete: false,
       retrying: 0,
     });
+  });
+
+  it('keeps falsely complete persisted jobs on the background drain list', () => {
+    expect(
+      inventoryJobNeedsDrain({
+        status: 'complete',
+        completeness: {
+          indexed: 0,
+          expected: 12,
+          denied: 0,
+          missing: 0,
+          failed: 1,
+          complete: true,
+          retryNeeded: false,
+          retryUnavailable: 0,
+          retryRejected: 0,
+          retryRateLimited: 10,
+          retrying: 0,
+        },
+        ledger: { drainFinished: true, remaining: [['@group.w3id', 2]] },
+      }),
+    ).toBe(true);
   });
 });
