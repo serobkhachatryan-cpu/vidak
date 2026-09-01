@@ -47,4 +47,18 @@ describe('video space titles', () => {
   it('uses Untitled video as the final fallback', () => {
     expect(resolveVideoSpaceTitle({ kind: 'file' })).toBe('Untitled video');
   });
+
+  it('ignores generic ontology placeholders in favour of filenames', () => {
+    expect(
+      resolveVideoSpaceTitle({
+        kind: 'file',
+        title: 'Video',
+        filename: 'team_standup.mp4',
+      }),
+    ).toBe('Team Standup');
+  });
+
+  it('treats generic placeholders as absent when no filename exists', () => {
+    expect(resolveVideoSpaceTitle({ kind: 'file', title: 'Video' })).toBe('Untitled video');
+  });
 });

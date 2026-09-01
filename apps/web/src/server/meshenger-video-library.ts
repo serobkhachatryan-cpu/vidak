@@ -12,6 +12,10 @@ import {
 import { parseRetryAfter, retryDelayMs, retryWithExponentialBackoff } from './video-space/backoff';
 import { assembleVideoSpaceCatalogue } from './video-space/catalogue';
 import {
+  isStaleCatalogueVersion,
+  VIDEO_SPACE_CATALOGUE_VERSION,
+} from './video-space/catalogue-version';
+import {
   createInventoryCompletenessTracker,
   type InventoryCompleteness,
   type InventoryCompletenessTracker,
@@ -1023,6 +1027,7 @@ export class MeshengerVideoLibrary {
               key,
               [...value],
             ]),
+            catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
           },
           items: library.items,
           conversations: [...conversations],
@@ -1079,15 +1084,22 @@ export class MeshengerVideoLibrary {
     };
 
     const existingJob = await this.jobStore.getByOwner(eName);
-    const job =
+    let job =
       existingJob ??
       (await this.jobStore.createJob({
         ownerEName: eName,
         ownerEVaultUri: ownVault.eVaultUri,
       }));
+    let drainFinished = job.ledger.drainFinished === true;
+    if (drainFinished && isStaleCatalogueVersion(job.ledger)) {
+      job = await this.jobStore.replaceJob({
+        ownerEName: eName,
+        ownerEVaultUri: ownVault.eVaultUri,
+      });
+      drainFinished = false;
+    }
     jobId = job.id;
     jobCreatedAt = job.createdAt;
-    const drainFinished = job.ledger.drainFinished === true;
     const savedQueue = Array.isArray(job.ledger.queue) ? (job.ledger.queue as SharedWork[]) : [];
     const openTasks = await this.jobStore.loadOpenTasks(job.id);
     const restoreJobLedger = () => {

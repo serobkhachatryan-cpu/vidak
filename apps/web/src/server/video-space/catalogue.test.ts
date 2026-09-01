@@ -68,4 +68,14 @@ describe('assembleVideoSpaceCatalogue', () => {
     expect(snapshot.items).toHaveLength(1);
     expect(snapshot.items[0]?.accessScope).toBe('personal');
   });
+
+  it('relabels stale generic ontology titles for display', () => {
+    const snapshot = assembleVideoSpaceCatalogue({
+      records: [{ ...personal, title: 'Video' }],
+      completeness: createInventoryCompletenessTracker().snapshot(),
+      viewerEName: '@owner.w3id',
+      toStreamId: () => 'stream',
+    });
+    expect(snapshot.items[0]?.title).toBe('Untitled video');
+  });
 });

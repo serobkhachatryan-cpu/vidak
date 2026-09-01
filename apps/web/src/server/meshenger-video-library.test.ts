@@ -7,6 +7,7 @@ import {
   createMeshengerVideoStreamId,
   verifyMeshengerVideoStreamId,
 } from './meshenger-video-library';
+import { VIDEO_SPACE_CATALOGUE_VERSION } from './video-space/catalogue-version';
 import { emptyInventoryCoverage, emptyInventoryMediaCounts } from './video-space/completeness';
 import { titleFromFilename } from './video-space/titles';
 
@@ -3092,7 +3093,7 @@ describe('Meshenger video library', () => {
         retryRateLimited: 10,
         retrying: 10,
       },
-      ledger: { queue: [], drainFinished: true },
+      ledger: { queue: [], drainFinished: true, catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION },
     });
     let chatPages = 0;
     vi.stubGlobal(
@@ -3153,6 +3154,7 @@ describe('Meshenger video library', () => {
       ledger: {
         queue: [],
         drainFinished: true,
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
         remaining: [
           ['@group-a.w3id', 2],
           ['@group-b.w3id', 1],
@@ -3226,6 +3228,7 @@ describe('Meshenger video library', () => {
       ledger: {
         queue: [],
         drainFinished: true,
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
         remaining: [],
         settled: ['@a.w3id', '@b.w3id', '@c.w3id'],
         failedSpaces: ['@d.w3id', '@e.w3id'],

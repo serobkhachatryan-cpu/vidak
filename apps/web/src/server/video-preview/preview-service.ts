@@ -69,6 +69,7 @@ export interface VideoPreviewServiceOptions {
 
 const inFlight = new Set<string>();
 const stalePendingMs = 2 * 60 * 1000;
+const staleFailedMs = 60 * 60 * 1000;
 
 export class VideoPreviewService {
   private readonly store: VideoPreviewStore;
@@ -137,7 +138,7 @@ export class VideoPreviewService {
     for (const item of items) {
       const streamId = item.streamIds?.[0];
       if (!streamId) continue;
-      void this.ensureEVaultPreview(user, streamId).catch(() => undefined);
+      void this.ensureEVaultPreview(user, streamId, { retryFailed: true }).catch(() => undefined);
     }
   }
 
@@ -203,23 +204,35 @@ export class VideoPreviewService {
   private async ensureEVaultPreview(
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
+    options?: { retryFailed?: boolean },
   ): Promise<VideoPreviewRecord> {
     const evault = this.requireEVaultSource();
     const { fileUri } = evault.inspectStream(user, streamId);
-    return this.generate('evault-file', fileUri, async () => {
-      const mediaUrl = await evault.resolveMediaUrl(user, streamId);
-      return { kind: 'url', url: mediaUrl };
-    });
+    return this.generate(
+      'evault-file',
+      fileUri,
+      async () => {
+        const mediaUrl = await evault.resolveMediaUrl(user, streamId);
+        return { kind: 'url', url: mediaUrl };
+      },
+      options,
+    );
   }
 
   private async generate(
     sourceKind: VideoPreviewSourceKind,
     sourceKey: string,
     resolveSource: () => Promise<PreviewFrameSource | undefined>,
+    options?: { retryFailed?: boolean },
   ): Promise<VideoPreviewRecord> {
     const existing = await this.store.getBySource(sourceKind, sourceKey);
     if (existing?.status === 'ready' && existing.storageKey) return existing;
-    if (existing?.status === 'failed') return existing;
+    if (
+      existing?.status === 'failed' &&
+      !shouldRetryFailed(existing, options?.retryFailed === true)
+    ) {
+      return existing;
+    }
     if (
       existing?.status === 'pending' &&
       !isStale(existing) &&
@@ -325,6 +338,15 @@ function lockKey(sourceKind: VideoPreviewSourceKind, sourceKey: string): string 
 function isStale(record: VideoPreviewRecord): boolean {
   const updated = Date.parse(record.updatedAt);
   return !Number.isFinite(updated) || Date.now() - updated > stalePendingMs;
+}
+
+function isStaleFailed(record: VideoPreviewRecord): boolean {
+  const updated = Date.parse(record.updatedAt);
+  return Number.isFinite(updated) && Date.now() - updated > staleFailedMs;
+}
+
+function shouldRetryFailed(record: VideoPreviewRecord, retryFailed: boolean): boolean {
+  return retryFailed || isStaleFailed(record);
 }
 
 export function sanitizeOwnedVideoForLibrary(video: Video): Video {

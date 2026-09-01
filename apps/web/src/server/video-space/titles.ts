@@ -10,6 +10,24 @@ export interface ResolveVideoSpaceTitleInput {
   kind?: VideoSpaceKind;
 }
 
+/** Ontology placeholders and other non-specific labels that should not win over filenames. */
+const genericVideoSpaceTitles = new Set([
+  'video',
+  'file',
+  'media',
+  'recording',
+  'call',
+  'message',
+  'untitled',
+  'untitled video',
+]);
+
+export function isGenericVideoSpaceTitle(value: string | undefined): boolean {
+  const trimmed = value?.trim();
+  if (!trimmed) return false;
+  return genericVideoSpaceTitles.has(trimmed.toLocaleLowerCase());
+}
+
 /** Human-readable title from a filename, without extension. */
 export function titleFromFilename(filename: string): string | undefined {
   const base = filename
@@ -51,9 +69,15 @@ function formatTitleDate(createdAt: string): string {
  * title/caption → filename without extension → message text →
  * call/conversation title plus date → "Untitled video".
  */
+export function normalizeCatalogueDisplayTitle(title: string | undefined): string {
+  const trimmed = title?.trim();
+  if (!trimmed || isGenericVideoSpaceTitle(trimmed)) return 'Untitled video';
+  return trimmed;
+}
+
 export function resolveVideoSpaceTitle(input: ResolveVideoSpaceTitleInput): string {
   const explicit = firstNonEmpty([input.title, input.caption]);
-  if (explicit) return explicit;
+  if (explicit && !isGenericVideoSpaceTitle(explicit)) return explicit;
 
   const fromFilename = input.filename ? titleFromFilename(input.filename) : undefined;
   if (fromFilename) return fromFilename;

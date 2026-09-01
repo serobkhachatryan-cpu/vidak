@@ -293,6 +293,37 @@ describe('VideoPreviewService', () => {
     });
   });
 
+  it('retries failed library previews during backfill', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    const retrying = new VideoPreviewService({
+      store,
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      extractor: {
+        extractUsefulFrame: async () => ({ jpeg, captureSeconds: 3 }),
+      },
+      evault: {
+        inspectStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        resolveMediaUrl: async () => 'https://media.example/private.mp4',
+      },
+    });
+    await store.create({
+      id: 'preview-1',
+      sourceKind: 'evault-file',
+      sourceKey: 'w3ds://file?id=@owner.w3id/grant-1',
+      status: 'failed',
+    });
+
+    await retrying.scheduleLibraryBackfill({ eName: '@owner.w3id' }, [{ streamIds: ['grant-1'] }]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const record = await store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/grant-1');
+    expect(record?.status).toBe('ready');
+  });
+
   it('does not treat LocalDiskMediaStorage as a public URL surface', () => {
     expect(new LocalDiskMediaStorage('/tmp/vidak-preview-test').createStorageKey()).toMatch(
       /^media_/,

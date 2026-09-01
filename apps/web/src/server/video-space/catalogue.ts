@@ -2,6 +2,7 @@ import type { DiscoveredVideoRecord, VideoAccessBasis, VideoSpaceKind } from './
 import { dedupeDiscoveredVideos } from './adapters';
 import type { InventoryCompleteness } from './completeness';
 import { documentedVideoSourceIds, documentedVideoSources } from './documented-sources';
+import { normalizeCatalogueDisplayTitle } from './titles';
 import {
   type VideoSpaceAccessScope,
   type VideoSpaceVisibility,
@@ -48,7 +49,7 @@ export function assembleVideoSpaceCatalogue(input: {
       .map((item) => ({
         id: item.key,
         kind: item.kind,
-        title: item.title,
+        title: normalizeCatalogueDisplayTitle(item.title),
         ...(item.durationSeconds !== undefined ? { durationSeconds: item.durationSeconds } : {}),
         ...(item.shape ? { shape: item.shape } : {}),
         ...(item.createdAt ? { createdAt: item.createdAt } : {}),
