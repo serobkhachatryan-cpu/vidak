@@ -15,6 +15,8 @@ import {
   createInventoryCompletenessTracker,
   type InventoryCompleteness,
   type InventoryCompletenessTracker,
+  inventorySpacesClassified,
+  ledgerHasUnsettledSpaces,
 } from './video-space/completeness';
 import type {
   InventoryScanPhase,
@@ -71,27 +73,6 @@ const maxRejectedAttempts = 4;
 // route still verifies the current user on every request.
 const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
-
-function inventorySpacesClassified(completeness: InventoryCompleteness): number {
-  return (
-    completeness.indexed + completeness.denied + completeness.missing + (completeness.failed ?? 0)
-  );
-}
-
-function ledgerHasUnsettledSpaces(ledger: Record<string, unknown>): boolean {
-  if (!Array.isArray(ledger.remaining)) return false;
-  const settledKeys = new Set(
-    Array.isArray(ledger.settled)
-      ? ledger.settled.filter((entry): entry is string => typeof entry === 'string')
-      : [],
-  );
-  for (const entry of ledger.remaining as [string, number][]) {
-    if (!Array.isArray(entry) || typeof entry[0] !== 'string' || typeof entry[1] !== 'number')
-      continue;
-    if (entry[1] > 0 && !settledKeys.has(entry[0])) return true;
-  }
-  return false;
-}
 
 export type MeshengerVideoKind = 'call-recording' | 'video-message' | 'file';
 export type EVaultVideoAccessScope = VideoSpaceAccessScope;

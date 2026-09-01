@@ -105,6 +105,40 @@ export const completeInventory: InventoryCompleteness = {
   media: { ...emptyInventoryMediaCounts, unresolved: {} },
 };
 
+export function inventorySpacesClassified(completeness: InventoryCompleteness): number {
+  return (
+    completeness.indexed + completeness.denied + completeness.missing + (completeness.failed ?? 0)
+  );
+}
+
+export function ledgerHasUnsettledSpaces(ledger: Record<string, unknown>): boolean {
+  if (!Array.isArray(ledger.remaining)) return false;
+  const settledKeys = new Set(
+    Array.isArray(ledger.settled)
+      ? ledger.settled.filter((entry): entry is string => typeof entry === 'string')
+      : [],
+  );
+  for (const entry of ledger.remaining as [string, number][]) {
+    if (!Array.isArray(entry) || typeof entry[0] !== 'string' || typeof entry[1] !== 'number')
+      continue;
+    if (entry[1] > 0 && !settledKeys.has(entry[0])) return true;
+  }
+  return false;
+}
+
+export function inventoryJobNeedsDrain(job: {
+  status: string;
+  completeness: InventoryCompleteness;
+  ledger: Record<string, unknown>;
+}): boolean {
+  if (job.status === 'running') return true;
+  if (ledgerHasUnsettledSpaces(job.ledger)) return true;
+  if (job.ledger.drainFinished !== true) return true;
+  if ((job.completeness.retrying ?? 0) > 0) return true;
+  if (!job.completeness.complete) return true;
+  return inventorySpacesClassified(job.completeness) < job.completeness.expected;
+}
+
 export function inventoryCompletenessCopy(state: InventoryCompleteness): string {
   const parts = [`${state.indexed} of ${state.expected} shared spaces indexed`];
   if (state.denied > 0) parts.push(`${state.denied} denied by current access`);
