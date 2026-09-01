@@ -8,6 +8,9 @@ import {
   verifyMeshengerVideoStreamId,
 } from './meshenger-video-library';
 import { emptyInventoryCoverage, emptyInventoryMediaCounts } from './video-space/completeness';
+import { titleFromFilename } from './video-space/titles';
+
+const t = (filename: string) => titleFromFilename(filename) ?? filename;
 
 const secret = '12345678901234567890123456789012';
 const grant = {
@@ -155,19 +158,19 @@ describe('Meshenger video library', () => {
         expect.arrayContaining([
           expect.objectContaining({
             kind: 'video-message',
-            title: 'Circle update.mp4',
+            title: t(t('Circle update.mp4')),
             shape: 'circle',
             durationSeconds: 12,
           }),
           expect.objectContaining({
             kind: 'file',
-            title: 'A shared clip.mp4',
+            title: t(t('A shared clip.mp4')),
             accessScope: 'personal',
             visibility: 'private',
           }),
           expect.objectContaining({
             kind: 'file',
-            title: 'Video from another app.webm',
+            title: t(t('Video from another app.webm')),
             accessScope: 'personal',
             visibility: 'private',
           }),
@@ -427,13 +430,13 @@ describe('Meshenger video library', () => {
           }),
           expect.objectContaining({
             kind: 'file',
-            title: 'Planning demo.mp4',
+            title: t(t('Planning demo.mp4')),
             accessScope: 'shared',
             visibility: 'shared-with-me',
           }),
           expect.objectContaining({
             kind: 'file',
-            title: 'Shared raw eVault clip.mp4',
+            title: t(t('Shared raw eVault clip.mp4')),
             accessScope: 'shared',
             visibility: 'shared-with-me',
           }),
@@ -646,7 +649,7 @@ describe('Meshenger video library', () => {
       expect(videos).toEqual([
         expect.objectContaining({
           kind: 'file',
-          title: 'Owned studio clip.mp4',
+          title: t('Owned studio clip.mp4'),
           accessScope: 'personal',
           visibility: 'private',
         }),
@@ -767,7 +770,7 @@ describe('Meshenger video library', () => {
       expect(videos[0]).toEqual(
         expect.objectContaining({
           kind: 'video-message',
-          title: 'Same clip.mp4',
+          title: t('Same clip.mp4'),
           visibility: 'private',
         }),
       );
@@ -919,7 +922,7 @@ describe('Meshenger video library', () => {
       expect(videos).toEqual([
         expect.objectContaining({
           kind: 'video-message',
-          title: 'Briefing.mp4',
+          title: t('Briefing.mp4'),
           accessScope: 'personal',
         }),
       ]);
@@ -1056,7 +1059,7 @@ describe('Meshenger video library', () => {
       expect(workspace.items).toEqual([
         expect.objectContaining({
           kind: 'video-message',
-          title: 'Earlier briefing.mp4',
+          title: t('Earlier briefing.mp4'),
           accessScope: 'shared',
         }),
       ]);
@@ -1180,7 +1183,7 @@ describe('Meshenger video library', () => {
         eVaultUri: 'https://person-vault.example',
       });
       expect(workspace.items).toEqual([
-        expect.objectContaining({ title: 'Indexed clip.mp4', accessScope: 'shared' }),
+        expect.objectContaining({ title: t('Indexed clip.mp4'), accessScope: 'shared' }),
       ]);
       expect(workspace.completeness).toEqual({
         indexed: 1,
@@ -1269,8 +1272,8 @@ describe('Meshenger video library', () => {
         eVaultUri: 'https://vault.example',
       });
       expect(videos.map((video) => video.title).sort()).toEqual([
-        'First page.mp4',
-        'Second page.mp4',
+        t('First page.mp4'),
+        t('Second page.mp4'),
       ]);
     } finally {
       vi.unstubAllGlobals();
@@ -1351,7 +1354,7 @@ describe('Meshenger video library', () => {
         eVaultUri: 'https://person-vault.example',
       });
       expect(workspace.items).toEqual([
-        expect.objectContaining({ title: 'Kept clip.mp4', accessScope: 'shared' }),
+        expect.objectContaining({ title: t('Kept clip.mp4'), accessScope: 'shared' }),
       ]);
       expect(workspace.completeness).toEqual({
         indexed: 1,
@@ -1450,7 +1453,7 @@ describe('Meshenger video library', () => {
         eVaultUri: 'https://person-vault.example',
       });
       expect(workspace.items).toEqual([
-        expect.objectContaining({ title: 'Alias clip.mp4', accessScope: 'shared' }),
+        expect.objectContaining({ title: t('Alias clip.mp4'), accessScope: 'shared' }),
       ]);
       expect(workspace.completeness.indexed).toBe(1);
       expect(workspace.completeness.retryNeeded).toBe(false);
@@ -1500,7 +1503,7 @@ describe('Meshenger video library', () => {
         eName: '@person.w3id',
         eVaultUri: 'https://vault.example',
       });
-      expect(videos).toEqual([expect.objectContaining({ title: 'Visible clip.mp4' })]);
+      expect(videos).toEqual([expect.objectContaining({ title: t('Visible clip.mp4') })]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1685,7 +1688,7 @@ describe('Meshenger video library', () => {
         eVaultUri: 'https://person-vault.example',
       });
       expect(workspace.items).toEqual([
-        expect.objectContaining({ title: 'Group clip.mp4', accessScope: 'shared' }),
+        expect.objectContaining({ title: t('Group clip.mp4'), accessScope: 'shared' }),
       ]);
       expect(workspace.completeness).toEqual({
         indexed: 1,
@@ -1835,8 +1838,8 @@ describe('Meshenger video library', () => {
           },
         },
       );
-      expect(titles.some((page) => page.includes('Recovered take.mp4'))).toBe(true);
-      expect(result.items.map((item) => item.title)).toContain('Recovered take.mp4');
+      expect(titles.some((page) => page.includes(t('Recovered take.mp4')))).toBe(true);
+      expect(result.items.map((item) => item.title)).toContain(t('Recovered take.mp4'));
       expect(result.completeness.complete).toBe(true);
       expect(result.completeness.retryNeeded).toBe(false);
     } finally {
@@ -1912,11 +1915,11 @@ describe('Meshenger video library', () => {
           },
         },
       );
-      expect(snapshots.some((page) => page.length === 1 && page[0] === 'First page.mp4')).toBe(
+      expect(snapshots.some((page) => page.length === 1 && page[0] === t('First page.mp4'))).toBe(
         true,
       );
       expect(result.items.map((item) => item.title)).toEqual(
-        expect.arrayContaining(['First page.mp4', 'Second page.mp4']),
+        expect.arrayContaining([t('First page.mp4'), t('Second page.mp4')]),
       );
     } finally {
       vi.unstubAllGlobals();
@@ -2090,7 +2093,7 @@ describe('Meshenger video library', () => {
       );
       expect(snapshots[0]?.length ?? 0).toBeLessThan(result.items.length);
       expect(result.items.map((item) => item.title)).toEqual(
-        expect.arrayContaining(['Group A clip.mp4', 'Group B clip.mp4']),
+        expect.arrayContaining([t('Group A clip.mp4'), t('Group B clip.mp4')]),
       );
       expect(result.completeness.retryNeeded).toBe(false);
     } finally {
@@ -2274,18 +2277,22 @@ describe('Meshenger video library', () => {
       );
       const titles = result.items.map((item) => item.title);
       expect(titles).toEqual(
-        expect.arrayContaining(['Call recording', 'Friend briefing.mp4', 'My group take.mp4']),
+        expect.arrayContaining([
+          'Call recording',
+          t('Friend briefing.mp4'),
+          t('My group take.mp4'),
+        ]),
       );
       expect(new Set(titles).size).toBe(titles.length);
       expect(result.items.find((item) => item.title === 'Call recording')?.accessScope).toBe(
         'personal',
       );
-      expect(result.items.find((item) => item.title === 'My group take.mp4')?.accessScope).toBe(
+      expect(result.items.find((item) => item.title === t('My group take.mp4'))?.accessScope).toBe(
         'personal',
       );
-      expect(result.items.find((item) => item.title === 'Friend briefing.mp4')?.accessScope).toBe(
-        'shared',
-      );
+      expect(
+        result.items.find((item) => item.title === t('Friend briefing.mp4'))?.accessScope,
+      ).toBe('shared');
       expect(
         fetcher.mock.calls.some(([url]) => (url as URL).hostname === 'group-vault.example'),
       ).toBe(true);
@@ -2436,9 +2443,9 @@ describe('Meshenger video library', () => {
           },
         },
       );
-      expect(snapshots.some((page) => page.includes('History page one.mp4'))).toBe(true);
+      expect(snapshots.some((page) => page.includes(t('History page one.mp4')))).toBe(true);
       expect(result.items.map((item) => item.title)).toEqual(
-        expect.arrayContaining(['History page one.mp4', 'History page two.mp4']),
+        expect.arrayContaining([t('History page one.mp4'), t('History page two.mp4')]),
       );
       expect(result.completeness).toMatchObject({
         indexed: 1,
@@ -2503,7 +2510,7 @@ describe('Meshenger video library', () => {
         { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
         { scope: 'owned', onSnapshot: () => undefined },
       );
-      expect(result.items.map((item) => item.title)).toEqual(['Keep this.mp4']);
+      expect(result.items.map((item) => item.title)).toEqual([t('Keep this.mp4')]);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -2580,7 +2587,7 @@ describe('Meshenger video library', () => {
         { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
         { scope: 'shared', onSnapshot: () => undefined },
       );
-      expect(result.items.map((item) => item.title)).toContain('Official dm clip.mp4');
+      expect(result.items.map((item) => item.title)).toContain(t('Official dm clip.mp4'));
       expect(result.completeness.coverage?.officialChatGrants).toBeGreaterThan(0);
       expect(result.completeness.coverage?.directChats).toBeGreaterThan(0);
       expect(result.completeness.complete).toBe(true);
@@ -2683,7 +2690,7 @@ describe('Meshenger video library', () => {
         { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
         { scope: 'shared', onSnapshot: () => undefined },
       );
-      expect(result.items.map((item) => item.title)).toContain('Unscoped group clip.mp4');
+      expect(result.items.map((item) => item.title)).toContain(t('Unscoped group clip.mp4'));
       expect(result.completeness.coverage?.referenceGrants).toBeGreaterThan(0);
       expect(result.completeness.coverage?.messagePages).toBeGreaterThan(0);
       expect(result.completeness.coverage?.groupManifestPages).toBeGreaterThan(0);
@@ -2802,7 +2809,7 @@ describe('Meshenger video library', () => {
         { scope: 'shared', onSnapshot: () => undefined },
       );
       expect(manifestPages).toBeGreaterThanOrEqual(2);
-      expect(result.items.map((item) => item.title)).toContain('Member-only take.mp4');
+      expect(result.items.map((item) => item.title)).toContain(t('Member-only take.mp4'));
       expect(result.completeness.coverage?.groupManifestPages).toBeGreaterThanOrEqual(2);
       expect(result.completeness.coverage?.filePages).toBeGreaterThan(0);
     } finally {

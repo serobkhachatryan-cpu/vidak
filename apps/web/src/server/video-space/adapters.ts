@@ -5,6 +5,7 @@ import {
   constructW3dsFileUri,
   documentedMediaFileUris,
 } from './media-eligibility';
+import { resolveVideoSpaceTitle } from './titles';
 import type { VideoSpaceAccessScope } from './visibility';
 
 export type VideoSpaceKind = 'call-recording' | 'video-message' | 'file';
@@ -171,7 +172,15 @@ export function discoverW3dsFileVideos(
       key: `w3ds-file:${vaultOwnerEName}:${file.id}`,
       fileUris: [fileUri],
       kind: 'file',
-      title: optionalString(file.parsed.filename) ?? 'Video',
+      title: resolveVideoSpaceTitle({
+        title: optionalString(file.parsed.title),
+        caption: optionalString(file.parsed.caption),
+        filename: optionalString(file.parsed.filename),
+        kind: 'file',
+        ...(optionalString(file.parsed.uploadedAt)
+          ? { createdAt: optionalString(file.parsed.uploadedAt) }
+          : {}),
+      }),
       ...(optionalString(file.parsed.uploadedAt)
         ? { createdAt: optionalString(file.parsed.uploadedAt) }
         : {}),
@@ -218,7 +227,15 @@ export function discoverFileRecordVideos(
       key: `file:${vaultOwnerEName}:${file.id}:${fileUri}`,
       fileUris: [fileUri],
       kind: 'file',
-      title: optionalString(file.parsed.filename) ?? optionalString(file.parsed.name) ?? 'Video',
+      title: resolveVideoSpaceTitle({
+        title: optionalString(file.parsed.title),
+        caption: optionalString(file.parsed.caption),
+        filename: optionalString(file.parsed.filename) ?? optionalString(file.parsed.name),
+        kind: 'file',
+        ...(optionalString(file.parsed.createdAt)
+          ? { createdAt: optionalString(file.parsed.createdAt) }
+          : {}),
+      }),
       ...(optionalString(file.parsed.createdAt)
         ? { createdAt: optionalString(file.parsed.createdAt) }
         : {}),
@@ -263,7 +280,14 @@ export function discoverCallRecordingVideos(input: {
       key: `call:${input.sourceEName}:${call.id}`,
       fileUris,
       kind: 'call-recording',
-      title: startedAt ? `Call recording · ${startedAt.slice(0, 10)}` : 'Call recording',
+      title: resolveVideoSpaceTitle({
+        title: optionalString(call.parsed.title),
+        caption: optionalString(call.parsed.caption),
+        conversationTitle:
+          optionalString(call.parsed.chatTitle) ?? optionalString(call.parsed.title),
+        ...(startedAt ? { createdAt: startedAt } : {}),
+        kind: 'call-recording',
+      }),
       ...(durationSeconds !== undefined ? { durationSeconds } : {}),
       ...(startedAt ? { createdAt: startedAt } : {}),
       accessScope,
@@ -302,12 +326,20 @@ export function discoverVideoMessageVideos(
       key: `message:${message.id}:${fileUris.join(',')}`,
       fileUris,
       kind: 'video-message',
-      title:
-        optionalString(file?.name) ??
-        optionalString(file?.filename) ??
-        optionalString(file?.displayName) ??
-        optionalString(message.parsed.content) ??
-        'Video',
+      title: resolveVideoSpaceTitle({
+        title: optionalString(message.parsed.title),
+        caption: optionalString(message.parsed.caption),
+        filename:
+          optionalString(file?.filename) ??
+          optionalString(file?.name) ??
+          optionalString(file?.displayName),
+        messageText: optionalString(message.parsed.content),
+        conversationTitle: optionalString(message.parsed.chatTitle),
+        ...(optionalString(message.parsed.createdAt)
+          ? { createdAt: optionalString(message.parsed.createdAt) }
+          : {}),
+        kind: 'video-message',
+      }),
       ...(number(message.parsed.durationSec) !== undefined
         ? { durationSeconds: number(message.parsed.durationSec) }
         : {}),

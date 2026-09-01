@@ -1,6 +1,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { EVaultVideoLibraryError } from '../../../../server/evault-video-library';
 import { evaultVideoPreviewPath } from '../../../../server/video-preview/capture-time';
+import type { VideoPreviewState } from '../../../../server/video-preview/preview-service';
 import { parseInventoryScope } from '../../../../server/video-space/discovery';
 import { getInventoryCoordinator } from '../../../../server/video-space/inventory-coordinator';
 import {
@@ -22,14 +23,18 @@ export async function GET(request: NextRequest) {
     const scope = parseInventoryScope(request.nextUrl.searchParams.get('scope')) ?? 'all';
     const refresh = request.nextUrl.searchParams.get('refresh') === '1';
     const snapshot = await getInventoryCoordinator().getSnapshot(session.user, { scope, refresh });
-    const items = snapshot.items.map((item) => {
-      const streamId = item.streamIds[0];
-      return {
-        ...item,
-        previewState: streamId ? ('processing' as const) : ('unavailable' as const),
-        ...(streamId ? { previewUrl: evaultVideoPreviewPath(streamId) } : {}),
-      };
-    });
+    const previewService = await loadPreviewService();
+
+    if (previewService) {
+      void previewService
+        .scheduleLibraryBackfill(session.user, snapshot.items)
+        .catch(() => undefined);
+    }
+
+    const items = await Promise.all(
+      snapshot.items.map(async (item) => attachPreviewFields(item, session.user, previewService)),
+    );
+
     return privateJson({
       items,
       conversations: snapshot.conversations,
@@ -42,6 +47,41 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     return privateJson(errorBody(error), errorStatus(error));
   }
+}
+
+async function loadPreviewService() {
+  try {
+    const { getVideoPreviewService } = await import(
+      '../../../../server/video-preview/preview-runtime'
+    );
+    return getVideoPreviewService();
+  } catch {
+    return undefined;
+  }
+}
+
+async function attachPreviewFields(
+  item: Awaited<
+    ReturnType<ReturnType<typeof getInventoryCoordinator>['getSnapshot']>
+  >['items'][number],
+  user: { eName: string },
+  previewService: Awaited<ReturnType<typeof loadPreviewService>>,
+) {
+  const streamId = item.streamIds[0];
+  if (!streamId) {
+    return { ...item, previewState: 'unavailable' as const };
+  }
+
+  let previewState: VideoPreviewState = 'processing';
+  if (previewService) {
+    previewState = await previewService.peekLibraryPreview(user, streamId);
+  }
+
+  return {
+    ...item,
+    previewState,
+    previewUrl: evaultVideoPreviewPath(streamId),
+  };
 }
 
 function privateJson(body: unknown, status = 200): NextResponse {

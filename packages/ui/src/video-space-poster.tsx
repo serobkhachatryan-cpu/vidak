@@ -3,7 +3,7 @@
 import { isRenderableThumbnailUrl } from '@w3ds/types';
 import { useEffect, useRef, useState } from 'react';
 import { enqueuePreviewLoad } from './preview-load-queue';
-import { Badge, Skeleton } from './primitives';
+import { Badge } from './primitives';
 
 export type VideoSpacePosterState = 'ready' | 'processing' | 'unavailable';
 
@@ -90,6 +90,15 @@ export function VideoSpacePoster({
           }, 2000);
           return;
         }
+        if (response.status === 422 || response.status === 404) {
+          if (fallbackPosterUrl && fallbackPosterUrl !== posterUrl) {
+            setUsedFallback(true);
+            setSource(fallbackPosterUrl);
+            return;
+          }
+          setFailed(true);
+          return;
+        }
         if (fallbackPosterUrl && fallbackPosterUrl !== posterUrl) {
           setUsedFallback(true);
           setSource(fallbackPosterUrl);
@@ -111,7 +120,7 @@ export function VideoSpacePoster({
   const showProcessing = !showImage && !failed && state !== 'unavailable';
 
   return (
-    <div ref={frameRef} className="relative overflow-hidden bg-muted">
+    <div ref={frameRef} className="relative overflow-hidden">
       {showImage && source ? (
         <img
           src={source}
@@ -142,11 +151,13 @@ export function VideoSpacePoster({
           locked={locked}
         />
       )}
-      <VideoSpacePosterBadges
-        {...(durationSeconds !== undefined ? { durationSeconds } : {})}
-        {...(visibilityLabel ? { visibilityLabel } : {})}
-        locked={locked}
-      />
+      {showImage ? (
+        <VideoSpacePosterBadges
+          {...(durationSeconds !== undefined ? { durationSeconds } : {})}
+          {...(visibilityLabel ? { visibilityLabel } : {})}
+          locked={locked}
+        />
+      ) : null}
     </div>
   );
 }
@@ -164,11 +175,12 @@ export function VideoSpaceProcessingPoster({
 }) {
   return (
     <div
-      className="relative aspect-video w-full overflow-hidden bg-muted"
+      className="relative flex aspect-video w-full flex-col items-center justify-center gap-2 border border-border/60 bg-muted/70 px-4 text-center"
       role="status"
       aria-label={`${title} Preparing preview`}
     >
-      <Skeleton className="absolute inset-0 h-full w-full rounded-none" />
+      <VideoIcon />
+      <p className="font-sans text-[11px] text-muted-foreground">Preparing preview</p>
       <VideoSpacePosterBadges
         {...(durationSeconds !== undefined ? { durationSeconds } : {})}
         {...(visibilityLabel ? { visibilityLabel } : {})}
@@ -191,15 +203,11 @@ export function VideoSpaceUnavailablePoster({
 }) {
   return (
     <div
-      className="relative flex aspect-video w-full flex-col items-center justify-center gap-2 bg-muted px-4 text-center"
+      className="relative flex aspect-video w-full flex-col items-center justify-center gap-2 border border-border/60 bg-muted/70 px-4 text-center"
       role="img"
       aria-label={`${title} Preview unavailable`}
     >
       <VideoIcon />
-      <p className="line-clamp-2 font-sans text-sm font-semibold text-foreground">{title}</p>
-      {durationSeconds !== undefined ? (
-        <p className="font-sans text-xs text-muted-foreground">{formatDuration(durationSeconds)}</p>
-      ) : null}
       <p className="font-sans text-[11px] text-muted-foreground">Preview unavailable</p>
       <VideoSpacePosterBadges
         {...(durationSeconds !== undefined ? { durationSeconds } : {})}
@@ -248,7 +256,7 @@ function VideoIcon() {
     <svg
       viewBox="0 0 24 24"
       aria-hidden="true"
-      className="h-8 w-8 text-muted-foreground"
+      className="h-7 w-7 text-muted-foreground"
       fill="none"
       stroke="currentColor"
       strokeWidth="1.6"

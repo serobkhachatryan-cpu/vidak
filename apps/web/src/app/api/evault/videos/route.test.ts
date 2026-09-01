@@ -29,19 +29,23 @@ describe('eVault video library route', () => {
     mocks.getCoordinator.mockReset();
     mocks.getAuthService.mockReset();
     mocks.getPreviewService.mockReset();
+    mocks.getPreviewService.mockReturnValue({
+      peekLibraryPreview: vi.fn().mockResolvedValue('processing'),
+      scheduleLibraryBackfill: vi.fn().mockResolvedValue(undefined),
+    });
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it('returns a tab-scoped catalogue without probing poster state', async () => {
+  it('returns a tab-scoped catalogue with authorized preview metadata', async () => {
     const getSnapshot = vi.fn().mockResolvedValue({
       items: [
         {
           id: 'w3ds-file:@person.w3id/video-1',
           kind: 'file',
-          title: 'Video from another app.mp4',
+          title: 'Video from another app',
           accessScope: 'personal',
           visibility: 'private',
           streamIds: ['opaque-stream-id'],
@@ -73,6 +77,10 @@ describe('eVault video library route', () => {
     mocks.getAuthService.mockReturnValue({
       getSession: vi.fn().mockResolvedValue({ user: { eName: '@person.w3id' } }),
     });
+    mocks.getPreviewService.mockReturnValue({
+      peekLibraryPreview: vi.fn().mockResolvedValue('ready'),
+      scheduleLibraryBackfill: vi.fn().mockResolvedValue(undefined),
+    });
 
     const response = await GET(
       new NextRequest('https://vidak.example/api/evault/videos?scope=owned', {
@@ -86,13 +94,13 @@ describe('eVault video library route', () => {
     expect(body.discovery).toBe('complete');
     expect(body.scope).toBe('owned');
     expect(body.items[0].previewUrl).toBe('/api/evault/videos/opaque-stream-id/preview');
-    expect(body.items[0].previewState).toBe('processing');
+    expect(body.items[0].previewState).toBe('ready');
     expect(JSON.stringify(body)).not.toMatch(/w3ds:\/\/file|https:\/\/media|Bearer/i);
     expect(getSnapshot).toHaveBeenCalledWith(
       { eName: '@person.w3id' },
       { scope: 'owned', refresh: false },
     );
-    expect(mocks.getPreviewService).not.toHaveBeenCalled();
+    expect(mocks.getPreviewService).toHaveBeenCalled();
   });
 
   it('defaults missing scope to all so Home inventories the complete union', async () => {

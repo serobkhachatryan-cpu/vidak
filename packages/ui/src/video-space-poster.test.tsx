@@ -51,9 +51,10 @@ describe('VideoSpacePoster', () => {
     );
     expect(markup).not.toContain('blob:');
     expect(markup).not.toContain('<img');
+    expect(markup).not.toMatch(/w3ds:\/\//);
   });
 
-  it('shows a skeleton while processing, not error copy', () => {
+  it('shows compact processing copy instead of a blank panel', () => {
     const markup = renderToStaticMarkup(
       <VideoSpaceProcessingPoster
         title="friends with hats"
@@ -65,9 +66,10 @@ describe('VideoSpacePoster', () => {
     expect(markup).not.toContain('Preview unavailable');
     expect(markup).toContain('0:12');
     expect(markup).toContain('Private');
+    expect(markup).toContain('aspect-video');
   });
 
-  it('uses a designed cover for true failure, not a broken image', () => {
+  it('uses a compact designed cover for true failure, not a broken image', () => {
     const markup = renderToStaticMarkup(
       <VideoSpaceUnavailablePoster
         title="friends with hats"
@@ -76,11 +78,11 @@ describe('VideoSpacePoster', () => {
         locked
       />,
     );
-    expect(markup).toContain('friends with hats');
     expect(markup).toContain('Preview unavailable');
     expect(markup).toContain('0:12');
     expect(markup).not.toContain('<img');
     expect(markup).not.toContain('<video');
+    expect(markup).toContain('Preview unavailable');
   });
 
   it('does not start a preview fetch until asked to load', () => {
@@ -95,9 +97,10 @@ describe('VideoSpacePoster', () => {
     expect(markup).not.toContain('<img');
     expect(markup).toContain('Preparing preview');
     expect(markup).not.toContain('<video');
+    expect(markup).not.toMatch(/w3ds:\/\//);
   });
 
-  it('gives call recordings a poster cover with duration and lock badge', () => {
+  it('renders same-origin authorized preview posters when ready', () => {
     const markup = renderToStaticMarkup(
       <VideoSpacePoster
         title="Call recording"
@@ -110,8 +113,8 @@ describe('VideoSpacePoster', () => {
     );
     expect(markup).toContain('1:30');
     expect(markup).toContain('Private');
-    expect(markup).toContain('<img');
+    expect(markup).toContain('src="/api/evault/videos/grant/preview"');
     expect(markup).not.toContain('<video');
-    expect(markup).not.toContain('controls');
+    expect(markup).not.toMatch(/w3ds:\/\//);
   });
 });

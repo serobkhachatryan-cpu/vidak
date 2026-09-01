@@ -189,6 +189,31 @@ export function shareChangeConfirmation(next: VideoSpaceVisibility): string {
   return `This changes only this video’s visibility to ${videoSpaceVisibilityLabels[next]}. Continue?`;
 }
 
+export function librarySourceLabel(
+  video: Pick<VideoSpaceLibraryItem, 'accessScope' | 'kind' | 'visibility'>,
+): string {
+  if (video.accessScope === 'shared' || video.visibility === 'shared-with-me') {
+    return 'Shared with you';
+  }
+  if (video.kind === 'call-recording') return 'Your call recording';
+  if (video.kind === 'video-message') return 'Your video message';
+  return 'Your video';
+}
+
+export function libraryCardDetails(
+  video: Pick<
+    VideoSpaceLibraryItem,
+    'durationSeconds' | 'createdAt' | 'accessScope' | 'kind' | 'visibility'
+  >,
+): string {
+  const values = [
+    video.durationSeconds !== undefined ? formatSpaceDuration(video.durationSeconds) : undefined,
+    video.createdAt ? new Date(video.createdAt).toLocaleDateString() : undefined,
+    librarySourceLabel(video),
+  ].filter(Boolean);
+  return values.join(' · ');
+}
+
 export function ownedVideoSpaceVisibility(video: Pick<Video, 'status' | 'visibility'>): {
   id: VideoSpaceVisibility;
   label: string;

@@ -37,7 +37,7 @@ describe('video space adapters', () => {
       expect.objectContaining({
         sourceId: 'w3ds-file',
         kind: 'file',
-        title: 'Studio take.mp4',
+        title: 'Studio Take',
         accessScope: 'personal',
         fileUris: [fileUri],
       }),
@@ -66,7 +66,7 @@ describe('video space adapters', () => {
       expect.objectContaining({
         sourceId: 'file-record',
         accessScope: 'shared',
-        title: 'Shared clip.webm',
+        title: 'Shared Clip',
       }),
     ]);
   });
@@ -167,7 +167,7 @@ describe('video space adapters', () => {
       expect.objectContaining({
         sourceId: 'video-message',
         accessScope: 'shared',
-        title: 'Shared briefing.mp4',
+        title: 'Shared Briefing',
         fileUris: [fileUri],
       }),
     ]);
@@ -279,7 +279,7 @@ describe('video space adapters', () => {
     );
     expect(ownMessageInGroup).toEqual([
       expect.objectContaining({
-        title: 'My group clip.mp4',
+        title: 'My Group Clip',
         accessScope: 'personal',
       }),
     ]);

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   evaultItemsForTab,
   isVideoSpaceEmpty,
+  libraryCardDetails,
   libraryDiscoveryBanner,
   libraryProgressCopy,
   libraryUpdatingCopy,
@@ -260,5 +261,31 @@ describe('video space home model', () => {
   it('confirms that a share action changes only that video', () => {
     expect(shareChangeConfirmation('private')).toMatch(/only this video/i);
     expect(shareChangeConfirmation('public')).toMatch(/Public/);
+  });
+
+  it('keeps card metadata useful without repeating the privacy badge', () => {
+    expect(
+      libraryCardDetails({
+        durationSeconds: 95,
+        createdAt: '2026-08-01T00:00:00.000Z',
+        accessScope: 'personal',
+        visibility: 'private',
+        kind: 'file',
+      }),
+    ).toMatch(/1:35/);
+    expect(
+      libraryCardDetails({
+        accessScope: 'shared',
+        visibility: 'shared-with-me',
+        kind: 'video-message',
+      }),
+    ).toBe('Shared with you');
+    expect(
+      libraryCardDetails({
+        accessScope: 'personal',
+        visibility: 'private',
+        kind: 'call-recording',
+      }),
+    ).toBe('Your call recording');
   });
 });

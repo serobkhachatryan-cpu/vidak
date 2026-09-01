@@ -1,6 +1,10 @@
-import { type NextRequest, NextResponse } from 'next/server';
+import type { NextRequest, NextResponse } from 'next/server';
 import { EVaultVideoLibraryError } from '../../../../../../server/evault-video-library';
 import { getVideoPreviewService, VideoPreviewError } from '../../../../../../server/video-preview';
+import {
+  buildPreviewRouteResponse,
+  privatePreviewErrorResponse,
+} from '../../../../../../server/video-preview/preview-response';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -22,51 +26,25 @@ export async function GET(request: NextRequest, context: RouteContext) {
     const session = await getW3dsAuthService().getSession(accessToken);
     const { streamId } = await context.params;
     const result = await getVideoPreviewService().openEVaultPreview(session.user, streamId);
-    return previewResponse(result);
+    return buildPreviewRouteResponse(request, result);
   } catch (error) {
     return previewError(error);
   }
 }
 
-function previewResponse(
-  result:
-    | { status: 'ready'; body: Uint8Array; contentType: string }
-    | { status: 'processing' }
-    | { status: 'unavailable' },
-): NextResponse {
-  if (result.status === 'ready') {
-    return new NextResponse(Buffer.from(result.body), {
-      status: 200,
-      headers: {
-        'Content-Type': result.contentType,
-        'Content-Length': String(result.body.byteLength),
-        'Cache-Control': 'private, no-store, max-age=0',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
-  }
-  if (result.status === 'processing') {
-    return privateJson({ status: 'processing' }, 202);
-  }
-  return privateJson({ status: 'unavailable' }, 422);
-}
-
 function previewError(error: unknown): NextResponse {
-  if (
-    error instanceof W3dsAuthError ||
-    error instanceof VideoPreviewError ||
-    error instanceof EVaultVideoLibraryError
-  ) {
-    return privateJson({ error: { code: error.code, message: error.message } }, error.status);
-  }
-  return privateJson(
-    { error: { code: 'internal_error', message: 'Video preview is unavailable.' } },
-    500,
-  );
-}
-
-function privateJson(body: unknown, status: number): NextResponse {
-  const response = NextResponse.json(body, { status });
-  response.headers.set('Cache-Control', 'private, no-store, max-age=0');
-  return response;
+  return privatePreviewErrorResponse(error, {
+    auth: (value) => value instanceof W3dsAuthError,
+    preview: (value) => value instanceof VideoPreviewError,
+    library: (value) => value instanceof EVaultVideoLibraryError,
+    messageFrom: (value) => {
+      if (value instanceof W3dsAuthError || value instanceof VideoPreviewError) {
+        return { code: value.code, message: value.message, status: value.status };
+      }
+      if (value instanceof EVaultVideoLibraryError) {
+        return { code: value.code, message: value.message, status: value.status };
+      }
+      return { code: 'internal_error', message: 'Video preview is unavailable.', status: 500 };
+    },
+  });
 }

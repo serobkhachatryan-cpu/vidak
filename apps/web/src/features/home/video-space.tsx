@@ -21,10 +21,10 @@ import { ApplicationShell } from '../../components/application-shell';
 import { videoApiClient } from '../../lib/video-api-client';
 import {
   evaultItemsForTab,
-  formatSpaceDuration,
   type InventoryCompleteness,
   type InventoryDiscovery,
   isVideoSpaceEmpty,
+  libraryCardDetails,
   libraryDiscoveryBanner,
   ownedItemsForTab,
   ownedVideoSpaceVisibility,
@@ -424,9 +424,6 @@ function OwnedVideoCard({
       />
       <div className="space-y-3 p-4">
         <div className="space-y-1">
-          <p className="text-xs font-semibold uppercase tracking-wide text-primary">
-            {visibility.label}
-          </p>
           <h3 className="font-semibold text-foreground">{video.title}</h3>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -481,11 +478,8 @@ function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
       </a>
       <div className="space-y-3 p-4">
         <div className="space-y-1">
-          <p className="text-xs font-semibold uppercase tracking-wide text-primary">
-            {visibilityLabel}
-          </p>
           <h3 className="font-semibold text-foreground">{video.title}</h3>
-          <p className="text-sm text-muted-foreground">{libraryDetails(video)}</p>
+          <p className="text-sm text-muted-foreground">{libraryCardDetails(video)}</p>
         </div>
         <Button
           size="sm"
@@ -594,13 +588,4 @@ export function PublicHomeFeed() {
       </Page>
     </ApplicationShell>
   );
-}
-
-function libraryDetails(video: VideoSpaceLibraryItem): string {
-  const values = [
-    video.durationSeconds !== undefined ? formatSpaceDuration(video.durationSeconds) : undefined,
-    video.createdAt ? new Date(video.createdAt).toLocaleDateString() : undefined,
-    videoSpaceVisibilityLabels[video.visibility],
-  ].filter(Boolean);
-  return values.join(' · ');
 }
