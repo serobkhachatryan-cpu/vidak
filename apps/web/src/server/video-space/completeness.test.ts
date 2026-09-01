@@ -159,4 +159,17 @@ describe('inventory completeness', () => {
     expect(tracker.snapshot().retryNeeded).toBe(false);
     expect(tracker.snapshot().retrying).toBe(0);
   });
+
+  it('does not report complete after scan finished while spaces remain unclassified', () => {
+    const tracker = createInventoryCompletenessTracker();
+    for (let i = 0; i < 12; i += 1) tracker.expectSpace();
+    tracker.failSpace();
+    tracker.markScanFinished();
+    expect(tracker.snapshot()).toMatchObject({
+      expected: 12,
+      failed: 1,
+      complete: false,
+      retrying: 0,
+    });
+  });
 });

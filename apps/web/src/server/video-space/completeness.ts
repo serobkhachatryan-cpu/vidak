@@ -163,6 +163,10 @@ export function createInventoryCompletenessTracker() {
     finishRetry() {
       retrying = Math.max(0, retrying - 1);
     },
+    /** Drop stale persisted retry counts when the rebuilt queue has fewer retry rows. */
+    reconcileRetrying(openCount: number) {
+      retrying = Math.max(0, openCount);
+    },
     failRetry(kind: 'unavailable' | 'rejected' | 'rate_limited') {
       retrying = Math.max(0, retrying - 1);
       this.markRetryClass(kind);
@@ -220,7 +224,7 @@ export function createInventoryCompletenessTracker() {
     snapshot(): InventoryCompleteness {
       const classified = indexed + denied + missing + failed;
       const complete = scanFinished
-        ? retrying === 0
+        ? retrying === 0 && classified >= expected
         : classified === expected && retrying === 0 && !retryNeeded;
       return {
         indexed,
