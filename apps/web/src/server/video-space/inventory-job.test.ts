@@ -227,6 +227,62 @@ describe('durable inventory checkpoints', () => {
     expect(Math.max(...lengths)).toBe(1);
   });
 
+  it('survives restart with a long Retry-After before resuming the same cursor', async () => {
+    const store = createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const notBefore = Date.now() + 60_000;
+    const deferred: Work = {
+      type: 'messages',
+      vaultKey: '@limited.w3id',
+      after: 'stay-here',
+      attempts: 3,
+      notBefore,
+      id: 'limited',
+    };
+    await store.enqueueTask({
+      jobId: job.id,
+      taskKey: 'messages\u001f@limited.w3id\u001f\u001f\u001fstay-here',
+      kind: 'messages',
+      vaultKey: '@limited.w3id',
+      cursorAfter: 'stay-here',
+      attempts: 3,
+      notBefore,
+      priority: 60,
+      payload: deferred as unknown as Record<string, unknown>,
+    });
+    await store.saveJob({
+      ...job,
+      status: 'running',
+      ledger: { queue: [deferred] },
+    });
+
+    let now = notBefore - 1;
+    const seen: string[] = [];
+    const queue: Work[] = [structuredClone(deferred)];
+    const gates = new Map<string, number>([['@limited.w3id', notBefore]]);
+    await drainFairVaultQueue(
+      queue,
+      async (item) => {
+        seen.push(`${item.after}:${item.attempts}`);
+      },
+      {
+        vaultKey: (item) => item.vaultKey,
+        priority: () => 60,
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+        maxWaitMs: 5_000,
+        vaultNotBefore: (vault) => gates.get(vault) ?? 0,
+        workKey: (item) => inventoryTaskKey(item, item.vaultKey),
+      },
+    );
+    expect(seen).toEqual(['stay-here:3']);
+  });
+
   it('builds postgres-safe task keys without NUL bytes', () => {
     const key = inventoryTaskKey(
       {

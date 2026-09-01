@@ -4,6 +4,7 @@ import {
   emptyInventoryCoverage,
   emptyInventoryMediaCounts,
   inventoryCompletenessCopy,
+  inventoryHasRateLimitedFalseComplete,
   inventoryJobNeedsDrain,
 } from './completeness';
 
@@ -27,6 +28,7 @@ describe('inventory completeness', () => {
       retryRejected: 0,
       retryRateLimited: 0,
       retrying: 0,
+      deferred: 0,
       coverage: emptyInventoryCoverage,
       media: { ...emptyInventoryMediaCounts, unresolved: {} },
     });
@@ -55,6 +57,7 @@ describe('inventory completeness', () => {
       retryRejected: 0,
       retryRateLimited: 0,
       retrying: 0,
+      deferred: 0,
       coverage: emptyInventoryCoverage,
       media: { ...emptyInventoryMediaCounts, unresolved: {} },
     });
@@ -80,7 +83,9 @@ describe('inventory completeness', () => {
     expect(retrying.complete).toBe(false);
     expect(retrying.retryNeeded).toBe(false);
     expect(retrying.retrying).toBe(1);
-    expect(inventoryCompletenessCopy(retrying)).toBe('1 of 2 shared spaces indexed; retrying 1.');
+    expect(inventoryCompletenessCopy(retrying)).toBe(
+      '1 of 2 shared spaces indexed; retrying 1; still synchronizing — will continue automatically.',
+    );
     tracker.finishRetry();
     tracker.indexSpace();
     expect(tracker.snapshot()).toMatchObject({ complete: true, retrying: 0, retryNeeded: false });
@@ -124,6 +129,7 @@ describe('inventory completeness', () => {
       ...emptyInventoryCoverage,
       chatPages: 1,
       messagePages: 2,
+      pagesProcessed: 3,
       groupHistories: 1,
       directChats: 1,
       referenceGrants: 1,
@@ -190,9 +196,71 @@ describe('inventory completeness', () => {
           retryRejected: 0,
           retryRateLimited: 10,
           retrying: 0,
+          deferred: 0,
         },
         ledger: { drainFinished: true, remaining: [['@group.w3id', 2]] },
       }),
     ).toBe(true);
+  });
+
+  it('detects rate-limit false complete jobs and keeps deferred work unsettled', () => {
+    const tracker = createInventoryCompletenessTracker();
+    for (let i = 0; i < 12; i += 1) tracker.expectSpace();
+    tracker.indexSpace();
+    tracker.indexSpace();
+    tracker.indexSpace();
+    for (let i = 0; i < 9; i += 1) tracker.failSpace();
+    tracker.deferSpace();
+    tracker.deferSpace();
+    const state = tracker.snapshot();
+    expect(state.complete).toBe(false);
+    expect(state.deferred).toBe(2);
+    expect(
+      inventoryHasRateLimitedFalseComplete({
+        status: 'complete',
+        completeness: {
+          ...state,
+          failed: 9,
+          deferred: 0,
+          retryRateLimited: 10,
+          complete: true,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      inventoryJobNeedsDrain({
+        status: 'complete',
+        completeness: {
+          indexed: 3,
+          expected: 12,
+          denied: 0,
+          missing: 0,
+          failed: 9,
+          complete: true,
+          retryNeeded: false,
+          retryUnavailable: 0,
+          retryRejected: 0,
+          retryRateLimited: 10,
+          retrying: 0,
+          deferred: 0,
+        },
+        ledger: { drainFinished: true, failedSpaces: ['@a.w3id'] },
+      }),
+    ).toBe(true);
+    expect(inventoryCompletenessCopy({ ...state, retrying: 1 })).toContain(
+      'still synchronizing — will continue automatically',
+    );
+  });
+
+  it('tracks unique page requests separately from processed pages', () => {
+    const tracker = createInventoryCompletenessTracker();
+    tracker.recordPageRequest();
+    tracker.recordPageRequest();
+    tracker.recordPage('chatPages');
+    expect(tracker.snapshot().coverage).toMatchObject({
+      chatPages: 1,
+      pagesRequested: 2,
+      pagesProcessed: 1,
+    });
   });
 });

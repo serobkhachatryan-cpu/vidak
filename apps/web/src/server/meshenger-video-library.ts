@@ -15,6 +15,7 @@ import {
   createInventoryCompletenessTracker,
   type InventoryCompleteness,
   type InventoryCompletenessTracker,
+  inventoryHasRateLimitedFalseComplete,
   inventorySpacesClassified,
   ledgerHasUnsettledSpaces,
 } from './video-space/completeness';
@@ -66,7 +67,6 @@ const maxPages = 30;
 const requestTimeoutMs = 12_000;
 const sharedSpaceConcurrency = 8;
 /** Fail-fast first, then Retry-After / exponential backoff until the page succeeds or is terminal. */
-const maxRateLimitAttempts = 24;
 const maxRejectedAttempts = 4;
 // Call recordings are stored as ~45-second files. A multi-hour recording must
 // remain playable through its final segment, while the authenticated stream
@@ -886,6 +886,7 @@ export class MeshengerVideoLibrary {
     const remaining = new Map<string, number>();
     const settled = new Set<string>();
     const failedSpaces = new Set<string>();
+    const deferredSpaces = new Set<string>();
     const openedGroups = new Map<string, { vault: ResolvedVault; member: boolean }>();
     const openedDirects = new Map<string, ResolvedVault>();
     const scheduledGroupFiles = new Set<string>();
@@ -906,6 +907,7 @@ export class MeshengerVideoLibrary {
         counts.failed += 1;
         return;
       }
+      if (deferredSpaces.delete(key)) completeness.reopenDeferredSpace();
       completeness.indexSpace();
       counts.sharedSpaces += 1;
     };
@@ -972,7 +974,12 @@ export class MeshengerVideoLibrary {
         queue.length === 0 &&
         remaining.size === 0 &&
         classified >= snapshotState.expected &&
-        (snapshotState.retrying ?? 0) === 0;
+        (snapshotState.retrying ?? 0) === 0 &&
+        (snapshotState.deferred ?? 0) === 0 &&
+        !inventoryHasRateLimitedFalseComplete({
+          status: 'complete',
+          completeness: snapshotState,
+        });
       const library = this.assembleLibrary({
         eName,
         found,
@@ -994,6 +1001,7 @@ export class MeshengerVideoLibrary {
             remaining: [...remaining],
             settled: [...settled],
             failedSpaces: [...failedSpaces],
+            deferredSpaces: [...deferredSpaces],
             openedGroups: [...openedGroups],
             openedDirects: [...openedDirects],
             scheduledGroupChats: [...scheduledGroupChats].map(([key, value]) => [key, [...value]]),
@@ -1094,6 +1102,7 @@ export class MeshengerVideoLibrary {
       }
       restoreStringSet(job.ledger.settled, settled);
       restoreStringSet(job.ledger.failedSpaces, failedSpaces);
+      restoreStringSet(job.ledger.deferredSpaces, deferredSpaces);
       restoreStringSet(job.ledger.scheduledAuthors, scheduledAuthors);
       restoreStringSet(job.ledger.scheduledGroupFiles, scheduledGroupFiles);
       restoreStringSet(job.ledger.scheduledGroupHistory, scheduledGroupHistory);
@@ -1130,24 +1139,57 @@ export class MeshengerVideoLibrary {
       }
     };
 
+    const repairRateLimitedTerminals = () => {
+      if (failedSpaces.size === 0) return false;
+      const state = completeness.snapshot();
+      const settledCount = state.indexed + state.denied + state.missing;
+      const shouldRepair =
+        (state.failed ?? 0) > 0 &&
+        settledCount < state.expected &&
+        settledCount + (state.failed ?? 0) >= state.expected &&
+        (state.retryRateLimited ?? 0) > 0;
+      if (!shouldRepair) return false;
+      while ((completeness.snapshot().failed ?? 0) > 0) completeness.unfailSpace();
+      counts.failed = 0;
+      const keysToReopen =
+        failedSpaces.size > 0
+          ? [...failedSpaces]
+          : [...settled].filter(
+              (key) => referencedGroupChats.has(key) || referencedDirectChats.has(key),
+            );
+      for (const key of keysToReopen) {
+        failedSpaces.delete(key);
+        settled.delete(key);
+        deferredSpaces.add(key);
+        if (!remaining.has(key)) remaining.set(key, 1);
+        else remaining.set(key, (remaining.get(key) ?? 0) + 1);
+        completeness.deferSpace();
+      }
+      return keysToReopen.length > 0;
+    };
+
     if (
       drainFinished &&
       savedQueue.length === 0 &&
       openTasks.length === 0 &&
       (job.completeness.retrying ?? 0) === 0 &&
+      (job.completeness.deferred ?? 0) === 0 &&
       !ledgerHasUnsettledSpaces(job.ledger) &&
-      inventorySpacesClassified(job.completeness) >= job.completeness.expected
+      inventorySpacesClassified(job.completeness) >= job.completeness.expected &&
+      !inventoryHasRateLimitedFalseComplete(job)
     ) {
       restoreJobLedger();
       completeness.markScanFinished();
       return snapshot('done');
     }
     restoreJobLedger();
+    const repaired = repairRateLimitedTerminals();
     if (openTasks.length > 0) {
       for (const task of openTasks) queue.push(task.payload as unknown as SharedWork);
     } else if (savedQueue.length > 0) {
       queue.push(...savedQueue);
     } else if (
+      repaired ||
       remaining.size > 0 ||
       inventorySpacesClassified(completeness.snapshot()) < job.completeness.expected
     ) {
@@ -1367,7 +1409,8 @@ export class MeshengerVideoLibrary {
     };
     if (
       queue.length === 0 &&
-      (remaining.size > 0 ||
+      (repaired ||
+        remaining.size > 0 ||
         inventorySpacesClassified(completeness.snapshot()) < job.completeness.expected)
     ) {
       reseedUnsettledWork();
@@ -1421,6 +1464,14 @@ export class MeshengerVideoLibrary {
       }
     };
 
+    const requestedPageKeys = new Set<string>();
+    const trackPageRequest = (item: SharedWork) => {
+      const key = workKey(item);
+      if (requestedPageKeys.has(key)) return;
+      requestedPageKeys.add(key);
+      completeness.recordPageRequest();
+    };
+
     const claimed = await this.jobStore.tryClaimDrain(jobId, this.now());
     if (!claimed) return snapshot('batch');
     try {
@@ -1430,6 +1481,7 @@ export class MeshengerVideoLibrary {
         await drainFairVaultQueue(
           queue,
           async (item) => {
+            trackPageRequest(item);
             if (item.type === 'owned-source') {
               const page = await this.readSource(
                 () =>
@@ -2216,7 +2268,7 @@ export class MeshengerVideoLibrary {
         completeness.reconcileRetrying(queue.filter((item) => item.attempts > 0).length);
         if (queue.length === 0) {
           for (const spaceKey of remaining.keys()) {
-            if (!settled.has(spaceKey)) failOpenTerminal(spaceKey);
+            if (!settled.has(spaceKey) && !deferredSpaces.has(spaceKey)) failOpenTerminal(spaceKey);
           }
           keepDraining = false;
           break;
@@ -2226,7 +2278,9 @@ export class MeshengerVideoLibrary {
       if (
         remaining.size === 0 &&
         inventorySpacesClassified(finished) >= finished.expected &&
-        (finished.retrying ?? 0) === 0
+        (finished.retrying ?? 0) === 0 &&
+        (finished.deferred ?? 0) === 0 &&
+        !inventoryHasRateLimitedFalseComplete({ status: 'complete', completeness: finished })
       ) {
         completeness.markScanFinished();
         await persistCheckpoint({ drainFinished: true });
@@ -2252,7 +2306,22 @@ export class MeshengerVideoLibrary {
   ): void {
     if (item.attempts === 0) completeness.queueRetry();
     item.attempts += 1;
-    const cap = failure === 'rate_limited' ? maxRateLimitAttempts : maxRejectedAttempts;
+    if (failure === 'rate_limited') {
+      item.notBefore =
+        this.now() +
+        retryDelayMs({
+          attempt: item.attempts,
+          ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+        });
+      if (vaultKey) {
+        void this.jobStore.setVaultGate(vaultKey, item.notBefore);
+      }
+      upsertWork(queue, item, (existing) =>
+        inventoryTaskKey(existing, vaultKey ?? inventoryVaultKey(existing, '')),
+      );
+      return;
+    }
+    const cap = failure === 'rejected' ? maxRejectedAttempts : maxRejectedAttempts;
     if (item.attempts < cap) {
       item.notBefore =
         this.now() +

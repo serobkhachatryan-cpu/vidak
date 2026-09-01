@@ -19,7 +19,7 @@ describe('exponential 429 backoff', () => {
         if (attempts < 3) throw new Error('429');
         return 'ok';
       },
-      { isRetryable: () => true, sleep, maxAttempts: 4 },
+      { isRetryable: () => true, sleep, maxAttempts: 4, jitterRatio: 0 },
     );
     expect(value).toBe('ok');
     expect(attempts).toBe(3);
@@ -34,7 +34,16 @@ describe('exponential 429 backoff', () => {
     const date = new Date(Date.now() + 5_000).toUTCString();
     expect(parseRetryAfter(date) ?? 0).toBeGreaterThanOrEqual(4_000);
     expect(retryDelayMs({ attempt: 1, retryAfterMs: 0 })).toBe(0);
-    expect(retryDelayMs({ attempt: 1, retryAfterMs: 8_000 })).toBe(8_000);
+    expect(retryDelayMs({ attempt: 1, retryAfterMs: 8_000, jitterRatio: 0 })).toBe(8_000);
+    expect(retryDelayMs({ attempt: 1, retryAfterMs: 8_000, jitterRatio: 0, random: () => 0 })).toBe(
+      8_000,
+    );
+    expect(
+      retryDelayMs({ attempt: 2, baseMs: 250, capMs: 30_000, jitterRatio: 0.1, random: () => 0 }),
+    ).toBe(500);
+    expect(
+      retryDelayMs({ attempt: 2, baseMs: 250, capMs: 30_000, jitterRatio: 0.1, random: () => 1 }),
+    ).toBe(550);
     const sleep = vi.fn(async () => undefined);
     let attempts = 0;
     await retryWithExponentialBackoff(
@@ -50,6 +59,7 @@ describe('exponential 429 backoff', () => {
         isRetryable: () => true,
         sleep,
         maxAttempts: 3,
+        jitterRatio: 0,
         retryAfterMs: (error) => (error as { retryAfterMs?: number }).retryAfterMs,
       },
     );

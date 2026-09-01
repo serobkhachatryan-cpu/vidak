@@ -40,7 +40,9 @@ export function inventoryDiscovery(input: {
   scanning: boolean;
   completeness: InventoryCompleteness;
 }): InventoryDiscovery {
-  if (input.scanning) return 'refreshing';
+  const deferred = input.completeness.deferred ?? 0;
+  const retrying = input.completeness.retrying ?? 0;
+  if (input.scanning || deferred > 0 || retrying > 0) return 'refreshing';
   if (!input.completeness.complete || input.completeness.retryNeeded) return 'partial';
   return 'complete';
 }
@@ -69,6 +71,8 @@ export function formatInventoryMetricsLog(input: {
     `sources_failed=${input.metrics.sourceCounts.failed}`,
     `retry_rate_limited=${input.completeness.retryRateLimited}`,
     `pages=${pages}`,
+    `pages_requested=${coverage?.pagesRequested ?? 0}`,
+    `pages_processed=${coverage?.pagesProcessed ?? 0}`,
     `histories=${coverage?.groupHistories ?? 0}`,
     `directs=${coverage?.directChats ?? 0}`,
     `grants_reference=${coverage?.referenceGrants ?? 0}`,

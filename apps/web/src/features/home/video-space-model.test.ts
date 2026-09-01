@@ -145,9 +145,32 @@ describe('video space home model', () => {
           retryRejected: 0,
           retryRateLimited: 0,
           retrying: 2,
+          deferred: 0,
         },
       }),
     ).toBe('18 shared videos found · 5 of 7 spaces indexed · retrying 2');
+    expect(
+      libraryProgressCopy({
+        itemCount: 6,
+        shared: true,
+        discovery: 'refreshing',
+        completeness: {
+          indexed: 3,
+          expected: 12,
+          denied: 0,
+          missing: 0,
+          complete: false,
+          retryNeeded: false,
+          retryUnavailable: 0,
+          retryRejected: 0,
+          retryRateLimited: 10,
+          retrying: 0,
+          deferred: 3,
+        },
+      }),
+    ).toBe(
+      '6 shared videos found · 3 of 12 spaces indexed · still synchronizing — will continue automatically',
+    );
     expect(
       libraryProgressCopy({
         itemCount: 11,
@@ -214,7 +237,7 @@ describe('video space home model', () => {
         itemCount: 4,
         shared: false,
       }),
-    ).toBe('4 videos found · updating your library');
+    ).toBe('4 videos found · still synchronizing — will continue automatically');
     expect(
       libraryDiscoveryBanner({
         discovery: 'complete',

@@ -15,6 +15,10 @@ export interface InventoryCoverage {
   directChats: number;
   referenceGrants: number;
   officialChatGrants: number;
+  /** Unique page reads dispatched this scan (deduped by vault + ontology + cursor). */
+  pagesRequested?: number;
+  /** Pages whose GraphQL read completed successfully. */
+  pagesProcessed?: number;
 }
 
 export type InventoryCoveragePageKind =
@@ -78,6 +82,8 @@ export interface InventoryCompleteness {
   missing: number;
   /** Spaces that exhausted retries with a terminal, reported failure. */
   failed?: number;
+  /** Shared spaces waiting on Retry-After / backoff; not classified or terminal. */
+  deferred?: number;
   complete: boolean;
   retryNeeded: boolean;
   retryUnavailable: number;
@@ -101,6 +107,7 @@ export const completeInventory: InventoryCompleteness = {
   retryRejected: 0,
   retryRateLimited: 0,
   retrying: 0,
+  deferred: 0,
   coverage: { ...emptyInventoryCoverage },
   media: { ...emptyInventoryMediaCounts, unresolved: {} },
 };
@@ -126,6 +133,32 @@ export function ledgerHasUnsettledSpaces(ledger: Record<string, unknown>): boole
   return false;
 }
 
+export function inventoryUnsettledSpaces(completeness: InventoryCompleteness): number {
+  return Math.max(
+    0,
+    completeness.expected -
+      completeness.indexed -
+      completeness.denied -
+      completeness.missing -
+      (completeness.deferred ?? 0),
+  );
+}
+
+/** A persisted job marked complete while rate-limit exhaustion filled the failed bucket. */
+export function inventoryHasRateLimitedFalseComplete(job: {
+  status: string;
+  completeness: InventoryCompleteness;
+}): boolean {
+  const { completeness, status } = job;
+  if (status !== 'complete' || (completeness.failed ?? 0) === 0) return false;
+  const settled = completeness.indexed + completeness.denied + completeness.missing;
+  return (
+    settled < completeness.expected &&
+    settled + (completeness.failed ?? 0) >= completeness.expected &&
+    (completeness.retryRateLimited ?? 0) > 0
+  );
+}
+
 export function inventoryJobNeedsDrain(job: {
   status: string;
   completeness: InventoryCompleteness;
@@ -135,7 +168,9 @@ export function inventoryJobNeedsDrain(job: {
   if (ledgerHasUnsettledSpaces(job.ledger)) return true;
   if (job.ledger.drainFinished !== true) return true;
   if ((job.completeness.retrying ?? 0) > 0) return true;
+  if ((job.completeness.deferred ?? 0) > 0) return true;
   if (!job.completeness.complete) return true;
+  if (inventoryHasRateLimitedFalseComplete(job)) return true;
   return inventorySpacesClassified(job.completeness) < job.completeness.expected;
 }
 
@@ -145,10 +180,15 @@ export function inventoryCompletenessCopy(state: InventoryCompleteness): string 
   if (state.missing > 0) parts.push(`${state.missing} not found`);
   if (state.failed) parts.push(`${state.failed} failed`);
   const retrying = state.retrying ?? 0;
+  const deferred = state.deferred ?? 0;
   if (retrying > 0) parts.push(`retrying ${retrying}`);
+  if (deferred > 0) parts.push(`deferred ${deferred}`);
   const classified = `${parts[0]}${parts.length > 1 ? `; ${parts.slice(1).join('; ')}` : ''}`;
+  if ((retrying > 0 || deferred > 0) && !state.complete) {
+    return `${classified}; still synchronizing — will continue automatically.`;
+  }
   if (state.complete && !state.retryNeeded) return `${classified}.`;
-  if (retrying > 0) return `${classified}.`;
+  if (retrying > 0 || deferred > 0) return `${classified}.`;
   return `${classified}; retry needed.`;
 }
 
@@ -163,6 +203,7 @@ export function createInventoryCompletenessTracker() {
   let retryRejected = 0;
   let retryRateLimited = 0;
   let retrying = 0;
+  let deferred = 0;
   let scanFinished = false;
   const coverage: InventoryCoverage = { ...emptyInventoryCoverage };
   const media: InventoryMediaCounts = { ...emptyInventoryMediaCounts, unresolved: {} };
@@ -182,6 +223,15 @@ export function createInventoryCompletenessTracker() {
     },
     failSpace() {
       failed += 1;
+    },
+    unfailSpace() {
+      failed = Math.max(0, failed - 1);
+    },
+    deferSpace() {
+      deferred += 1;
+    },
+    reopenDeferredSpace() {
+      deferred = Math.max(0, deferred - 1);
     },
     markRetry() {
       retryNeeded = true;
@@ -207,6 +257,10 @@ export function createInventoryCompletenessTracker() {
     },
     recordPage(kind: InventoryCoveragePageKind) {
       coverage[kind] += 1;
+      coverage.pagesProcessed = (coverage.pagesProcessed ?? 0) + 1;
+    },
+    recordPageRequest() {
+      coverage.pagesRequested = (coverage.pagesRequested ?? 0) + 1;
     },
     recordGroupHistory() {
       coverage.groupHistories += 1;
@@ -233,7 +287,7 @@ export function createInventoryCompletenessTracker() {
     /** The work queue is empty; remaining space gaps are terminal, not pending. */
     markScanFinished() {
       scanFinished = true;
-      retrying = 0;
+      if (deferred === 0) retrying = 0;
       retryNeeded = false;
     },
     hydrate(state: InventoryCompleteness) {
@@ -247,6 +301,7 @@ export function createInventoryCompletenessTracker() {
       retryRejected = state.retryRejected;
       retryRateLimited = state.retryRateLimited;
       retrying = state.retrying ?? 0;
+      deferred = state.deferred ?? 0;
       if (state.coverage) Object.assign(coverage, state.coverage);
       if (state.media) {
         media.candidates = state.media.candidates;
@@ -258,16 +313,19 @@ export function createInventoryCompletenessTracker() {
     snapshot(): InventoryCompleteness {
       const classified = indexed + denied + missing + failed;
       const complete = scanFinished
-        ? retrying === 0 && classified >= expected
-        : classified === expected && retrying === 0 && !retryNeeded;
+        ? retrying === 0 && deferred === 0 && classified >= expected
+        : classified === expected && retrying === 0 && deferred === 0 && !retryNeeded;
       return {
         indexed,
         expected,
         denied,
         missing,
         failed,
+        deferred,
         complete,
-        retryNeeded: scanFinished ? false : retryNeeded || classified + retrying < expected,
+        retryNeeded: scanFinished
+          ? deferred > 0 || retrying > 0
+          : retryNeeded || classified + retrying + deferred < expected,
         retryUnavailable,
         retryRejected,
         retryRateLimited,
