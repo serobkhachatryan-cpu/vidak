@@ -35,10 +35,17 @@ export function retryDelayMs(input: {
   retryAfterMs?: number;
   baseMs?: number;
   capMs?: number;
+  jitterRatio?: number;
+  random?: () => number;
 }): number {
   if (input.retryAfterMs === 0) return 0;
   const exponential = nextBackoffMs(input.attempt, input.baseMs, input.capMs);
-  return Math.max(exponential, input.retryAfterMs ?? 0);
+  const base = Math.max(exponential, input.retryAfterMs ?? 0);
+  const jitterRatio = input.jitterRatio ?? 0.1;
+  if (jitterRatio <= 0) return base;
+  const random = input.random ?? Math.random;
+  const jitter = Math.floor(base * jitterRatio * random());
+  return base + jitter;
 }
 
 export async function retryWithExponentialBackoff<T>(
@@ -48,6 +55,8 @@ export async function retryWithExponentialBackoff<T>(
     maxAttempts?: number;
     baseMs?: number;
     capMs?: number;
+    jitterRatio?: number;
+    random?: () => number;
     retryAfterMs?: (error: unknown) => number | undefined;
     sleep?: (ms: number) => Promise<void>;
   },
@@ -70,6 +79,8 @@ export async function retryWithExponentialBackoff<T>(
           attempt,
           baseMs,
           capMs,
+          ...(options.jitterRatio !== undefined ? { jitterRatio: options.jitterRatio } : {}),
+          ...(options.random ? { random: options.random } : {}),
           ...(wait !== undefined ? { retryAfterMs: wait } : {}),
         }),
       );

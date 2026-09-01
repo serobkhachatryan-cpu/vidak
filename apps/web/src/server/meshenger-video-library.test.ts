@@ -1194,6 +1194,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        deferred: 0,
         coverage: emptyInventoryCoverage,
         media: { ...emptyInventoryMediaCounts, unresolved: {} },
       });
@@ -1364,6 +1365,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        deferred: 0,
         coverage: emptyInventoryCoverage,
         media: { ...emptyInventoryMediaCounts, unresolved: {} },
       });
@@ -1564,6 +1566,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        deferred: 0,
         coverage: emptyInventoryCoverage,
         media: { ...emptyInventoryMediaCounts, unresolved: {} },
       });
@@ -1696,6 +1699,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        deferred: 0,
         coverage: emptyInventoryCoverage,
         media: { ...emptyInventoryMediaCounts, unresolved: {} },
       });
@@ -2442,6 +2446,7 @@ describe('Meshenger video library', () => {
         complete: true,
         retryNeeded: false,
         retrying: 0,
+        deferred: 0,
       });
       expect(messagePages).toBeGreaterThanOrEqual(2);
     } finally {
@@ -3021,6 +3026,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 0,
         retrying: 0,
+        deferred: 0,
       },
       ledger: { queue: [] },
     });
@@ -3135,6 +3141,7 @@ describe('Meshenger video library', () => {
         retryRejected: 0,
         retryRateLimited: 10,
         retrying: 0,
+        deferred: 0,
       },
       ledger: {
         queue: [],
@@ -3181,6 +3188,73 @@ describe('Meshenger video library', () => {
           result.completeness.missing +
           (result.completeness.failed ?? 0),
       ).toBeLessThan(result.completeness.expected);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('repairs a rate-limit false complete job and resumes deferred spaces', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: {
+        indexed: 3,
+        expected: 12,
+        denied: 0,
+        missing: 0,
+        failed: 9,
+        complete: true,
+        retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 10,
+        retrying: 0,
+        deferred: 0,
+      },
+      ledger: {
+        queue: [],
+        drainFinished: true,
+        remaining: [],
+        settled: ['@a.w3id', '@b.w3id', '@c.w3id'],
+        failedSpaces: ['@d.w3id', '@e.w3id'],
+        referencedGroupChats: [['@d.w3id', ['chat-1']]],
+        referencedDirectChats: [['@e.w3id', ['chat-2']]],
+      },
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/platforms/certification')
+          return json({ token: 'registry-platform-token' });
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      const result = await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', onSnapshot: () => undefined },
+      );
+      const saved = await store.getByOwner('@person.w3id');
+      expect(saved?.status).toBe('running');
+      expect(saved?.ledger.drainFinished).not.toBe(true);
+      expect(result.completeness.complete).toBe(false);
+      expect(result.completeness.failed).toBeLessThan(9);
+      expect(result.completeness.deferred).toBeGreaterThanOrEqual(2);
+      expect(result.completeness.retryNeeded).toBe(true);
     } finally {
       vi.unstubAllGlobals();
     }

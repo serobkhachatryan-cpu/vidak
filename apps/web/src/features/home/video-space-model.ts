@@ -79,10 +79,15 @@ export function sharedInventoryBanner(
   if (
     completeness.complete &&
     !completeness.retryNeeded &&
+    (completeness.deferred ?? 0) === 0 &&
+    (completeness.retrying ?? 0) === 0 &&
     completeness.denied === 0 &&
     completeness.missing === 0
   ) {
     return undefined;
+  }
+  if ((completeness.deferred ?? 0) > 0 || (completeness.retrying ?? 0) > 0) {
+    return inventoryCompletenessCopy(completeness);
   }
   return inventoryCompletenessCopy(completeness);
 }
@@ -105,9 +110,12 @@ export function libraryProgressCopy(input: {
     parts.push(`${completeness.indexed} of ${completeness.expected} spaces indexed`);
   }
   const retrying = completeness?.retrying ?? 0;
+  const deferred = completeness?.deferred ?? 0;
   if (retrying > 0) parts.push(`retrying ${retrying}`);
+  else if (deferred > 0) parts.push('still synchronizing — will continue automatically');
   else if (input.discovery === 'partial' && completeness?.retryNeeded) parts.push('retry needed');
-  else if (input.discovery === 'refreshing') parts.push('updating your library');
+  else if (input.discovery === 'refreshing')
+    parts.push('still synchronizing — will continue automatically');
   const coverage = completeness?.coverage;
   if (coverage) {
     if (coverage.groupHistories > 0) parts.push(`${coverage.groupHistories} histories`);
@@ -134,11 +142,18 @@ export function libraryDiscoveryBanner(input: {
   itemCount: number;
   shared?: boolean;
 }): string | undefined {
-  if (input.discovery === 'refreshing' || input.discovery === 'partial') {
+  const deferred = input.completeness?.deferred ?? 0;
+  const retrying = input.completeness?.retrying ?? 0;
+  if (
+    input.discovery === 'refreshing' ||
+    input.discovery === 'partial' ||
+    deferred > 0 ||
+    retrying > 0
+  ) {
     return libraryProgressCopy({
       itemCount: input.itemCount,
       shared: input.shared === true,
-      discovery: input.discovery,
+      ...(input.discovery ? { discovery: input.discovery } : {}),
       ...(input.completeness ? { completeness: input.completeness } : {}),
     });
   }
