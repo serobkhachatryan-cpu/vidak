@@ -61,4 +61,14 @@ describe('video space titles', () => {
   it('treats generic placeholders as absent when no filename exists', () => {
     expect(resolveVideoSpaceTitle({ kind: 'file', title: 'Video' })).toBe('Untitled video');
   });
+
+  it('does not turn a generic filename into a repeated Video title', () => {
+    expect(
+      resolveVideoSpaceTitle({
+        kind: 'video-message',
+        filename: 'video.mp4',
+        messageText: 'Garden tour',
+      }),
+    ).toBe('Garden tour');
+  });
 });

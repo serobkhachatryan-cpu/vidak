@@ -4,6 +4,7 @@ vi.mock('server-only', () => ({}));
 
 import {
   accessScopeForViewer,
+  type DiscoveredVideoRecord,
   dedupeDiscoveredVideos,
   discoverCallRecordingVideos,
   discoverFileRecordVideos,
@@ -127,6 +128,27 @@ describe('video space adapters', () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.kind).toBe('video-message');
     expect(merged[0]?.fileUris).toEqual([fileUri]);
+  });
+
+  it('keeps a meaningful title when a generic higher-ranked binding points at the same file', () => {
+    const genericCall: DiscoveredVideoRecord = {
+      key: 'call:clip-1',
+      fileUris: [fileUri],
+      kind: 'call-recording',
+      title: 'Untitled video',
+      accessScope: 'personal',
+      sourceId: 'call-recording',
+    };
+    const labelledMessage: DiscoveredVideoRecord = {
+      key: 'message:clip-1',
+      fileUris: [fileUri],
+      kind: 'video-message',
+      title: 'Weekend picnic',
+      accessScope: 'personal',
+      sourceId: 'video-message',
+    };
+
+    expect(dedupeDiscoveredVideos([genericCall, labelledMessage])).toEqual([labelledMessage]);
   });
 
   it('ignores non-video blobs so they never become cards', () => {

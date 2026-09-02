@@ -2953,6 +2953,52 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('keeps discovered cards when a completed catalogue is refreshed', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: { ...job.completeness, complete: true, retryNeeded: false },
+      ledger: {
+        drainFinished: true,
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION - 1,
+        found: [
+          {
+            key: 'w3ds-file:@person.w3id/kept-clip',
+            fileUris: ['w3ds://file?id=@person.w3id/kept-clip'],
+            kind: 'file',
+            title: 'Kept library clip',
+            accessScope: 'personal',
+            sourceId: 'w3ds-file',
+          },
+        ],
+      },
+    });
+    const library = createMeshengerVideoLibrary(
+      {
+        W3DS_AUTH_PLATFORM_NAME: 'vidak',
+        W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        W3DS_AUTH_JWT_SECRET: secret,
+      },
+      { jobStore: store },
+    );
+
+    const result = await library.scanLibrary(
+      { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+      { scope: 'all', refresh: true, drain: false, onSnapshot: () => undefined },
+    );
+    const saved = await store.getByOwner('@person.w3id');
+
+    expect(result.items.map((item) => item.title)).toContain('Kept library clip');
+    expect(saved?.id).toBe(job.id);
+    expect(saved?.status).toBe('running');
+    expect(saved?.ledger.drainFinished).toBe(false);
+  });
+
   it('resumes the exact unfinished chats cursor instead of restarting that ontology', async () => {
     const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
     const job = await store.createJob({

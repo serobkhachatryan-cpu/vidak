@@ -77,9 +77,10 @@ describe('eVault video library route', () => {
     mocks.getAuthService.mockReturnValue({
       getSession: vi.fn().mockResolvedValue({ user: { eName: '@person.w3id' } }),
     });
+    const scheduleLibraryBackfill = vi.fn().mockResolvedValue(undefined);
     mocks.getPreviewService.mockReturnValue({
       peekLibraryPreview: vi.fn().mockResolvedValue('ready'),
-      scheduleLibraryBackfill: vi.fn().mockResolvedValue(undefined),
+      scheduleLibraryBackfill,
     });
 
     const response = await GET(
@@ -101,6 +102,7 @@ describe('eVault video library route', () => {
       { scope: 'owned', refresh: false },
     );
     expect(mocks.getPreviewService).toHaveBeenCalled();
+    expect(scheduleLibraryBackfill).not.toHaveBeenCalled();
   });
 
   it('defaults missing scope to all so Home inventories the complete union', async () => {

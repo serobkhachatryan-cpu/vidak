@@ -324,6 +324,42 @@ describe('VideoPreviewService', () => {
     expect(record?.status).toBe('ready');
   });
 
+  it('keeps rate-limited eVault previews retryable through the visible-card path', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    const service = new VideoPreviewService({
+      store,
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      extractor: { extractUsefulFrame: async () => ({ jpeg, captureSeconds: 3 }) },
+      evault: {
+        inspectStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        resolveMediaUrl: async () => {
+          const error = Object.assign(new Error('rate limited'), { status: 429 });
+          throw error;
+        },
+      },
+    });
+    await store.create({
+      id: 'preview-rate-limit',
+      sourceKind: 'evault-file',
+      sourceKey: 'w3ds://file?id=@owner.w3id/grant-rate-limit',
+      status: 'failed',
+    });
+
+    await expect(
+      service.peekLibraryPreview({ eName: '@owner.w3id' }, 'grant-rate-limit'),
+    ).resolves.toBe('processing');
+    await expect(
+      service.openEVaultPreview({ eName: '@owner.w3id' }, 'grant-rate-limit'),
+    ).resolves.toEqual({ status: 'processing' });
+    await expect(
+      store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/grant-rate-limit'),
+    ).resolves.toMatchObject({ status: 'pending' });
+  });
+
   it('does not treat LocalDiskMediaStorage as a public URL surface', () => {
     expect(new LocalDiskMediaStorage('/tmp/vidak-preview-test').createStorageKey()).toMatch(
       /^media_/,

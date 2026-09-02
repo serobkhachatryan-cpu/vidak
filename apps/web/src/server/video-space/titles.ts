@@ -80,7 +80,7 @@ export function resolveVideoSpaceTitle(input: ResolveVideoSpaceTitleInput): stri
   if (explicit && !isGenericVideoSpaceTitle(explicit)) return explicit;
 
   const fromFilename = input.filename ? titleFromFilename(input.filename) : undefined;
-  if (fromFilename) return fromFilename;
+  if (fromFilename && !isGenericVideoSpaceTitle(fromFilename)) return fromFilename;
 
   const message = trimMessageText(input.messageText);
   if (message) return message;
