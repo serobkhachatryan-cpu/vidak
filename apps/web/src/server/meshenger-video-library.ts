@@ -3167,7 +3167,7 @@ export class MeshengerVideoLibrary {
                 ...item.sourceMetadata,
                 type: 'file',
                 mediaUri: decision.fileUri,
-                ...((record(resolved.parsed.file) || record(item.sourceMetadata?.file))
+                ...(record(resolved.parsed.file) || record(item.sourceMetadata?.file)
                   ? {
                       file: {
                         ...record(resolved.parsed.file),
