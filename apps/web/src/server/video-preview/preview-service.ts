@@ -119,6 +119,9 @@ export class VideoPreviewService {
   ): Promise<VideoPreviewState> {
     const fileUri = this.requireEVaultSource().inspectStream(user, streamId).fileUri;
     const record = await this.store.getBySource('evault-file', fileUri);
+    // A failed record can be a transient W3DS/HTTP failure. Keep it in the
+    // processing path so the visible-card queue can request a bounded retry.
+    if (record?.status === 'failed') return 'processing';
     return statusToState(record?.status);
   }
 
@@ -166,7 +169,7 @@ export class VideoPreviewService {
     streamId: string,
   ): Promise<PreviewDownload | { status: 'processing' } | { status: 'unavailable' }> {
     this.requireEVaultSource().inspectStream(user, streamId);
-    const record = await this.ensureEVaultPreview(user, streamId);
+    const record = await this.ensureEVaultPreview(user, streamId, { retryFailed: true });
     return this.openRecord(record);
   }
 
@@ -233,11 +236,7 @@ export class VideoPreviewService {
     ) {
       return existing;
     }
-    if (
-      existing?.status === 'pending' &&
-      !isStale(existing) &&
-      inFlight.has(lockKey(sourceKind, sourceKey))
-    ) {
+    if (existing?.status === 'pending' && !isStale(existing)) {
       return existing;
     }
 
@@ -288,7 +287,11 @@ export class VideoPreviewService {
         contentType: 'image/jpeg',
       });
       return ready ?? { ...record, status: 'ready', storageKey };
-    } catch {
+    } catch (error) {
+      if (isRetryablePreviewSourceError(error)) {
+        const pending = await this.store.update(record.id, { status: 'pending' });
+        return pending ?? { ...record, status: 'pending' };
+      }
       const failed = await this.store.update(record.id, { status: 'failed' });
       return failed ?? { ...record, status: 'failed' };
     } finally {
@@ -323,6 +326,12 @@ export class VideoPreviewService {
     if (this.evault) return this.evault;
     throw new VideoPreviewError('eVault preview access is not configured.', 'internal_error', 503);
   }
+}
+
+function isRetryablePreviewSourceError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === 'number' && (status === 429 || status >= 500);
 }
 
 function statusToState(status: VideoPreviewStatus | undefined): VideoPreviewState {
