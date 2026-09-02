@@ -42,6 +42,7 @@ import {
 import {
   createMemoryInventoryJobStore,
   getInventoryJobStore,
+  type InventoryJobRecord,
   type InventoryJobStore,
 } from './video-space/job-store';
 import { mapPool } from './video-space/map-pool';
@@ -386,10 +387,10 @@ export class MeshengerVideoLibrary {
     if (options.refresh) {
       const current = await this.jobStore.getByOwner(eName);
       if (current?.status === 'complete') {
-        await this.jobStore.replaceJob({
-          ownerEName: eName,
-          ownerEVaultUri: user.eVaultUri ? httpUrl(user.eVaultUri) : current.ownerEVaultUri,
-        });
+        await this.restartCatalogueJob(
+          current,
+          user.eVaultUri ? httpUrl(user.eVaultUri) : current.ownerEVaultUri,
+        );
       }
     }
     const ownVault = user.eVaultUri
@@ -404,6 +405,39 @@ export class MeshengerVideoLibrary {
       return this.scanSharedProgressive(eName, ownVault, counts, options.onSnapshot, { drain });
     }
     return this.scanCompleteProgressive(eName, ownVault, counts, options.onSnapshot, { drain });
+  }
+
+  /**
+   * Start a fresh catalogue pass without deleting the cards already discovered.
+   * Replacing a completed job cascades through inventory items in Postgres, which
+   * makes a refresh look like a smaller library until every source is scanned
+   * again. Keep the job ID and its last known catalogue while clearing only
+   * resumable work and completeness counters.
+   */
+  private async restartCatalogueJob(
+    job: InventoryJobRecord,
+    ownerEVaultUri: string,
+  ): Promise<InventoryJobRecord> {
+    const completeness = createInventoryCompletenessTracker();
+    completeness.markRetry();
+    const restarted: InventoryJobRecord = {
+      ...job,
+      ownerEVaultUri,
+      status: 'running',
+      completeness: completeness.snapshot(),
+      ledger: {
+        found: Array.isArray(job.ledger.found) ? job.ledger.found : [],
+        queue: [],
+        drainFinished: false,
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
+      },
+      sourceCounts: emptySourceCounts(),
+      updatedAt: this.now(),
+      completedAt: undefined,
+    };
+    await this.jobStore.replaceOpenTasks(job.id, []);
+    await this.jobStore.saveJob(restarted);
+    return restarted;
   }
 
   /**
@@ -879,6 +913,7 @@ export class MeshengerVideoLibrary {
             envelopeId?: string;
             sourceId: string;
             sourceSpaceKey: string;
+            sourceMetadata?: RecordValue;
             retryAfterMs?: number;
           }
       );
@@ -1092,10 +1127,7 @@ export class MeshengerVideoLibrary {
       }));
     let drainFinished = job.ledger.drainFinished === true;
     if (drainFinished && isStaleCatalogueVersion(job.ledger)) {
-      job = await this.jobStore.replaceJob({
-        ownerEName: eName,
-        ownerEVaultUri: ownVault.eVaultUri,
-      });
+      job = await this.restartCatalogueJob(job, ownVault.eVaultUri);
       drainFinished = false;
     }
     jobId = job.id;
@@ -1451,7 +1483,7 @@ export class MeshengerVideoLibrary {
           eName,
           sourceEName,
           completeness,
-          (fileUri, envelopeId) => {
+          (fileUri, envelopeId, sourceMetadata) => {
             if (!vault) return;
             const vaultKey = parseW3dsFileUri(fileUri)?.ownerEName ?? vault.ownerEName;
             queue.push({
@@ -1461,6 +1493,7 @@ export class MeshengerVideoLibrary {
               eVaultUri: vault.eVaultUri,
               fileUri,
               envelopeId,
+              sourceMetadata,
               sourceId: `message:${sourceEName}:${chatId}`,
               sourceSpaceKey: sourceEName,
               attempts: 0,
@@ -1611,7 +1644,7 @@ export class MeshengerVideoLibrary {
                     eName,
                     eName,
                     completeness,
-                    (fileUri, envelopeId) => {
+                    (fileUri, envelopeId, sourceMetadata) => {
                       queue.push({
                         type: 'resolve-media',
                         vaultKey: parseW3dsFileUri(fileUri)?.ownerEName ?? ownVault.ownerEName,
@@ -1619,6 +1652,7 @@ export class MeshengerVideoLibrary {
                         eVaultUri: ownVault.eVaultUri,
                         fileUri,
                         envelopeId,
+                        sourceMetadata,
                         sourceId: 'owned-message',
                         sourceSpaceKey: eName,
                         attempts: 0,
@@ -1821,7 +1855,7 @@ export class MeshengerVideoLibrary {
                   eName,
                   item.groupEName,
                   completeness,
-                  (fileUri, envelopeId) => {
+                  (fileUri, envelopeId, sourceMetadata) => {
                     queue.push({
                       type: 'resolve-media',
                       vaultKey: parseW3dsFileUri(fileUri)?.ownerEName ?? item.owner,
@@ -1829,6 +1863,7 @@ export class MeshengerVideoLibrary {
                       eVaultUri: item.eVaultUri,
                       fileUri,
                       envelopeId,
+                      sourceMetadata,
                       sourceId: `group-history:${item.spaceKey}`,
                       sourceSpaceKey: item.groupEName,
                       attempts: 0,
@@ -2122,7 +2157,7 @@ export class MeshengerVideoLibrary {
                   eName,
                   item.ownerEName,
                   completeness,
-                  (fileUri, envelopeId) => {
+                  (fileUri, envelopeId, sourceMetadata) => {
                     queue.push({
                       type: 'resolve-media',
                       vaultKey: parseW3dsFileUri(fileUri)?.ownerEName ?? item.owner,
@@ -2130,6 +2165,7 @@ export class MeshengerVideoLibrary {
                       eVaultUri: item.eVaultUri,
                       fileUri,
                       envelopeId,
+                      sourceMetadata,
                       sourceId: `direct-history:${item.spaceKey}`,
                       sourceSpaceKey: item.ownerEName,
                       attempts: 0,
@@ -2222,7 +2258,7 @@ export class MeshengerVideoLibrary {
                   eName,
                   item.authorEName,
                   completeness,
-                  (fileUri, envelopeId) => {
+                  (fileUri, envelopeId, sourceMetadata) => {
                     queue.push({
                       type: 'resolve-media',
                       vaultKey: parseW3dsFileUri(fileUri)?.ownerEName ?? item.authorEName,
@@ -2230,6 +2266,7 @@ export class MeshengerVideoLibrary {
                       eVaultUri: '',
                       fileUri,
                       envelopeId,
+                      sourceMetadata,
                       sourceId: `author-messages:${item.chatId}`,
                       sourceSpaceKey: item.authorEName,
                       attempts: 0,
@@ -2981,7 +3018,7 @@ export class MeshengerVideoLibrary {
     viewerEName: string,
     sourceSpaceKey?: string,
     completeness?: InventoryCompletenessTracker,
-    onResolve?: (fileUri: string, envelopeId: string) => void,
+    onResolve?: (fileUri: string, envelopeId: string, sourceMetadata: RecordValue) => void,
   ): DiscoveredVideo[] {
     const accepted: Envelope[] = [];
     for (const message of messages) {
@@ -3000,7 +3037,7 @@ export class MeshengerVideoLibrary {
         continue;
       }
       if (decision.status === 'resolve') {
-        onResolve?.(decision.fileUri, message.id);
+        onResolve?.(decision.fileUri, message.id, message.parsed);
         continue;
       }
       const type = optionalString(message.parsed.type)?.toLowerCase();
@@ -3009,7 +3046,7 @@ export class MeshengerVideoLibrary {
         (type === 'file' || type === 'video' || type === 'circle' || !type) &&
         decision.reason === 'missing_w3ds_file_uri'
       ) {
-        onResolve('', message.id);
+        onResolve('', message.id, message.parsed);
         continue;
       }
       completeness?.recordUnresolved(decision.reason);
@@ -3025,6 +3062,7 @@ export class MeshengerVideoLibrary {
       eVaultUri: string;
       vaultKey: string;
       sourceSpaceKey: string;
+      sourceMetadata?: RecordValue;
       attempts: number;
       notBefore?: number;
       retryAfterMs?: number;
@@ -3125,9 +3163,18 @@ export class MeshengerVideoLibrary {
               id: resolved.id,
               ontology: messageOntology,
               parsed: {
+                ...resolved.parsed,
+                ...item.sourceMetadata,
                 type: 'file',
                 mediaUri: decision.fileUri,
-                ...resolved.parsed,
+                ...((record(resolved.parsed.file) || record(item.sourceMetadata?.file))
+                  ? {
+                      file: {
+                        ...record(resolved.parsed.file),
+                        ...record(item.sourceMetadata?.file),
+                      },
+                    }
+                  : {}),
               },
             },
           ],
