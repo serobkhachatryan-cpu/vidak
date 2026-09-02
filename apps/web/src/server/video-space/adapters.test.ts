@@ -4,8 +4,8 @@ vi.mock('server-only', () => ({}));
 
 import {
   accessScopeForViewer,
-  dedupeDiscoveredVideos,
   type DiscoveredVideoRecord,
+  dedupeDiscoveredVideos,
   discoverCallRecordingVideos,
   discoverFileRecordVideos,
   discoverVideoMessageVideos,
