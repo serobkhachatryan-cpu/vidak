@@ -16,6 +16,13 @@ export interface VideoSpaceEnvelope {
   parsed: Record<string, unknown>;
 }
 
+/** A File reference points at the canonical file record in another eVault. */
+export interface FileRecordReferenceTarget {
+  ownerEName: string;
+  metaEnvelopeId: string;
+  fileUri: string;
+}
+
 export type VideoAccessBasis = 'personal' | 'membership' | 'history';
 
 export interface DiscoveredVideoRecord {
@@ -52,6 +59,7 @@ const documentedOwnerKeys = [
   'ownerEName',
   'ownerId',
   'subject',
+  'canonicalOwnerEName',
   'senderEName',
   'senderId',
   'initiator',
@@ -119,12 +127,38 @@ function scopeForRecord(input: {
 }
 
 /**
+ * A shared File row is frequently only a local reference. Its own envelope
+ * does not contain playable bytes or a filename; the canonical owner and
+ * envelope ID are the authorised source for both.
+ */
+export function fileRecordReferenceTarget(
+  file: VideoSpaceEnvelope,
+): FileRecordReferenceTarget | undefined {
+  const isReference =
+    file.parsed.isReference === true ||
+    (typeof file.parsed.isReference === 'string' &&
+      file.parsed.isReference.trim().toLocaleLowerCase() === 'true');
+  if (!isReference) return undefined;
+  const ownerEName = optionalEName(file.parsed.canonicalOwnerEName);
+  const metaEnvelopeId = optionalString(file.parsed.canonicalFileId);
+  if (!ownerEName || !metaEnvelopeId) return undefined;
+  const fileUri = constructW3dsFileUri(ownerEName, metaEnvelopeId);
+  if (!fileUri) return undefined;
+  return { ownerEName, metaEnvelopeId, fileUri };
+}
+
+/**
  * One card per underlying file, even when several bindings point at it.
  * Prefer the viewer's own copy, then the richer media type.
  */
 function hasUsefulTitle(item: DiscoveredVideoRecord): boolean {
   const title = item.title.trim();
-  return Boolean(title) && title !== 'Untitled video' && !isGenericVideoSpaceTitle(title);
+  return (
+    Boolean(title) &&
+    title !== 'Untitled video' &&
+    title !== 'Shared video' &&
+    !isGenericVideoSpaceTitle(title)
+  );
 }
 
 export function dedupeDiscoveredVideos(
@@ -214,7 +248,9 @@ export function discoverFileRecordVideos(
   const discovered: DiscoveredVideoRecord[] = [];
   for (const file of files) {
     if (file.ontology && file.ontology !== ontology) continue;
+    const reference = fileRecordReferenceTarget(file);
     const fileUri =
+      reference?.fileUri ??
       optionalW3dsFileUri(file.parsed.uri) ??
       optionalW3dsFileUri(file.parsed.url) ??
       constructW3dsFileUri(vaultOwnerEName, file.id);
@@ -233,28 +269,33 @@ export function discoverFileRecordVideos(
       fileUris: [fileUri],
       vaultOwnerEName,
     });
+    const title = resolveVideoSpaceTitle({
+      title: optionalString(file.parsed.title),
+      caption: optionalString(file.parsed.caption),
+      filename: optionalString(file.parsed.filename) ?? optionalString(file.parsed.name),
+      kind: 'file',
+      ...(optionalString(file.parsed.createdAt)
+        ? { createdAt: optionalString(file.parsed.createdAt) }
+        : {}),
+    });
     discovered.push({
       key: `file:${vaultOwnerEName}:${file.id}:${fileUri}`,
       fileUris: [fileUri],
       kind: 'file',
-      title: resolveVideoSpaceTitle({
-        title: optionalString(file.parsed.title),
-        caption: optionalString(file.parsed.caption),
-        filename: optionalString(file.parsed.filename) ?? optionalString(file.parsed.name),
-        kind: 'file',
-        ...(optionalString(file.parsed.createdAt)
-          ? { createdAt: optionalString(file.parsed.createdAt) }
-          : {}),
-      }),
+      // Reference metadata intentionally omits the remote filename. Keep a
+      // truthful non-error label until the durable canonical lookup enriches it.
+      title: reference && isGenericVideoSpaceTitle(title) ? 'Shared video' : title,
       ...(optionalString(file.parsed.createdAt)
         ? { createdAt: optionalString(file.parsed.createdAt) }
         : {}),
       accessScope,
       sourceId: 'file-record',
       sourceSpaceKey: vaultOwnerEName,
-      accessBasis: accessScope === 'personal' ? 'personal' : 'membership',
+      accessBasis: reference ? 'personal' : accessScope === 'personal' ? 'personal' : 'membership',
     });
-    referenced.add(fileUri);
+    // The canonical lookup below must still be able to add the richer target
+    // record, so only non-reference File rows reserve their URI here.
+    if (!reference) referenced.add(fileUri);
   }
   return discovered;
 }

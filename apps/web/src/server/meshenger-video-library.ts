@@ -8,6 +8,8 @@ import {
   discoverFileRecordVideos,
   discoverVideoMessageVideos,
   discoverW3dsFileVideos,
+  type FileRecordReferenceTarget,
+  fileRecordReferenceTarget,
 } from './video-space/adapters';
 import { parseRetryAfter, retryDelayMs, retryWithExponentialBackoff } from './video-space/backoff';
 import { assembleVideoSpaceCatalogue } from './video-space/catalogue';
@@ -52,6 +54,7 @@ import {
   mergeDocumentedEnvelopeFields,
 } from './video-space/media-eligibility';
 import { collectPaginatedEnvelopes } from './video-space/pagination';
+import { isGenericVideoSpaceTitle } from './video-space/titles';
 import type { VideoSpaceAccessScope, VideoSpaceVisibility } from './video-space/visibility';
 import {
   type DeferredWork,
@@ -219,6 +222,11 @@ interface GroupDiscovery {
 interface ResolvedVault {
   ownerEName: string;
   eVaultUri: string;
+}
+
+function isStaleGenericFileRecord(value: unknown): boolean {
+  const item = record(value);
+  return item?.sourceId === 'file-record' && isGenericVideoSpaceTitle(optionalString(item.title));
 }
 
 const envelopeNode = `id ontology parsed envelopes { id fieldKey value valueType }`;
@@ -421,13 +429,16 @@ export class MeshengerVideoLibrary {
     const completeness = createInventoryCompletenessTracker();
     completeness.markRetry();
     const { completedAt: _completedAt, ...activeJob } = job;
+    const found = Array.isArray(job.ledger.found)
+      ? job.ledger.found.filter((item) => !isStaleGenericFileRecord(item))
+      : [];
     const restarted: InventoryJobRecord = {
       ...activeJob,
       ownerEVaultUri,
       status: 'running',
       completeness: completeness.snapshot(),
       ledger: {
-        found: Array.isArray(job.ledger.found) ? job.ledger.found : [],
+        found,
         queue: [],
         drainFinished: false,
         catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
@@ -931,6 +942,7 @@ export class MeshengerVideoLibrary {
     const scheduledGroupFiles = new Set<string>();
     const scheduledGroupHistory = new Set<string>();
     const scheduledDirectHistory = new Set<string>();
+    const scheduledFileReferences = new Set<string>();
 
     const addSpaceWork = (key: string, n = 1) => {
       remaining.set(key, (remaining.get(key) ?? 0) + n);
@@ -1052,6 +1064,7 @@ export class MeshengerVideoLibrary {
             scheduledGroupFiles: [...scheduledGroupFiles],
             scheduledGroupHistory: [...scheduledGroupHistory],
             scheduledDirectHistory: [...scheduledDirectHistory],
+            scheduledFileReferences: [...scheduledFileReferences],
             referenced: [...referenced],
             historicalAuthors: [...historicalAuthors].map(([key, value]) => [key, [...value]]),
             referencedGroupChats: [...referencedGroupChats].map(([key, value]) => [
@@ -1151,6 +1164,7 @@ export class MeshengerVideoLibrary {
       restoreStringSet(job.ledger.scheduledGroupFiles, scheduledGroupFiles);
       restoreStringSet(job.ledger.scheduledGroupHistory, scheduledGroupHistory);
       restoreStringSet(job.ledger.scheduledDirectHistory, scheduledDirectHistory);
+      restoreStringSet(job.ledger.scheduledFileReferences, scheduledFileReferences);
       restoreStringSet(job.ledger.referenced, referenced);
       restoreStringMapSet(job.ledger.scheduledGroupChats, scheduledGroupChats);
       restoreStringMapSet(job.ledger.scheduledDirectChats, scheduledDirectChats);
@@ -1451,6 +1465,22 @@ export class MeshengerVideoLibrary {
         queue.push({ type: 'direct-open', ownerEName: spaceKey, attempts: 0 });
       }
     };
+    const enqueueFileReference = (target: FileRecordReferenceTarget, sourceSpaceKey: string) => {
+      if (scheduledFileReferences.has(target.fileUri)) return;
+      scheduledFileReferences.add(target.fileUri);
+      queue.push({
+        type: 'resolve-media',
+        vaultKey: target.ownerEName,
+        owner: target.ownerEName,
+        eVaultUri: '',
+        fileUri: target.fileUri,
+        envelopeId: target.metaEnvelopeId,
+        sourceId: 'file-reference',
+        sourceSpaceKey,
+        sourceMetadata: { type: 'file' },
+        attempts: 0,
+      });
+    };
     if (
       queue.length === 0 &&
       (repaired ||
@@ -1571,7 +1601,11 @@ export class MeshengerVideoLibrary {
                   })),
                 );
               } else if (item.ontologyId === fileOntology) {
-                found.push(...this.discoverFileVideos(eName, page.value.items, referenced, eName));
+                found.push(
+                  ...this.discoverFileVideos(eName, page.value.items, referenced, eName, (target) =>
+                    enqueueFileReference(target, eName),
+                  ),
+                );
               } else {
                 found.push(
                   ...this.discoverRawFileVideos(eName, page.value.items, referenced, eName),
@@ -1982,7 +2016,13 @@ export class MeshengerVideoLibrary {
                 );
               } else {
                 found.push(
-                  ...this.discoverFileVideos(item.owner, page.value.items, referenced, eName),
+                  ...this.discoverFileVideos(
+                    item.owner,
+                    page.value.items,
+                    referenced,
+                    eName,
+                    (target) => enqueueFileReference(target, item.groupEName),
+                  ),
                 );
               }
               continueOrFinishPage(item.spaceKey, item, page.value);
@@ -3062,6 +3102,7 @@ export class MeshengerVideoLibrary {
       eVaultUri: string;
       vaultKey: string;
       sourceSpaceKey: string;
+      sourceId: string;
       sourceMetadata?: RecordValue;
       attempts: number;
       notBefore?: number;
@@ -3112,6 +3153,36 @@ export class MeshengerVideoLibrary {
     }
     if (item.attempts > 0) completeness.finishRetry();
     const resolved = vaultRead.value.envelope;
+    if (item.sourceId === 'file-reference') {
+      const canonical = this.discoverRawFileVideos(
+        vaultRead.value.vault.ownerEName,
+        [resolved],
+        referenced,
+        viewerEName,
+      );
+      const records =
+        canonical.length > 0
+          ? canonical
+          : this.discoverFileVideos(
+              vaultRead.value.vault.ownerEName,
+              [resolved],
+              referenced,
+              viewerEName,
+            );
+      if (records.length === 0) {
+        completeness.recordUnresolved('resolver_unavailable');
+        return;
+      }
+      found.push(
+        ...records.map((record) => ({
+          ...record,
+          sourceSpaceKey: item.sourceSpaceKey,
+          accessBasis:
+            record.accessScope === 'personal' ? ('personal' as const) : ('history' as const),
+        })),
+      );
+      return;
+    }
     const nested = classifyAuthorizedMedia({
       payload: resolved.parsed,
       vaultOwnerEName: vaultRead.value.vault.ownerEName,
@@ -3195,7 +3266,12 @@ export class MeshengerVideoLibrary {
     files: Envelope[],
     referenced: Set<string>,
     viewerEName: string,
+    onReference?: (target: FileRecordReferenceTarget) => void,
   ): DiscoveredVideo[] {
+    for (const file of files) {
+      const target = fileRecordReferenceTarget(file);
+      if (target) onReference?.(target);
+    }
     return discoverFileRecordVideos(ownerEName, files, referenced, viewerEName);
   }
 

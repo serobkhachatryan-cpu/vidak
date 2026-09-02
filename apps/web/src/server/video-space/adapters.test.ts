@@ -72,6 +72,35 @@ describe('video space adapters', () => {
     ]);
   });
 
+  it('uses the canonical target for a shared File reference without leaving it untitled', () => {
+    const referenced = new Set<string>();
+    expect(
+      discoverFileRecordVideos(
+        viewer,
+        [
+          {
+            id: 'local-reference',
+            ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+            parsed: {
+              isReference: true,
+              canonicalOwnerEName: '@friend.w3id',
+              canonicalFileId: 'canonical-clip',
+            },
+          },
+        ],
+        referenced,
+        viewer,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        title: 'Shared video',
+        accessScope: 'shared',
+        fileUris: ['w3ds://file?id=@friend.w3id/canonical-clip'],
+      }),
+    ]);
+    expect(referenced.has('w3ds://file?id=@friend.w3id/canonical-clip')).toBe(false);
+  });
+
   it('never returns a call recording the viewer did not join', () => {
     const payload = {
       participants: [owner],

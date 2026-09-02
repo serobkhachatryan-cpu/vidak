@@ -2999,6 +2999,87 @@ describe('Meshenger video library', () => {
     expect(saved?.ledger.drainFinished).toBe(false);
   });
 
+  it('resolves a shared File reference to its canonical title and preview source', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.pathname === '/resolve') {
+          return json({ uri: 'https://friend-vault.example', ename: '@friend.w3id' });
+        }
+        const request = JSON.parse(String(init?.body ?? '{}')) as {
+          query?: string;
+          variables?: { ontologyId?: string };
+        };
+        if (url.host === 'friend-vault.example' && request.query?.includes('metaEnvelope(id:')) {
+          return json({
+            data: {
+              metaEnvelope: {
+                id: 'canonical-clip',
+                ontology: 'w3ds-file-v1',
+                parsed: {
+                  contentType: 'video/mp4',
+                  filename: 'Canonical recording.mp4',
+                  publicUrl: 'https://media.example/canonical-clip.mp4',
+                },
+                envelopes: [],
+              },
+            },
+          });
+        }
+        if (request.variables?.ontologyId === 'a1b2c3d4-e5f6-7890-abcd-ef1234567890') {
+          return json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'local-reference',
+                      ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+                      parsed: {
+                        isReference: true,
+                        canonicalOwnerEName: '@friend.w3id',
+                        canonicalFileId: 'canonical-clip',
+                      },
+                      envelopes: [],
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          });
+        }
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }),
+    );
+    try {
+      const result = await createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'all', onSnapshot: () => undefined },
+      );
+      const card = result.items.find((item) => item.title === 'Canonical Recording');
+      expect(card).toBeDefined();
+      expect(card?.title).not.toBe('Untitled video');
+      expect(card?.streamIds).toHaveLength(1);
+      expect(verifyMeshengerVideoStreamId(card?.streamIds[0] ?? '', secret).fileUri).toBe(
+        'w3ds://file?id=@friend.w3id/canonical-clip',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('resumes the exact unfinished chats cursor instead of restarting that ontology', async () => {
     const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
     const job = await store.createJob({
