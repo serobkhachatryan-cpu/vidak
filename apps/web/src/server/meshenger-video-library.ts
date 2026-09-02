@@ -229,6 +229,21 @@ function isStaleGenericFileRecord(value: unknown): boolean {
   return item?.sourceId === 'file-record' && isGenericVideoSpaceTitle(optionalString(item.title));
 }
 
+/** A canonical record that is explicitly non-video must remove its temporary File-reference card. */
+function discardFileReferencePlaceholder(found: DiscoveredVideo[], fileUri: string): void {
+  for (let index = found.length - 1; index >= 0; index -= 1) {
+    const item = found[index];
+    if (!item) continue;
+    if (
+      item.sourceId === 'file-record' &&
+      item.title === 'Shared video' &&
+      item.fileUris.includes(fileUri)
+    ) {
+      found.splice(index, 1);
+    }
+  }
+}
+
 const envelopeNode = `id ontology parsed envelopes { id fieldKey value valueType }`;
 const listQuery = `query AuthorizedMedia($ontologyId: ID!, $first: Int!, $after: String) {
   metaEnvelopes(filter: { ontologyId: $ontologyId }, first: $first, after: $after) {
@@ -3170,6 +3185,18 @@ export class MeshengerVideoLibrary {
               viewerEName,
             );
       if (records.length === 0) {
+        const contentType =
+          optionalString(resolved.parsed.contentType) ?? optionalString(resolved.parsed.mimeType);
+        const canonicalMedia = classifyAuthorizedMedia({
+          payload: { type: 'file', ...resolved.parsed, mediaUri: item.fileUri },
+          vaultOwnerEName: vaultRead.value.vault.ownerEName,
+          ...(contentType ? { resolvedContentType: contentType } : {}),
+          resolvedOntology: resolved.ontology,
+        });
+        if (canonicalMedia.status === 'exclude') {
+          discardFileReferencePlaceholder(found, item.fileUri);
+          return;
+        }
         completeness.recordUnresolved('resolver_unavailable');
         return;
       }
