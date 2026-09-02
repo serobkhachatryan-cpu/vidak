@@ -19,6 +19,10 @@ export interface VideoSpacePosterProps {
   loadWhenVisible?: boolean;
 }
 
+export function shouldRetryPreviewResponse(status: number): boolean {
+  return status === 202 || status === 422 || status >= 500;
+}
+
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -84,13 +88,16 @@ export function VideoSpacePoster({
           setSource(posterUrl);
           return;
         }
-        if (response.status === 202) {
-          window.setTimeout(() => {
-            if (!cancelled) void enqueuePreviewLoad(poll);
-          }, 2000);
+        if (shouldRetryPreviewResponse(response.status)) {
+          window.setTimeout(
+            () => {
+              if (!cancelled) void enqueuePreviewLoad(poll);
+            },
+            response.status === 202 ? 2000 : 5000,
+          );
           return;
         }
-        if (response.status === 422 || response.status === 404) {
+        if (response.status === 404) {
           if (fallbackPosterUrl && fallbackPosterUrl !== posterUrl) {
             setUsedFallback(true);
             setSource(fallbackPosterUrl);
@@ -106,7 +113,9 @@ export function VideoSpacePoster({
         }
         setFailed(true);
       } catch {
-        if (!cancelled) setFailed(true);
+        window.setTimeout(() => {
+          if (!cancelled) void enqueuePreviewLoad(poll);
+        }, 5000);
       }
     };
     const cancelQueue = enqueuePreviewLoad(poll);

@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
+  shouldRetryPreviewResponse,
   VideoSpacePoster,
   VideoSpaceProcessingPoster,
   VideoSpaceUnavailablePoster,
@@ -116,5 +117,12 @@ describe('VideoSpacePoster', () => {
     expect(markup).toContain('src="/api/evault/videos/grant/preview"');
     expect(markup).not.toContain('<video');
     expect(markup).not.toMatch(/w3ds:\/\//);
+  });
+
+  it('keeps transient preview capture responses in the repair queue', () => {
+    expect(shouldRetryPreviewResponse(202)).toBe(true);
+    expect(shouldRetryPreviewResponse(422)).toBe(true);
+    expect(shouldRetryPreviewResponse(500)).toBe(true);
+    expect(shouldRetryPreviewResponse(404)).toBe(false);
   });
 });
