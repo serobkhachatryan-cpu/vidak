@@ -1,4 +1,6 @@
-const previewConcurrency = 3;
+// eVault sources can throttle parallel frame extraction. Serialize card posters
+// so a temporary upstream throttle remains a loading state instead of a failure.
+const previewConcurrency = 1;
 let activePreviewLoads = 0;
 const previewWaiters: Array<() => void> = [];
 
