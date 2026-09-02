@@ -25,7 +25,6 @@ export async function GET(request: NextRequest) {
     const snapshot = await getInventoryCoordinator().getSnapshot(session.user, { scope, refresh });
     const previewService = await loadPreviewService();
 
-
     const items = await Promise.all(
       snapshot.items.map(async (item) => attachPreviewFields(item, session.user, previewService)),
     );
