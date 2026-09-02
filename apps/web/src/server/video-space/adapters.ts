@@ -1,4 +1,5 @@
 import { parseW3dsFileUri } from '../w3ds-official-file-client';
+import { isGenericVideoSpaceTitle } from './titles';
 import { documentedOntologyId } from './documented-sources';
 import {
   classifyAuthorizedMedia,
@@ -122,6 +123,11 @@ function scopeForRecord(input: {
  * One card per underlying file, even when several bindings point at it.
  * Prefer the viewer's own copy, then the richer media type.
  */
+function hasUsefulTitle(item: DiscoveredVideoRecord): boolean {
+  const title = item.title.trim();
+  return Boolean(title) && title !== 'Untitled video' && !isGenericVideoSpaceTitle(title);
+}
+
 export function dedupeDiscoveredVideos(
   items: readonly DiscoveredVideoRecord[],
 ): DiscoveredVideoRecord[] {
@@ -134,9 +140,14 @@ export function dedupeDiscoveredVideos(
       unique.set(identity, item);
       continue;
     }
+    const existingHasUsefulTitle = hasUsefulTitle(existing);
+    const nextHasUsefulTitle = hasUsefulTitle(item);
     const preferNext =
       (existing.accessScope === 'shared' && item.accessScope === 'personal') ||
-      (existing.accessScope === item.accessScope && kindRank[item.kind] > kindRank[existing.kind]);
+      (existing.accessScope === item.accessScope &&
+        (nextHasUsefulTitle !== existingHasUsefulTitle
+          ? nextHasUsefulTitle
+          : kindRank[item.kind] > kindRank[existing.kind]));
     if (preferNext) unique.set(identity, item);
   }
   return [...unique.values()];
