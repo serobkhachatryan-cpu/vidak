@@ -1,12 +1,11 @@
 import { parseW3dsFileUri } from '../w3ds-official-file-client';
-import { isGenericVideoSpaceTitle } from './titles';
 import { documentedOntologyId } from './documented-sources';
 import {
   classifyAuthorizedMedia,
   constructW3dsFileUri,
   documentedMediaFileUris,
 } from './media-eligibility';
-import { resolveVideoSpaceTitle } from './titles';
+import { isGenericVideoSpaceTitle, resolveVideoSpaceTitle } from './titles';
 import type { VideoSpaceAccessScope } from './visibility';
 
 export type VideoSpaceKind = 'call-recording' | 'video-message' | 'file';
