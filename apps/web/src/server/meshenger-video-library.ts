@@ -420,8 +420,9 @@ export class MeshengerVideoLibrary {
   ): Promise<InventoryJobRecord> {
     const completeness = createInventoryCompletenessTracker();
     completeness.markRetry();
+    const { completedAt: _completedAt, ...activeJob } = job;
     const restarted: InventoryJobRecord = {
-      ...job,
+      ...activeJob,
       ownerEVaultUri,
       status: 'running',
       completeness: completeness.snapshot(),
@@ -433,7 +434,6 @@ export class MeshengerVideoLibrary {
       },
       sourceCounts: emptySourceCounts(),
       updatedAt: this.now(),
-      completedAt: undefined,
     };
     await this.jobStore.replaceOpenTasks(job.id, []);
     await this.jobStore.saveJob(restarted);
