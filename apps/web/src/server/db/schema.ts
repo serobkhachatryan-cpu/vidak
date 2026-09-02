@@ -12,6 +12,7 @@ import type {
 } from '@w3ds/types';
 import {
   boolean,
+  doublePrecision,
   index,
   integer,
   jsonb,
@@ -193,7 +194,7 @@ export const videoPreviewAssets = pgTable(
     sourceKey: text('source_key').notNull(),
     storageKey: text('storage_key'),
     status: text('status').$type<VideoPreviewStatus>().notNull(),
-    captureSeconds: integer('capture_seconds'),
+    captureSeconds: doublePrecision('capture_seconds'),
     byteSize: integer('byte_size'),
     contentType: text('content_type'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),

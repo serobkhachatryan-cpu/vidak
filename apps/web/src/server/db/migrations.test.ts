@@ -152,7 +152,17 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(23);
+    expect(applied.rows).toHaveLength(24);
+
+    await client.query(
+      `insert into video_preview_assets (
+        id, source_kind, source_key, status, capture_seconds, created_at, updated_at
+      ) values ('fractional-preview', 'evault-file', 'w3ds://file?id=preview', 'ready', 1.95, now(), now())`,
+    );
+    const previewCapture = await client.query<{ capture_seconds: number }>(
+      "select capture_seconds from video_preview_assets where id = 'fractional-preview'",
+    );
+    expect(Number(previewCapture.rows[0]?.capture_seconds)).toBeCloseTo(1.95);
 
     const preferenceColumns = await client.query<{ column_name: string }>(
       `select column_name from information_schema.columns
@@ -400,6 +410,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(23);
+    expect(Number(applied.rows[0]?.count)).toBe(24);
   });
 });
