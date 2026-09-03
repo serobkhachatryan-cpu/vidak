@@ -82,6 +82,10 @@ const maxRejectedAttempts = 4;
 // route still verifies the current user on every request.
 const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
+// Give a user-initiated source read a short quiet window before the next
+// inventory wave hits the same eVault. Inventory is resumable; playback is
+// immediately visible, so the interactive request takes precedence.
+const interactivePlaybackReservationMs = 30_000;
 // The video library never needs to retain an unbounded copy of chat history.
 // Keeping this small compatibility payload prevents a large eVault from turning
 // an inventory checkpoint into a multi-hundred-megabyte JSON document.
@@ -588,6 +592,10 @@ export class MeshengerVideoLibrary {
     const cached = cachedMediaUrls.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.url;
     if (cached) cachedMediaUrls.delete(cacheKey);
+    await this.jobStore.setVaultGate(
+      file.ownerEName,
+      this.now() + interactivePlaybackReservationMs,
+    );
     // A user has explicitly requested this source.  A single eVault 429 is
     // normally contention with catalogue work, not evidence that the File
     // disappeared, so use the bounded server-side retry policy here.

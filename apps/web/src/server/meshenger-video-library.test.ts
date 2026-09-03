@@ -10,6 +10,7 @@ import {
 } from './meshenger-video-library';
 import { VIDEO_SPACE_CATALOGUE_VERSION } from './video-space/catalogue-version';
 import { emptyInventoryCoverage, emptyInventoryMediaCounts } from './video-space/completeness';
+import { createMemoryInventoryJobStore } from './video-space/job-store';
 import { titleFromFilename } from './video-space/titles';
 
 const t = (filename: string) => titleFromFilename(filename) ?? filename;
@@ -141,6 +142,52 @@ describe('Meshenger video library', () => {
         ),
       ).resolves.toBe('https://media.example/personal-video.mp4');
       expect(fileReadAttempts).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('temporarily yields background inventory to an interactive personal playback read', async () => {
+    let now = 1_000;
+    const jobStore = createMemoryInventoryJobStore();
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.pathname === '/graphql') {
+        return json({
+          data: {
+            metaEnvelope: {
+              id: 'reserved-file',
+              ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+              parsed: { publicUrl: 'https://media.example/reserved-video.mp4' },
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const library = createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore, now: () => now },
+      );
+      await library.resolveMediaUrl(
+        { eName: '@person.w3id' },
+        createMeshengerVideoStreamId(
+          { ...grant, fileUri: 'w3ds://file?id=@person.w3id/reserved-file' },
+          secret,
+        ),
+      );
+      expect(await jobStore.vaultNotBefore('@person.w3id', now)).toBe(now + 30_000);
+      now += 30_000;
+      expect(await jobStore.vaultNotBefore('@person.w3id', now)).toBe(now);
     } finally {
       vi.unstubAllGlobals();
     }
