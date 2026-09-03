@@ -69,6 +69,17 @@ describe('assembleVideoSpaceCatalogue', () => {
     expect(snapshot.items[0]?.accessScope).toBe('personal');
   });
 
+  it('keeps a shared card as metadata without minting a private stream grant', () => {
+    const snapshot = assembleVideoSpaceCatalogue({
+      records: [shared],
+      completeness: createInventoryCompletenessTracker().snapshot(),
+      viewerEName: '@owner.w3id',
+      toStreamId: () => 'must-not-be-created',
+    });
+    expect(snapshot.items[0]?.accessScope).toBe('shared');
+    expect(snapshot.items[0]?.streamIds).toEqual([]);
+  });
+
   it('relabels stale generic ontology titles for display', () => {
     const snapshot = assembleVideoSpaceCatalogue({
       records: [{ ...personal, title: 'Video' }],

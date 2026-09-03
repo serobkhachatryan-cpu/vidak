@@ -16,7 +16,8 @@ const t = (filename: string) => titleFromFilename(filename) ?? filename;
 const secret = '12345678901234567890123456789012';
 const grant = {
   eName: '@person.w3id',
-  fileUri: 'w3ds://file?id=@vault.w3id/file_123',
+  fileUri: 'w3ds://file?id=@person.w3id/file_123',
+  accessScope: 'personal' as const,
   expiresAt: Date.now() + 60_000,
 };
 
@@ -60,6 +61,29 @@ describe('Meshenger video library', () => {
         secret,
       ),
     ).toThrow(expect.objectContaining({ code: 'stream_expired' }));
+  });
+
+  it('denies a foreign or shared source before contacting an eVault', async () => {
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl(
+          { eName: '@person.w3id' },
+          createMeshengerVideoStreamId(
+            {
+              ...grant,
+              fileUri: 'w3ds://file?id=@friend.w3id/foreign-file',
+              accessScope: 'shared',
+            },
+            secret,
+          ),
+        ),
+      ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied', status: 403 }));
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('fails closed when the server-side W3DS registry configuration is missing', () => {
@@ -416,12 +440,8 @@ describe('Meshenger video library', () => {
           durationSeconds: 90,
         }),
       );
-      expect(
-        call?.streamIds.map((streamId) => verifyMeshengerVideoStreamId(streamId, secret)),
-      ).toEqual([
-        expect.objectContaining({ fileUri: firstSegment, eName: '@person.w3id' }),
-        expect.objectContaining({ fileUri: secondSegment, eName: '@person.w3id' }),
-      ]);
+      expect(call?.accessScope).toBe('shared');
+      expect(call?.streamIds).toEqual([]);
       expect(videos).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -493,7 +513,7 @@ describe('Meshenger video library', () => {
 
   it('refuses a private IPv6 media destination before the player can proxy it', async () => {
     const streamId = createMeshengerVideoStreamId(
-      { ...grant, fileUri: 'w3ds://file?id=@vault.w3id/file_123' },
+      { ...grant, fileUri: 'w3ds://file?id=@person.w3id/file_123' },
       secret,
     );
     vi.stubGlobal(
@@ -527,7 +547,8 @@ describe('Meshenger video library', () => {
   it('reuses a resolved media URL for repeated byte-range requests from the same signed grant', async () => {
     const cachedGrant = {
       eName: '@cache-test.w3id',
-      fileUri: 'w3ds://file?id=@vault.w3id/cache-file',
+      fileUri: 'w3ds://file?id=@cache-test.w3id/cache-file',
+      accessScope: 'personal' as const,
       expiresAt: Date.now() + 60_000,
     };
     const fetcher = vi.fn(async (url: URL) => {
@@ -565,7 +586,8 @@ describe('Meshenger video library', () => {
   it('refreshes a cached media URL after the source rejects an expired signed URL', async () => {
     const staleGrant = {
       eName: '@cache-reset.w3id',
-      fileUri: 'w3ds://file?id=@vault.w3id/reset-file',
+      fileUri: 'w3ds://file?id=@cache-reset.w3id/reset-file',
+      accessScope: 'personal' as const,
       expiresAt: Date.now() + 60_000,
     };
     let readCount = 0;
@@ -2289,7 +2311,7 @@ describe('Meshenger video library', () => {
         'personal',
       );
       expect(result.items.find((item) => item.title === t('My group take.mp4'))?.accessScope).toBe(
-        'personal',
+        'shared',
       );
       expect(
         result.items.find((item) => item.title === t('Friend briefing.mp4'))?.accessScope,
@@ -3004,7 +3026,68 @@ describe('Meshenger video library', () => {
     expect(JSON.stringify(saved?.ledger.queue)).not.toContain('stale-cursor');
   });
 
-  it('resolves a shared File reference to its canonical title and preview source', async () => {
+  it('automatically restarts an incomplete catalogue whose queue and task rows were both lost', async () => {
+    const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'running',
+      completeness: {
+        ...job.completeness,
+        indexed: 82,
+        expected: 100,
+        complete: false,
+        retryNeeded: true,
+      },
+      ledger: {
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
+        drainFinished: false,
+        queue: [],
+        found: [
+          {
+            key: 'w3ds-file:@person.w3id/kept-clip',
+            fileUris: ['w3ds://file?id=@person.w3id/kept-clip'],
+            kind: 'file',
+            title: 'Kept while recovering',
+            accessScope: 'personal',
+            sourceId: 'w3ds-file',
+          },
+        ],
+      },
+    });
+
+    const result = await createMeshengerVideoLibrary(
+      {
+        W3DS_AUTH_PLATFORM_NAME: 'vidak',
+        W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        W3DS_AUTH_JWT_SECRET: secret,
+      },
+      { jobStore: store },
+    ).scanLibrary(
+      { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+      { scope: 'all', drain: false, onSnapshot: () => undefined },
+    );
+    const recovered = await store.getByOwner('@person.w3id');
+    const tasks = recovered ? await store.loadOpenTasks(recovered.id) : [];
+
+    expect(result.items.map((item) => item.title)).toContain('Kept while recovering');
+    expect(recovered?.status).toBe('running');
+    expect(recovered?.ledger.drainFinished).toBe(false);
+    expect(recovered?.ledger.queue).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: 'chats', after: null }),
+        expect.objectContaining({ type: 'messages', after: null }),
+      ]),
+    );
+    expect(tasks.map((task) => task.kind)).toEqual(
+      expect.arrayContaining(['chats', 'messages', 'owned-source']),
+    );
+  });
+
+  it('resolves a shared File reference to its canonical title without minting playback access', async () => {
     const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
     vi.stubGlobal(
       'fetch',
@@ -3076,10 +3159,8 @@ describe('Meshenger video library', () => {
       const card = result.items.find((item) => item.title === 'Canonical Recording');
       expect(card).toBeDefined();
       expect(card?.title).not.toBe('Untitled video');
-      expect(card?.streamIds).toHaveLength(1);
-      expect(verifyMeshengerVideoStreamId(card?.streamIds[0] ?? '', secret).fileUri).toBe(
-        'w3ds://file?id=@friend.w3id/canonical-clip',
-      );
+      expect(card?.accessScope).toBe('shared');
+      expect(card?.streamIds).toEqual([]);
     } finally {
       vi.unstubAllGlobals();
     }

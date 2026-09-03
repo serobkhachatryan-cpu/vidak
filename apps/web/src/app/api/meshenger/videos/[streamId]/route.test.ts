@@ -75,14 +75,23 @@ describe('Meshenger video stream route', () => {
     expect(invalidateMediaUrl).not.toHaveBeenCalled();
   });
 
-  it('drops a cached source URL when Meshenger rejects an expired media link', async () => {
-    const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/expired.mp4');
+  it('refreshes a cached source URL once when Meshenger rejects an expired media link', async () => {
+    const resolveMediaUrl = vi
+      .fn()
+      .mockResolvedValueOnce('https://media.example/expired.mp4')
+      .mockResolvedValueOnce('https://media.example/refreshed.mp4');
     const invalidateMediaUrl = vi.fn();
     mocks.createLibrary.mockReturnValue({ resolveMediaUrl, invalidateMediaUrl });
     mocks.getAuthService.mockReturnValue({
       getSession: vi.fn().mockResolvedValue({ user: viewer }),
     });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 403 })));
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 403 }))
+        .mockResolvedValueOnce(new Response('recovered', { status: 206 })),
+    );
 
     const response = await GET(
       new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
@@ -91,7 +100,9 @@ describe('Meshenger video stream route', () => {
       { params: Promise.resolve({ streamId: 'stream-1' }) },
     );
 
-    expect(response.status).toBe(502);
+    expect(response.status).toBe(206);
+    await expect(response.text()).resolves.toBe('recovered');
     expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
+    expect(resolveMediaUrl).toHaveBeenCalledTimes(2);
   });
 });

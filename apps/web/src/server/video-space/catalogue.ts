@@ -58,7 +58,13 @@ export function assembleVideoSpaceCatalogue(input: {
           accessScope: item.accessScope,
           viewerEName: input.viewerEName,
         }),
-        streamIds: item.fileUris.map((fileUri) => input.toStreamId(fileUri)),
+        // Shared records are metadata only until the platform can verify the
+        // current user's entitlement to the canonical file on every request.
+        // Do not mint a private playback grant for them.
+        streamIds:
+          item.accessScope === 'personal'
+            ? item.fileUris.map((fileUri) => input.toStreamId(fileUri))
+            : [],
         ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
         ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
       }))

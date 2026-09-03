@@ -3,6 +3,7 @@
 import { isRenderableThumbnailUrl, type Video } from '@w3ds/types';
 import { Button, VideoSpacePoster } from '@w3ds/ui';
 import {
+  canPlayLibraryVideo,
   libraryCardDetails,
   ownedVideoSpaceVisibility,
   type VideoSpaceLibraryItem,
@@ -87,35 +88,49 @@ export function OwnedVideoCard({
 export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   const visibilityLabel = videoSpaceVisibilityLabels[video.visibility];
   const watchHref = `/watch/space/${encodeURIComponent(video.id)}`;
+  const canPlay = canPlayLibraryVideo(video);
+  const poster = (
+    <VideoSpacePoster
+      title={video.title}
+      {...(video.previewUrl ? { posterUrl: video.previewUrl } : {})}
+      state={video.previewState ?? (video.previewUrl ? 'processing' : 'unavailable')}
+      {...(video.durationSeconds !== undefined
+        ? { durationSeconds: video.durationSeconds }
+        : {})}
+      visibilityLabel={visibilityLabel}
+      locked={video.visibility === 'private'}
+      loadWhenVisible
+    />
+  );
 
   return (
     <article className="overflow-hidden rounded-xl border border-border bg-surface-raised">
-      <a href={watchHref} aria-label={`Watch ${video.title}`} className="block">
-        <VideoSpacePoster
-          title={video.title}
-          {...(video.previewUrl ? { posterUrl: video.previewUrl } : {})}
-          state={video.previewState ?? (video.previewUrl ? 'processing' : 'unavailable')}
-          {...(video.durationSeconds !== undefined
-            ? { durationSeconds: video.durationSeconds }
-            : {})}
-          visibilityLabel={visibilityLabel}
-          locked={video.visibility === 'private'}
-          loadWhenVisible
-        />
-      </a>
+      {canPlay ? (
+        <a href={watchHref} aria-label={`Watch ${video.title}`} className="block">
+          {poster}
+        </a>
+      ) : (
+        poster
+      )}
       <div className="space-y-3 p-4">
         <div className="space-y-1">
           <h3 className="font-semibold text-foreground">{video.title}</h3>
           <p className="text-sm text-muted-foreground">{libraryCardDetails(video)}</p>
         </div>
-        <Button
-          size="sm"
-          onClick={() => {
-            window.location.assign(watchHref);
-          }}
-        >
-          Watch video
-        </Button>
+        {canPlay ? (
+          <Button
+            size="sm"
+            onClick={() => {
+              window.location.assign(watchHref);
+            }}
+          >
+            Watch video
+          </Button>
+        ) : (
+          <p className="text-sm text-muted-foreground">
+            Playback is unavailable until Vidak verifies the source permission.
+          </p>
+        )}
       </div>
     </article>
   );

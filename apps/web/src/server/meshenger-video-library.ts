@@ -99,6 +99,8 @@ export interface MeshengerVideo {
   visibility: VideoSpaceVisibility;
   /** Ordered, opaque, signed, account-bound references. Never CDN URLs. */
   streamIds: string[];
+  /** Safe source context for a shared card; never an eName or vault identity. */
+  sharedVia?: 'group' | 'conversation';
   /** Server-only. Stripped before any client JSON. */
   sourceSpaceKey?: string;
   accessBasis?: 'personal' | 'membership' | 'history';
@@ -174,6 +176,8 @@ interface Envelope {
 interface StreamGrant {
   eName: string;
   fileUri: string;
+  /** The catalogue classification at the time this private grant was issued. */
+  accessScope: EVaultVideoAccessScope;
   expiresAt: number;
 }
 interface Config {
@@ -467,10 +471,7 @@ export class MeshengerVideoLibrary {
     return restarted;
   }
 
-  /**
-   * Lightweight shared-space probe for cached metadata. Does not list videos.
-   * Playback and previews still authorize per request.
-   */
+  /** Lightweight shared-space probe for cached metadata. Does not list videos. */
   async probeSharedSpaceAccess(
     user: Pick<AuthUser, 'eName'>,
     space: SharedSpaceProbe,
@@ -517,20 +518,11 @@ export class MeshengerVideoLibrary {
   }
 
   async resolveMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string> {
-    const grant = verifyMeshengerVideoStreamId(streamId, this.config.signingSecret);
-    if (grant.eName !== requireEName(user.eName)) {
-      throw new MeshengerVideoLibraryError(
-        'This video is not available to this account.',
-        'invalid_stream',
-        403,
-      );
-    }
+    const { grant, file } = this.requirePersonalStreamGrant(user, streamId);
     const cacheKey = `${grant.eName}\u0000${grant.fileUri}`;
     const cached = cachedMediaUrls.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.url;
     if (cached) cachedMediaUrls.delete(cacheKey);
-    const file = parseW3dsFileUri(grant.fileUri);
-    if (!file) invalidStream();
     const vault = await this.resolveEVault(file.ownerEName);
     const envelope = await this.readEnvelope(
       vault.ownerEName,
@@ -554,14 +546,7 @@ export class MeshengerVideoLibrary {
    * Used to key the local preview cache without exposing the file URI to clients.
    */
   inspectStream(user: Pick<AuthUser, 'eName'>, streamId: string): { fileUri: string } {
-    const grant = verifyMeshengerVideoStreamId(streamId, this.config.signingSecret);
-    if (grant.eName !== requireEName(user.eName)) {
-      throw new MeshengerVideoLibraryError(
-        'This video is not available to this account.',
-        'invalid_stream',
-        403,
-      );
-    }
+    const { grant } = this.requirePersonalStreamGrant(user, streamId);
     return { fileUri: grant.fileUri };
   }
 
@@ -570,15 +555,36 @@ export class MeshengerVideoLibrary {
    * media URL. The next request resolves the File envelope again.
    */
   invalidateMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): void {
+    const { grant } = this.requirePersonalStreamGrant(user, streamId);
+    cachedMediaUrls.delete(`${grant.eName}\u0000${grant.fileUri}`);
+  }
+
+  /**
+   * A signed viewer grant is necessary but not sufficient for private media.
+   * A stale card may point at somebody else's file through a historical
+   * conversation. Until the platform exposes a direct per-file entitlement
+   * check, only files owned by the authenticated account can be proxied.
+   */
+  private requirePersonalStreamGrant(
+    user: Pick<AuthUser, 'eName'>,
+    streamId: string,
+  ): { grant: StreamGrant; file: NonNullable<ReturnType<typeof parseW3dsFileUri>> } {
     const grant = verifyMeshengerVideoStreamId(streamId, this.config.signingSecret);
-    if (grant.eName !== requireEName(user.eName)) {
+    const eName = requireEName(user.eName);
+    const file = parseW3dsFileUri(grant.fileUri);
+    if (
+      grant.eName !== eName ||
+      grant.accessScope !== 'personal' ||
+      !file ||
+      !sameEName(file.ownerEName, eName)
+    ) {
       throw new MeshengerVideoLibraryError(
-        'This video is not available to this account.',
-        'invalid_stream',
+        'This source cannot be played until its access is verified.',
+        'authorization_denied',
         403,
       );
     }
-    cachedMediaUrls.delete(`${grant.eName}\u0000${grant.fileUri}`);
+    return { grant, file };
   }
 
   private assembleLibrary(input: {
@@ -595,7 +601,12 @@ export class MeshengerVideoLibrary {
       viewerEName: input.eName,
       toStreamId: (fileUri) =>
         createMeshengerVideoStreamId(
-          { eName: input.eName, fileUri, expiresAt: Date.now() + streamLifetimeMs },
+          {
+            eName: input.eName,
+            fileUri,
+            accessScope: 'personal',
+            expiresAt: Date.now() + streamLifetimeMs,
+          },
           this.config.signingSecret,
         ),
     });
@@ -1165,8 +1176,28 @@ export class MeshengerVideoLibrary {
     }
     jobId = job.id;
     jobCreatedAt = job.createdAt;
-    const savedQueue = Array.isArray(job.ledger.queue) ? (job.ledger.queue as SharedWork[]) : [];
-    const openTasks = await this.jobStore.loadOpenTasks(job.id);
+    let savedQueue = Array.isArray(job.ledger.queue) ? (job.ledger.queue as SharedWork[]) : [];
+    let openTasks = await this.jobStore.loadOpenTasks(job.id);
+    // A previous worker can persist an incomplete catalogue after its queue and
+    // task rows have both been lost. It was previously impossible to make
+    // progress from this state: the scanner had no unsettled space to reseed,
+    // so cards only reappeared after a manual Refresh. Restart the catalogue
+    // while keeping its discovered records, then seed the root sources below.
+    const hasLostWork =
+      !drainFinished &&
+      !job.completeness.complete &&
+      job.completeness.retryNeeded &&
+      savedQueue.length === 0 &&
+      openTasks.length === 0 &&
+      inventorySpacesClassified(job.completeness) < job.completeness.expected;
+    if (hasLostWork) {
+      job = await this.restartCatalogueJob(job, ownVault.eVaultUri);
+      drainFinished = false;
+      jobId = job.id;
+      jobCreatedAt = job.createdAt;
+      savedQueue = [];
+      openTasks = [];
+    }
     const restoreJobLedger = () => {
       completeness.hydrate(job.completeness);
       Object.assign(counts, job.sourceCounts);
@@ -3651,9 +3682,11 @@ export function verifyMeshengerVideoStreamId(value: string, secret: string): Str
   const eName = optionalString(grant?.eName);
   const fileUri = optionalString(grant?.fileUri);
   const expiresAt = number(grant?.expiresAt);
+  const accessScope = optionalString(grant?.accessScope);
   if (
     !eName ||
     !fileUri ||
+    (accessScope !== 'personal' && accessScope !== 'shared') ||
     expiresAt === undefined ||
     !isEName(eName) ||
     !parseW3dsFileUri(fileUri)
@@ -3665,7 +3698,7 @@ export function verifyMeshengerVideoStreamId(value: string, secret: string): Str
       'stream_expired',
       401,
     );
-  return { eName, fileUri, expiresAt };
+  return { eName, fileUri, accessScope, expiresAt };
 }
 
 function record(value: unknown): RecordValue | undefined {

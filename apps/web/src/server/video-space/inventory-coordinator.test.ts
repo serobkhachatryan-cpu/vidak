@@ -316,6 +316,21 @@ describe('inventory coordinator', () => {
     expect(items[0]).not.toHaveProperty('sourceSpaceKey');
   });
 
+  it('adds safe shared-source context without exposing the source identity', () => {
+    const items = publicLibraryItems([
+      video({
+        id: 'shared-1',
+        title: 'Shared',
+        accessScope: 'shared',
+        visibility: 'shared-with-me',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      }),
+    ]);
+    expect(items[0]).toMatchObject({ sharedVia: 'group' });
+    expect(JSON.stringify(items)).not.toContain('@friend.w3id');
+  });
+
   it('inventories owned messenger/call videos plus authorized shared videos without duplicates', async () => {
     const ownedCall = video({
       id: 'call-1',

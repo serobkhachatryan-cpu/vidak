@@ -25,6 +25,8 @@ export interface VideoSpaceLibraryItem {
   durationSeconds?: number;
   createdAt?: string;
   streamIds?: string[];
+  /** Safe high-level source context for a shared card. */
+  sharedVia?: 'group' | 'conversation';
   previewState?: VideoSpacePreviewState;
   previewUrl?: string;
 }
@@ -190,10 +192,12 @@ export function shareChangeConfirmation(next: VideoSpaceVisibility): string {
 }
 
 export function librarySourceLabel(
-  video: Pick<VideoSpaceLibraryItem, 'accessScope' | 'kind' | 'visibility'>,
+  video: Pick<VideoSpaceLibraryItem, 'accessScope' | 'kind' | 'visibility' | 'sharedVia'>,
 ): string {
   if (video.accessScope === 'shared' || video.visibility === 'shared-with-me') {
-    return 'Shared with you';
+    return video.sharedVia === 'group'
+      ? 'Shared with you through a W3DS group'
+      : 'Shared with you through a W3DS conversation';
   }
   if (video.kind === 'call-recording') return 'Your call recording';
   if (video.kind === 'video-message') return 'Your video message';
@@ -203,7 +207,7 @@ export function librarySourceLabel(
 export function libraryCardDetails(
   video: Pick<
     VideoSpaceLibraryItem,
-    'durationSeconds' | 'createdAt' | 'accessScope' | 'kind' | 'visibility'
+    'durationSeconds' | 'createdAt' | 'accessScope' | 'kind' | 'visibility' | 'sharedVia'
   >,
 ): string {
   const values = [
@@ -212,6 +216,12 @@ export function libraryCardDetails(
     librarySourceLabel(video),
   ].filter(Boolean);
   return values.join(' · ');
+}
+
+export function canPlayLibraryVideo(
+  video: Pick<VideoSpaceLibraryItem, 'accessScope' | 'streamIds'>,
+): boolean {
+  return video.accessScope === 'personal' && Boolean(video.streamIds?.length);
 }
 
 export function ownedVideoSpaceVisibility(video: Pick<Video, 'status' | 'visibility'>): {

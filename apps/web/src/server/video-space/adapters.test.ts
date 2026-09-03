@@ -327,7 +327,7 @@ describe('video space adapters', () => {
     ).toEqual([]);
   });
 
-  it('classifies ownership from documented subject/owner, not the discovery vault', () => {
+  it('does not label a foreign canonical file as personal when its binding claims the viewer owns it', () => {
     expect(documentedRecordOwnerEName({ senderEName: owner }, [fileUri])).toBe(owner);
     expect(documentedRecordOwnerEName({ ownerId: owner }, [])).toBe(owner);
     expect(documentedRecordOwnerEName({ subject: owner }, [])).toBe(owner);
@@ -356,7 +356,7 @@ describe('video space adapters', () => {
     expect(ownMessageInGroup).toEqual([
       expect.objectContaining({
         title: 'My Group Clip',
-        accessScope: 'personal',
+        accessScope: 'shared',
       }),
     ]);
 
@@ -381,7 +381,7 @@ describe('video space adapters', () => {
     });
     expect(ownCallInGroup).toEqual([
       expect.objectContaining({
-        accessScope: 'personal',
+        accessScope: 'shared',
         kind: 'call-recording',
       }),
     ]);

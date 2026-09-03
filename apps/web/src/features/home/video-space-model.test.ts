@@ -279,7 +279,7 @@ describe('video space home model', () => {
         visibility: 'shared-with-me',
         kind: 'video-message',
       }),
-    ).toBe('Shared with you');
+    ).toBe('Shared with you through a W3DS conversation');
     expect(
       libraryCardDetails({
         accessScope: 'personal',

@@ -121,6 +121,19 @@ function scopeForRecord(input: {
   fileUris?: readonly string[];
   vaultOwnerEName?: string;
 }): VideoSpaceAccessScope {
+  // The canonical file URI identifies where the bytes live. A payload may
+  // claim that the viewer owns a historical binding while the linked file is
+  // actually owned by somebody else; never let that turn a shared file into a
+  // misleading "Private" card.
+  const fileOwners = (input.fileUris ?? [])
+    .map((fileUri) => parseW3dsFileUri(fileUri)?.ownerEName)
+    .filter((owner): owner is string => Boolean(owner));
+  if (fileOwners.length > 0) {
+    const viewer = optionalEName(input.viewerEName);
+    return viewer && fileOwners.every((owner) => optionalEName(owner) === viewer)
+      ? 'personal'
+      : 'shared';
+  }
   const owner =
     documentedRecordOwnerEName(input.payload, input.fileUris ?? []) ??
     optionalEName(input.vaultOwnerEName);

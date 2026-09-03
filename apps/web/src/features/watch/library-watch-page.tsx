@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import {
+  canPlayLibraryVideo,
   formatSpaceDuration,
   type VideoSpaceLibraryItem,
   videoSpaceVisibilityLabels,
@@ -74,7 +75,17 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
             retryLabel="Back to your video space"
           />
         ) : null}
-        {status === 'ready' && item ? <LibraryWatchPlayer video={item} /> : null}
+        {status === 'ready' && item && !canPlayLibraryVideo(item) ? (
+          <ErrorState
+            title="Shared playback is paused"
+            description="Vidak has listed this video as shared with you, but it will not play it until source permission can be verified for every request."
+            retry={() => router.push('/')}
+            retryLabel="Back to your video space"
+          />
+        ) : null}
+        {status === 'ready' && item && canPlayLibraryVideo(item) ? (
+          <LibraryWatchPlayer video={item} />
+        ) : null}
       </Page>
     </ApplicationShell>
   );
@@ -84,6 +95,8 @@ function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
   const [segmentIndex, setSegmentIndex] = useState(0);
   const [currentSegmentSeconds, setCurrentSegmentSeconds] = useState(0);
   const [segmentDurations, setSegmentDurations] = useState<Array<number | undefined>>([]);
+  const [playbackError, setPlaybackError] = useState(false);
+  const [playbackAttempt, setPlaybackAttempt] = useState(0);
   const continuePlayback = useRef(false);
   const player = useRef<HTMLVideoElement>(null);
   const streamId = video.streamIds?.[segmentIndex] ?? video.streamIds?.[0];
@@ -98,6 +111,8 @@ function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
     setSegmentIndex(0);
     setCurrentSegmentSeconds(0);
     setSegmentDurations([]);
+    setPlaybackError(false);
+    setPlaybackAttempt(0);
     continuePlayback.current = false;
   }, [video.id]);
 
@@ -115,43 +130,56 @@ function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
       <p className="text-xs font-semibold uppercase tracking-wide text-primary">
         {videoSpaceVisibilityLabels[video.visibility]}
       </p>
-      {/* biome-ignore lint/a11y/useMediaCaption: Historical source recordings do not include caption tracks. */}
-      <video
-        key={streamId}
-        ref={player}
-        aria-label={video.title}
-        className="aspect-video w-full rounded-xl bg-black"
-        controls
-        preload="metadata"
-        src={`/api/evault/videos/${encodeURIComponent(streamId)}`}
-        onCanPlay={() => {
-          if (!continuePlayback.current) return;
-          continuePlayback.current = false;
-          void player.current?.play().catch(() => undefined);
-        }}
-        onLoadedMetadata={() => {
-          const duration = player.current?.duration;
-          if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) return;
-          setSegmentDurations((current) => {
-            if (current[segmentIndex] === duration) return current;
-            const next = [...current];
-            next[segmentIndex] = duration;
-            return next;
-          });
-        }}
-        onTimeUpdate={() => {
-          const position = player.current?.currentTime;
-          if (typeof position === 'number' && Number.isFinite(position) && position >= 0) {
-            setCurrentSegmentSeconds(position);
-          }
-        }}
-        onEnded={() => {
-          if (segmentIndex >= (video.streamIds?.length ?? 1) - 1) return;
-          setCurrentSegmentSeconds(0);
-          continuePlayback.current = true;
-          setSegmentIndex((current) => current + 1);
-        }}
-      />
+      {playbackError ? (
+        <ErrorState
+          title="Video source is unavailable"
+          description="The source link may have expired. Retry to refresh it once."
+          retry={() => {
+            setPlaybackError(false);
+            setPlaybackAttempt((attempt) => attempt + 1);
+          }}
+          retryLabel="Retry playback"
+        />
+      ) : (
+        // biome-ignore lint/a11y/useMediaCaption: Historical source recordings do not include caption tracks.
+        <video
+          key={`${streamId}:${playbackAttempt}`}
+          ref={player}
+          aria-label={video.title}
+          className="aspect-video w-full rounded-xl bg-black"
+          controls
+          preload="metadata"
+          src={`/api/evault/videos/${encodeURIComponent(streamId)}?attempt=${playbackAttempt}`}
+          onCanPlay={() => {
+            if (!continuePlayback.current) return;
+            continuePlayback.current = false;
+            void player.current?.play().catch(() => undefined);
+          }}
+          onError={() => setPlaybackError(true)}
+          onLoadedMetadata={() => {
+            const duration = player.current?.duration;
+            if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) return;
+            setSegmentDurations((current) => {
+              if (current[segmentIndex] === duration) return current;
+              const next = [...current];
+              next[segmentIndex] = duration;
+              return next;
+            });
+          }}
+          onTimeUpdate={() => {
+            const position = player.current?.currentTime;
+            if (typeof position === 'number' && Number.isFinite(position) && position >= 0) {
+              setCurrentSegmentSeconds(position);
+            }
+          }}
+          onEnded={() => {
+            if (segmentIndex >= (video.streamIds?.length ?? 1) - 1) return;
+            setCurrentSegmentSeconds(0);
+            continuePlayback.current = true;
+            setSegmentIndex((current) => current + 1);
+          }}
+        />
+      )}
       {(video.streamIds?.length ?? 0) > 1 ? (
         <Text size="sm" tone="muted">
           One recording · part {segmentIndex + 1} of {video.streamIds?.length} · continues

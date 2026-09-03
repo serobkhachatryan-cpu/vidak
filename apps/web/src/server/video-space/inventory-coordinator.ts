@@ -73,7 +73,14 @@ interface CacheEntry {
 export function publicLibraryItems(items: readonly MeshengerVideo[]): MeshengerVideo[] {
   return items.map((item) => {
     const { sourceSpaceKey: _space, accessBasis: _basis, ...publicItem } = item;
-    return publicItem;
+    if (item.accessScope !== 'shared') return publicItem;
+    return {
+      ...publicItem,
+      // This is deliberately source-type context, not a guessed person. The
+      // source eName is private implementation metadata and must not cross the
+      // API boundary.
+      sharedVia: _basis === 'membership' ? 'group' : 'conversation',
+    };
   });
 }
 

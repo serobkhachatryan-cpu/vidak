@@ -24,13 +24,28 @@ export async function GET(
     const session = await getW3dsAuthService().getSession(accessToken);
     const { streamId } = await context.params;
     const library = createEVaultVideoLibrary();
-    const mediaUrl = await library.resolveMediaUrl(session.user, streamId);
-    const upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
+    const startedAt = Date.now();
+    let retriedSource = false;
+    let mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+    let upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
     if (!upstream.ok && upstream.status !== 206) {
-      if ([401, 403, 404].includes(upstream.status))
+      if ([401, 403, 404].includes(upstream.status)) {
+        await discardUpstreamBody(upstream);
         library.invalidateMediaUrl(session.user, streamId);
+        mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+        upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
+        retriedSource = true;
+      }
+    }
+    if (!upstream.ok && upstream.status !== 206) {
+      await discardUpstreamBody(upstream);
       throw new EVaultVideoLibraryError('The video file is unavailable.', 'remote_rejected', 502);
     }
+    console.info('private_video_proxy', {
+      upstreamStatus: upstream.status,
+      retriedSource,
+      durationMs: Date.now() - startedAt,
+    });
     const headers = new Headers({
       'Cache-Control': 'private, no-store, max-age=0',
       'X-Content-Type-Options': 'nosniff',
@@ -42,6 +57,14 @@ export async function GET(
     return new NextResponse(upstream.body, { status: upstream.status, headers });
   } catch (error) {
     return errorResponse(error);
+  }
+}
+
+async function discardUpstreamBody(response: Response): Promise<void> {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // The response is already unusable. Continue with the source refresh.
   }
 }
 
