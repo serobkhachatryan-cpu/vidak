@@ -86,6 +86,24 @@ describe('VideoSpacePoster', () => {
     expect(markup).toContain('Preview unavailable');
   });
 
+  it('labels unverified shared references without rendering or fetching their preview', () => {
+    const markup = renderToStaticMarkup(
+      <VideoSpacePoster
+        title="Shared call recording"
+        posterUrl="/api/evault/videos/grant/preview"
+        state="restricted"
+        durationSeconds={45}
+        visibilityLabel="Shared with me"
+      />,
+    );
+    expect(markup).toContain('Shared video');
+    expect(markup).toContain('Preview stays private until source permission is verified');
+    expect(markup).not.toContain('Preview unavailable');
+    expect(markup).not.toContain('<img');
+    expect(markup).not.toContain('<video');
+    expect(markup).not.toContain('grant/preview');
+  });
+
   it('does not start a preview fetch until asked to load', () => {
     const markup = renderToStaticMarkup(
       <VideoSpacePoster

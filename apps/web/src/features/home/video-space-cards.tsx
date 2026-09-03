@@ -90,10 +90,12 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
     <VideoSpacePoster
       title={video.title}
       {...(video.previewUrl ? { posterUrl: video.previewUrl } : {})}
-      state={video.previewState ?? (video.previewUrl ? 'processing' : 'unavailable')}
-      {...(video.durationSeconds !== undefined
-        ? { durationSeconds: video.durationSeconds }
-        : {})}
+      state={
+        canPlay
+          ? (video.previewState ?? (video.previewUrl ? 'processing' : 'unavailable'))
+          : 'restricted'
+      }
+      {...(video.durationSeconds !== undefined ? { durationSeconds: video.durationSeconds } : {})}
       visibilityLabel={visibilityLabel}
       locked={video.visibility === 'private'}
       loadWhenVisible

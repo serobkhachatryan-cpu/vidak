@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { enqueuePreviewLoad } from './preview-load-queue';
 import { Badge } from './primitives';
 
-export type VideoSpacePosterState = 'ready' | 'processing' | 'unavailable';
+export type VideoSpacePosterState = 'ready' | 'processing' | 'unavailable' | 'restricted';
 
 export interface VideoSpacePosterProps {
   title: string;
@@ -126,7 +126,8 @@ export function VideoSpacePoster({
   }, [fallbackPosterUrl, posterUrl, state, visible]);
 
   const showImage = Boolean(source) && !failed;
-  const showProcessing = !showImage && !failed && state !== 'unavailable';
+  const showProcessing = !showImage && !failed && state === 'processing';
+  const showRestricted = !showImage && state === 'restricted';
 
   return (
     <div ref={frameRef} className="relative overflow-hidden">
@@ -147,6 +148,13 @@ export function VideoSpacePoster({
         />
       ) : showProcessing ? (
         <VideoSpaceProcessingPoster
+          title={title}
+          {...(durationSeconds !== undefined ? { durationSeconds } : {})}
+          {...(visibilityLabel ? { visibilityLabel } : {})}
+          locked={locked}
+        />
+      ) : showRestricted ? (
+        <VideoSpaceRestrictedPoster
           title={title}
           {...(durationSeconds !== undefined ? { durationSeconds } : {})}
           {...(visibilityLabel ? { visibilityLabel } : {})}
@@ -218,6 +226,37 @@ export function VideoSpaceUnavailablePoster({
     >
       <VideoIcon />
       <p className="font-sans text-[11px] text-muted-foreground">Preview unavailable</p>
+      <VideoSpacePosterBadges
+        {...(durationSeconds !== undefined ? { durationSeconds } : {})}
+        {...(visibilityLabel ? { visibilityLabel } : {})}
+        locked={locked}
+      />
+    </div>
+  );
+}
+
+function VideoSpaceRestrictedPoster({
+  title,
+  durationSeconds,
+  visibilityLabel,
+  locked = false,
+}: {
+  title: string;
+  durationSeconds?: number;
+  visibilityLabel?: string;
+  locked?: boolean;
+}) {
+  return (
+    <div
+      className="relative flex aspect-video w-full flex-col items-center justify-center gap-2 border border-border/60 bg-muted/70 px-4 text-center"
+      role="img"
+      aria-label={`${title} Shared video`}
+    >
+      <VideoIcon />
+      <p className="font-sans text-[11px] text-muted-foreground">Shared video</p>
+      <p className="font-sans text-[11px] text-muted-foreground">
+        Preview stays private until source permission is verified
+      </p>
       <VideoSpacePosterBadges
         {...(durationSeconds !== undefined ? { durationSeconds } : {})}
         {...(visibilityLabel ? { visibilityLabel } : {})}
