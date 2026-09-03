@@ -55,6 +55,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
   const [type, setType] = useState<SearchResultType>('videos');
   const [sort, setSort] = useState<SearchSort>('relevance');
   const [activeSuggestion, setActiveSuggestion] = useState(-1);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
   const { addRecentSearch, recentSearches } = useRecentSearches();
@@ -109,6 +110,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
     setInputValue(nextQuery);
     addRecentSearch(nextQuery);
     setActiveSuggestion(-1);
+    setSuggestionsOpen(false);
     window.history.replaceState(null, '', `/search?q=${encodeURIComponent(nextQuery)}`);
   };
 
@@ -120,6 +122,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
   const clearSearch = () => {
     setInputValue('');
     setQuery('');
+    setSuggestionsOpen(false);
     window.history.replaceState(null, '', '/search');
     inputRef.current?.focus();
   };
@@ -141,8 +144,10 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
             onChange={(event) => {
               setInputValue(event.target.value);
               setActiveSuggestion(-1);
+              setSuggestionsOpen(true);
             }}
             {...(inputValue ? { onClear: clearSearch } : {})}
+            onFocus={() => setSuggestionsOpen(true)}
             onKeyDown={(event) => {
               if (!suggestions.length) return;
               if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -153,7 +158,10 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
                     : (current + suggestions.length - 1) % suggestions.length,
                 );
               }
-              if (event.key === 'Escape') setActiveSuggestion(-1);
+              if (event.key === 'Escape') {
+                setActiveSuggestion(-1);
+                setSuggestionsOpen(false);
+              }
               if (event.key === 'Enter' && activeSuggestion >= 0) {
                 event.preventDefault();
                 selectSuggestion(suggestions[activeSuggestion] ?? '');
@@ -166,7 +174,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
               activeSuggestion >= 0 ? `suggestion-${activeSuggestion}` : undefined
             }
           />
-          {suggestions.length > 0 && inputValue && (
+          {suggestionsOpen && suggestions.length > 0 && inputValue && (
             <div
               id="search-suggestions"
               role="listbox"
