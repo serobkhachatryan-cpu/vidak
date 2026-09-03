@@ -26,7 +26,10 @@ export async function GET(
     const { streamId } = await context.params;
     const library = createEVaultVideoLibrary();
     let retriedSource = false;
+    const resolutionStartedAt = Date.now();
     let mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+    const resolutionMs = Date.now() - resolutionStartedAt;
+    const upstreamStartedAt = Date.now();
     let upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
     if (!upstream.ok && upstream.status !== 206) {
       if ([401, 403, 404].includes(upstream.status)) {
@@ -44,6 +47,8 @@ export async function GET(
     console.info('private_video_proxy', {
       upstreamStatus: upstream.status,
       retriedSource,
+      resolutionMs,
+      upstreamMs: Date.now() - upstreamStartedAt,
       durationMs: Date.now() - startedAt,
     });
     const headers = new Headers({

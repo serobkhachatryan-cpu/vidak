@@ -74,6 +74,10 @@ const w3dsFileOntology = documentedOntologyId('w3ds-file');
 const pageSize = 100;
 const maxPages = 30;
 const requestTimeoutMs = 12_000;
+// The canonical File redirect is a fast path. If an eVault is overloaded, do
+// not let that optional attempt consume the whole interactive playback budget
+// before the proven metadata fallback starts.
+const directFileDereferenceTimeoutMs = 2_000;
 const sharedSpaceConcurrency = 8;
 /** Fail-fast first, then Retry-After / exponential backoff until the page succeeds or is terminal. */
 const maxRejectedAttempts = 4;
@@ -626,7 +630,7 @@ export class MeshengerVideoLibrary {
           headers: { 'X-ENAME': vault.ownerEName },
           cache: 'no-store',
           redirect: 'manual',
-          signal: AbortSignal.timeout(requestTimeoutMs),
+          signal: AbortSignal.timeout(Math.min(requestTimeoutMs, directFileDereferenceTimeoutMs)),
         },
       );
     } catch {
