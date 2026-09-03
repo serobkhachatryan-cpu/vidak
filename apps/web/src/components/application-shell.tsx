@@ -37,12 +37,15 @@ export interface ApplicationShellProps {
   children: ReactNode;
   currentHref?: string;
   searchValue?: string;
+  /** The dedicated search page owns its focused search control. */
+  showHeaderSearch?: boolean;
 }
 
 export function ApplicationShell({
   children,
   currentHref,
   searchValue = '',
+  showHeaderSearch = true,
 }: ApplicationShellProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -63,6 +66,7 @@ export function ApplicationShell({
       : undefined;
 
   useEffect(() => {
+    if (!showHeaderSearch) return;
     const focusSearch = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       if (
@@ -87,7 +91,7 @@ export function ApplicationShell({
     };
     window.addEventListener('keydown', focusSearch);
     return () => window.removeEventListener('keydown', focusSearch);
-  }, []);
+  }, [showHeaderSearch]);
 
   const submitSearch = (event: FormEvent<HTMLFormElement>) => {
     const query = new FormData(event.currentTarget).get('q')?.toString().trim();
@@ -153,21 +157,23 @@ export function ApplicationShell({
           }
           onMenuClick={() => setMobileNavigationOpen(true)}
           navigation={
-            <form
-              action="/search"
-              method="get"
-              onSubmit={submitSearch}
-              className="mx-auto max-w-xl"
-            >
-              <SearchInput
-                ref={searchRef}
-                name="q"
-                defaultValue={searchValue}
-                placeholder="Search videos and channels"
-                aria-label="Search"
-                shortcut="⌘K"
-              />
-            </form>
+            showHeaderSearch ? (
+              <form
+                action="/search"
+                method="get"
+                onSubmit={submitSearch}
+                className="mx-auto max-w-xl"
+              >
+                <SearchInput
+                  ref={searchRef}
+                  name="q"
+                  defaultValue={searchValue}
+                  placeholder="Search videos and channels"
+                  aria-label="Search"
+                  shortcut="⌘K"
+                />
+              </form>
+            ) : undefined
           }
           actions={
             <div className="flex items-center gap-1">

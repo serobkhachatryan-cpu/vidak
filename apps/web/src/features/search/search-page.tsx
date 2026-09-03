@@ -135,7 +135,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
   const isLoadingMore = currentSearch.isFetchingNextPage;
 
   return (
-    <ApplicationShell currentHref="/search" searchValue={query}>
+    <ApplicationShell currentHref="/search" searchValue={query} showHeaderSearch={false}>
       <Page title="Search" description="Find videos and creator channels.">
         <form onSubmit={submit} className="max-w-2xl">
           <SearchInput
