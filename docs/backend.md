@@ -635,10 +635,20 @@ command.
 2. **Provision / verify PostgreSQL** and private media storage (see below).
 3. **Apply migrations** with `pnpm db:migrate` against the target `DATABASE_URL`
    **before** routing traffic to new application revisions that need the schema.
-4. **Deploy application instances** (Docker/`next start` or equivalent). Prefer
+4. **Build with the deployment environment loaded.** `NEXT_PUBLIC_AUTH_PROVIDER`
+   is embedded in the browser bundle at build time, so a runtime-only systemd
+   environment file is not enough. On an env-file deployment, run:
+
+   ```bash
+   VIDAK_ENV_FILE=/srv/vidak/.env pnpm build:web:production
+   ```
+
+   The command requires an explicit provider and fails if the server and browser
+   provider values differ.
+5. **Deploy application instances** (Docker/`next start` or equivalent). Prefer
    rolling deploy behind a load balancer.
-5. **Confirm probes**: liveness then readiness (see below).
-6. **Only after readiness is healthy**, send user traffic to the new revision.
+6. **Confirm probes**: liveness then readiness (see below).
+7. **Only after readiness is healthy**, send user traffic to the new revision.
 
 ### Environment validation
 
