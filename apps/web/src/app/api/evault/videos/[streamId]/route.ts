@@ -16,6 +16,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ streamId: string }> },
 ) {
+  const startedAt = Date.now();
   try {
     const accessToken =
       getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
@@ -24,7 +25,6 @@ export async function GET(
     const session = await getW3dsAuthService().getSession(accessToken);
     const { streamId } = await context.params;
     const library = createEVaultVideoLibrary();
-    const startedAt = Date.now();
     let retriedSource = false;
     let mediaUrl = await library.resolveMediaUrl(session.user, streamId);
     let upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
@@ -56,8 +56,23 @@ export async function GET(
     }
     return new NextResponse(upstream.body, { status: upstream.status, headers });
   } catch (error) {
+    logProxyFailure(error, Date.now() - startedAt);
     return errorResponse(error);
   }
+}
+
+/**
+ * Keep operational evidence for a failed private stream without recording a
+ * stream id, eName, URL, or any other user data.  This distinguishes a
+ * rejected source from an expired grant when diagnosing playback incidents.
+ */
+function logProxyFailure(error: unknown, durationMs: number): void {
+  const known = error instanceof EVaultVideoLibraryError || error instanceof W3dsAuthError;
+  console.warn('private_video_proxy_failed', {
+    code: known ? error.code : 'internal_error',
+    status: known ? error.status : 500,
+    durationMs,
+  });
 }
 
 async function discardUpstreamBody(response: Response): Promise<void> {
