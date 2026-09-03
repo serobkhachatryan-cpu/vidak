@@ -335,6 +335,54 @@ describe('VideoPreviewService', () => {
     expect(record?.status).toBe('ready');
   });
 
+  it('limits scheduled private-library preview work to two concurrent jobs', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    let active = 0;
+    let highestActive = 0;
+    let release: (() => void) | undefined;
+    const unblock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const service = new VideoPreviewService({
+      store,
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      extractor: {
+        extractUsefulFrame: async () => {
+          active += 1;
+          highestActive = Math.max(highestActive, active);
+          await unblock;
+          active -= 1;
+          return { jpeg, captureSeconds: 3 };
+        },
+      },
+      evault: {
+        inspectStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        resolveMediaUrl: async (user, streamId) =>
+          `https://media.example/${encodeURIComponent(user.eName)}/${streamId}.mp4`,
+      },
+    });
+
+    await service.scheduleLibraryBackfill({ eName: '@owner.w3id' }, [
+      { streamIds: ['one'] },
+      { streamIds: ['two'] },
+      { streamIds: ['three'] },
+    ]);
+
+    await vi.waitFor(() => expect(active).toBe(2));
+    expect(highestActive).toBe(2);
+    release?.();
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/three'),
+      ).resolves.toMatchObject({ status: 'ready' });
+    });
+    expect(highestActive).toBe(2);
+  });
+
   it('uses a fallback poster until scheduled retry can repair a rate-limited eVault preview', async () => {
     const store = new InMemoryVideoPreviewStore();
     const service = new VideoPreviewService({

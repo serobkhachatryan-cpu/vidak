@@ -70,6 +70,7 @@ export interface VideoPreviewServiceOptions {
 const inFlight = new Set<string>();
 const stalePendingMs = 2 * 60 * 1000;
 const staleFailedMs = 60 * 60 * 1000;
+const maxConcurrentBackfillPreviews = 2;
 const unavailableEVaultPoster = new TextEncoder().encode(`
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-label="Video">
     <rect width="1280" height="720" fill="#202938"/>
@@ -89,6 +90,9 @@ export class VideoPreviewService {
   private readonly extractor: VideoFrameExtractor;
   private readonly evault: AuthorizedEVaultPreviewSource | undefined;
   private readonly createId: () => string;
+  private readonly queuedBackfillKeys = new Set<string>();
+  private readonly backfillQueue: Array<{ key: string; run: () => Promise<void> }> = [];
+  private activeBackfills = 0;
 
   constructor(options: VideoPreviewServiceOptions) {
     this.store = options.store;
@@ -137,7 +141,9 @@ export class VideoPreviewService {
     videos: ReadonlyArray<Pick<Video, 'id' | 'thumbnailUrl'>>,
   ): Promise<void> {
     for (const video of videos) {
-      void this.ensureOwnedPreview(user, video.id).catch(() => undefined);
+      this.enqueueBackfill(`owned:${user.id}:${video.id}`, () =>
+        this.ensureOwnedPreview(user, video.id).then(() => undefined),
+      );
     }
   }
 
@@ -148,7 +154,37 @@ export class VideoPreviewService {
     for (const item of items) {
       const streamId = item.streamIds?.[0];
       if (!streamId) continue;
-      void this.ensureEVaultPreview(user, streamId, { retryFailed: true }).catch(() => undefined);
+      this.enqueueBackfill(`evault:${user.eName}:${streamId}`, () =>
+        this.ensureEVaultPreview(user, streamId, { retryFailed: true }).then(() => undefined),
+      );
+    }
+  }
+
+  /**
+   * Library requests enqueue preview work rather than starting one extractor
+   * per card. A small shared worker pool keeps a large private catalogue from
+   * saturating ffmpeg, storage, or the authorized eVault media endpoint.
+   */
+  private enqueueBackfill(key: string, run: () => Promise<void>): void {
+    if (this.queuedBackfillKeys.has(key)) return;
+    this.queuedBackfillKeys.add(key);
+    this.backfillQueue.push({ key, run });
+    this.drainBackfillQueue();
+  }
+
+  private drainBackfillQueue(): void {
+    while (this.activeBackfills < maxConcurrentBackfillPreviews && this.backfillQueue.length > 0) {
+      const next = this.backfillQueue.shift();
+      if (!next) return;
+      this.activeBackfills += 1;
+      void next
+        .run()
+        .catch(() => undefined)
+        .finally(() => {
+          this.activeBackfills -= 1;
+          this.queuedBackfillKeys.delete(next.key);
+          this.drainBackfillQueue();
+        });
     }
   }
 
