@@ -64,6 +64,12 @@ describe('UploadPage', () => {
     expect(markup).toContain('No speech / music only');
   });
 
+  it('distinguishes a chosen upload from browsing existing W3DS videos', () => {
+    const markup = renderToStaticMarkup(<UploadPage step="select" />);
+    expect(markup).toContain('transfers only the file you choose');
+    expect(markup).toContain('does not upload or copy them');
+  });
+
   it('surfaces required field validation messaging on details', () => {
     const markup = renderToStaticMarkup(
       <UploadPage

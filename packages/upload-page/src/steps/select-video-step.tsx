@@ -94,6 +94,10 @@ export function SelectVideoStep({ fileName, fileSize, error, onFileSelect }: Sel
         Supported formats: {supportedVideoExtensions.join(', ')}. Max size{' '}
         {Math.round(maxVideoFileSizeBytes / (1024 * 1024 * 1024))} GB.
       </Text>
+      <Text size="sm" tone="muted">
+        Uploading creates a new Vidak draft and transfers only the file you choose. Browsing videos
+        already in your W3DS space does not upload or copy them.
+      </Text>
       {fileName && (
         <Text size="sm">
           Selected: {fileName}
