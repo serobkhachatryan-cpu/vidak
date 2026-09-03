@@ -388,8 +388,7 @@ export class PostgresChannelImportStore implements ChannelImportStore {
             sourceVideoId: video.sourceVideoId,
             title: video.title,
             sourceUrl: video.sourceUrl,
-            embedUrl:
-              'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(video.sourceVideoId),
+            embedUrl: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.sourceVideoId)}`,
             thumbnailUrl: video.thumbnailUrl,
             sourceVisibility: 'public',
             playbackStatus: 'embedded',
@@ -402,8 +401,7 @@ export class PostgresChannelImportStore implements ChannelImportStore {
             set: {
               title: video.title,
               sourceUrl: video.sourceUrl,
-              embedUrl:
-                'https://www.youtube-nocookie.com/embed/' + encodeURIComponent(video.sourceVideoId),
+              embedUrl: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.sourceVideoId)}`,
               thumbnailUrl: video.thumbnailUrl,
               sourceVisibility: 'public',
               playbackStatus: 'embedded',

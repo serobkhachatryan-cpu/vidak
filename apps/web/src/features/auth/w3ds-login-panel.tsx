@@ -9,16 +9,15 @@ import { eidSignInCopy } from './eid-sign-in-copy';
 import { SignInQr } from './sign-in-qr';
 import {
   initialW3dsLoginState,
-  isTerminalW3dsLoginState,
   reduceW3dsLoginChallenge,
   reduceW3dsLoginPollError,
   reduceW3dsLoginStart,
   reduceW3dsLoginStartError,
   reduceW3dsLoginStatus,
   type W3dsLoginUiState,
-  w3dsLoginPollIntervalMs,
   w3dsLoginStatusMessage,
 } from './w3ds-login-challenge';
+import { useW3dsOfferPolling } from './w3ds-offer-polling';
 
 function errorMessage(error: unknown) {
   return error instanceof AuthenticationError
@@ -29,7 +28,6 @@ function errorMessage(error: unknown) {
 export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
   const { createLoginChallenge, getLoginChallengeStatus } = useAuthentication();
   const [state, setState] = useState<W3dsLoginUiState>(initialW3dsLoginState);
-  const pollTimer = useRef<ReturnType<typeof setInterval> | undefined>(undefined);
   const completedRef = useRef(false);
   const createLoginChallengeRef = useRef(createLoginChallenge);
   const getLoginChallengeStatusRef = useRef(getLoginChallengeStatus);
@@ -37,15 +35,7 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
   createLoginChallengeRef.current = createLoginChallenge;
   getLoginChallengeStatusRef.current = getLoginChallengeStatus;
 
-  const clearPoll = useCallback(() => {
-    if (pollTimer.current !== undefined) {
-      clearInterval(pollTimer.current);
-      pollTimer.current = undefined;
-    }
-  }, []);
-
   const startChallenge = useCallback(async () => {
-    clearPoll();
     completedRef.current = false;
     setState(reduceW3dsLoginStart());
     try {
@@ -54,58 +44,46 @@ export function W3dsLoginPanel({ returnTo }: { returnTo: string }) {
     } catch (error) {
       setState(reduceW3dsLoginStartError(errorMessage(error)));
     }
-  }, [clearPoll]);
+  }, []);
 
   useEffect(() => {
     void startChallenge();
-    return clearPoll;
-  }, [clearPoll, startChallenge]);
+  }, [startChallenge]);
 
-  const pendingOfferId = state.kind === 'pending' ? state.challenge.offerId : undefined;
-  const pendingSignInUri = state.kind === 'pending' ? state.challenge.signInUri : undefined;
-  const pendingExpiresAt = state.kind === 'pending' ? state.challenge.expiresAt : undefined;
+  const pendingChallenge = state.kind === 'pending' ? state.challenge : undefined;
+  const readOfferStatus = useCallback(
+    async (offerId: string) => getLoginChallengeStatusRef.current(offerId),
+    [],
+  );
+  const handleOfferStatus = useCallback(
+    (status: Awaited<ReturnType<typeof readOfferStatus>>) => {
+      if (!pendingChallenge) return;
 
-  useEffect(() => {
-    if (!pendingOfferId || !pendingSignInUri || !pendingExpiresAt) {
-      clearPoll();
-      return;
-    }
-
-    const challenge = {
-      offerId: pendingOfferId,
-      signInUri: pendingSignInUri,
-      expiresAt: pendingExpiresAt,
-    };
-
-    const poll = async () => {
-      try {
-        const status = await getLoginChallengeStatusRef.current(challenge.offerId);
-        const next = reduceW3dsLoginStatus(challenge, status);
-        setState(next);
-
-        if (next.kind === 'completed' && !completedRef.current) {
-          completedRef.current = true;
-          clearPoll();
-          // Always finish through the cookie-producing continuation, then the
-          // handoff page verifies GET /api/auth/session before returnTo.
-          window.location.assign(buildOfferContinuePath(challenge.offerId, returnTo));
-          return;
-        }
-
-        if (isTerminalW3dsLoginState(next)) clearPoll();
-      } catch (error) {
-        setState(reduceW3dsLoginPollError(challenge, errorMessage(error)));
-        clearPoll();
+      const next = reduceW3dsLoginStatus(pendingChallenge, status);
+      setState(next);
+      if (next.kind === 'completed' && !completedRef.current) {
+        completedRef.current = true;
+        // Always finish through the cookie-producing continuation, then the
+        // handoff page verifies GET /api/auth/session before returnTo.
+        window.location.assign(buildOfferContinuePath(pendingChallenge.offerId, returnTo));
       }
-    };
+    },
+    [pendingChallenge, readOfferStatus, returnTo],
+  );
+  const handleOfferError = useCallback(
+    (error: unknown) => {
+      if (!pendingChallenge) return;
+      setState(reduceW3dsLoginPollError(pendingChallenge, errorMessage(error)));
+    },
+    [pendingChallenge],
+  );
 
-    void poll();
-    pollTimer.current = setInterval(() => {
-      void poll();
-    }, w3dsLoginPollIntervalMs);
-
-    return clearPoll;
-  }, [clearPoll, pendingExpiresAt, pendingOfferId, pendingSignInUri, returnTo]);
+  useW3dsOfferPolling({
+    offerId: pendingChallenge?.offerId,
+    readStatus: readOfferStatus,
+    onStatus: handleOfferStatus,
+    onError: handleOfferError,
+  });
 
   const statusMessage = w3dsLoginStatusMessage(state);
   const challenge =

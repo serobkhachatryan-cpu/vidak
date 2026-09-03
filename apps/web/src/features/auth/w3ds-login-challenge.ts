@@ -10,8 +10,6 @@ export type W3dsLoginUiState =
   | { kind: 'failed'; challenge: LoginChallenge; message: string }
   | { kind: 'error'; message: string };
 
-export const w3dsLoginPollIntervalMs = 2_000;
-
 export function initialW3dsLoginState(): W3dsLoginUiState {
   return { kind: 'idle' };
 }

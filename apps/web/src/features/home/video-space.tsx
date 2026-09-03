@@ -1,39 +1,25 @@
 'use client';
 
-import { useInfinitePublicVideos } from '@w3ds/hooks';
-import { isRenderableThumbnailUrl, type Video } from '@w3ds/types';
-import {
-  Button,
-  EmptyState,
-  ErrorState,
-  Grid,
-  Page,
-  Spinner,
-  Text,
-  VidakLogo,
-  VideoCard,
-  VideoCardSkeleton,
-  VideoSpacePoster,
-} from '@w3ds/ui';
+import type { Video } from '@w3ds/types';
+import { Button, EmptyState, ErrorState, Page, Text, VidakLogo, VideoCardSkeleton } from '@w3ds/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { videoApiClient } from '../../lib/video-api-client';
+import { PublicExplorePanel } from './public-explore-panel';
+import { LibraryVideoCard, OwnedVideoCard } from './video-space-cards';
 import {
   evaultItemsForTab,
   type InventoryCompleteness,
   type InventoryDiscovery,
   isVideoSpaceEmpty,
-  libraryCardDetails,
   libraryDiscoveryBanner,
   ownedItemsForTab,
-  ownedVideoSpaceVisibility,
   shareChangeConfirmation,
   type VideoSpaceLibraryItem,
   type VideoSpaceTab,
   videoSpaceEmptyCopy,
   videoSpaceTabs,
-  videoSpaceVisibilityLabels,
 } from './video-space-model';
 
 type LibraryState = {
@@ -383,197 +369,6 @@ function PrivateLibraryPanel({
       </section>
     </div>
   );
-}
-
-function OwnedVideoCard({
-  video,
-  isPending,
-  onWatch,
-  onContinueDraft,
-  onChangeVisibility,
-}: {
-  video: Video;
-  isPending: boolean;
-  onWatch: (video: Video) => void;
-  onContinueDraft: (video: Video) => void;
-  onChangeVisibility: (video: Video, next: 'private') => void;
-}) {
-  const visibility = ownedVideoSpaceVisibility(video);
-  const canWatch =
-    video.status === 'published' &&
-    Boolean(video.publicVideoId) &&
-    (video.visibility === 'public' || video.visibility === 'unlisted');
-  const existingPoster = isRenderableThumbnailUrl(video.thumbnailUrl)
-    ? video.thumbnailUrl
-    : undefined;
-  const generatedPoster = `/api/videos/owned/${encodeURIComponent(video.id)}/preview`;
-  const processing = video.status === 'processing';
-
-  return (
-    <article className="overflow-hidden rounded-xl border border-border bg-surface-raised">
-      <VideoSpacePoster
-        title={video.title}
-        {...(existingPoster
-          ? { posterUrl: existingPoster, fallbackPosterUrl: generatedPoster }
-          : { posterUrl: generatedPoster })}
-        state={processing ? 'processing' : existingPoster ? 'ready' : 'processing'}
-        durationSeconds={video.durationSeconds}
-        visibilityLabel={visibility.label}
-        locked={visibility.id === 'private'}
-        loadWhenVisible
-      />
-      <div className="space-y-3 p-4">
-        <div className="space-y-1">
-          <h3 className="font-semibold text-foreground">{video.title}</h3>
-          <p className="text-sm text-muted-foreground">
-            {video.status === 'draft' ? 'Your Vidak draft' : 'Your Vidak video'}
-          </p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {video.status === 'draft' ? (
-            <Button size="sm" onClick={() => onContinueDraft(video)}>
-              Resume draft
-            </Button>
-          ) : (
-            <>
-              {canWatch ? (
-                <Button size="sm" onClick={() => onWatch(video)}>
-                  Watch video
-                </Button>
-              ) : null}
-              {visibility.id === 'public' || visibility.id === 'shared-by-me' ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  isLoading={isPending}
-                  loadingText="Updating visibility"
-                  onClick={() => onChangeVisibility(video, 'private')}
-                >
-                  Make private
-                </Button>
-              ) : null}
-            </>
-          )}
-        </div>
-      </div>
-    </article>
-  );
-}
-
-function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
-  const visibilityLabel = videoSpaceVisibilityLabels[video.visibility];
-  const watchHref = `/watch/space/${encodeURIComponent(video.id)}`;
-
-  return (
-    <article className="overflow-hidden rounded-xl border border-border bg-surface-raised">
-      <a href={watchHref} aria-label={`Watch ${video.title}`} className="block">
-        <VideoSpacePoster
-          title={video.title}
-          {...(video.previewUrl ? { posterUrl: video.previewUrl } : {})}
-          state={video.previewState ?? (video.previewUrl ? 'processing' : 'unavailable')}
-          {...(video.durationSeconds !== undefined
-            ? { durationSeconds: video.durationSeconds }
-            : {})}
-          visibilityLabel={visibilityLabel}
-          locked={video.visibility === 'private'}
-          loadWhenVisible
-        />
-      </a>
-      <div className="space-y-3 p-4">
-        <div className="space-y-1">
-          <h3 className="font-semibold text-foreground">{video.title}</h3>
-          <p className="text-sm text-muted-foreground">{libraryCardDetails(video)}</p>
-        </div>
-        <Button
-          size="sm"
-          onClick={() => {
-            window.location.assign(watchHref);
-          }}
-        >
-          Watch video
-        </Button>
-      </div>
-    </article>
-  );
-}
-
-function PublicExplorePanel() {
-  const loadMoreRef = useRef<HTMLDivElement>(null);
-  const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, isPending, refetch } =
-    useInfinitePublicVideos(videoApiClient, 20);
-
-  useEffect(() => {
-    const target = loadMoreRef.current;
-    if (!target || !hasNextPage || isFetchingNextPage) return;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        if (entry?.isIntersecting) void fetchNextPage();
-      },
-      { rootMargin: '240px' },
-    );
-    observer.observe(target);
-    return () => observer.disconnect();
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
-
-  const videos = data?.pages.flatMap((page) => page.items) ?? [];
-
-  if (isPending) {
-    return (
-      <Grid columns={5} gap={6} aria-label="Loading public videos">
-        {Array.from({ length: 10 }, (_, index) => (
-          <VideoCardSkeleton key={index} />
-        ))}
-      </Grid>
-    );
-  }
-
-  if (error) {
-    return (
-      <ErrorState
-        title="Could not load public videos"
-        description="Public discovery is separate from your private library."
-        retry={() => void refetch()}
-      />
-    );
-  }
-
-  if (videos.length === 0) {
-    return (
-      <EmptyState
-        title="No public videos published in Vidak yet"
-        description="This list is videos people published in Vidak. It is not a catalogue of all public W3DS media."
-      />
-    );
-  }
-
-  return (
-    <>
-      <Text size="sm" tone="muted" className="mb-4">
-        Public videos published in Vidak. This list is not a catalogue of all public W3DS media.
-      </Text>
-      <Grid columns={5} gap={6}>
-        {videos.map((video) => (
-          <PublicVideoCard key={video.publicVideoId ?? video.id} video={video} />
-        ))}
-      </Grid>
-      <div
-        ref={loadMoreRef}
-        className="flex min-h-20 items-center justify-center"
-        aria-live="polite"
-      >
-        {isFetchingNextPage && (
-          <span className="flex items-center gap-2 font-sans text-sm text-muted-foreground">
-            <Spinner size="sm" aria-hidden="true" />
-            Loading more videos
-          </span>
-        )}
-      </div>
-    </>
-  );
-}
-
-function PublicVideoCard({ video }: { video: Video }) {
-  return <VideoCard video={video} {...(video.channel ? { channel: video.channel } : {})} />;
 }
 
 export function PublicHomeFeed() {

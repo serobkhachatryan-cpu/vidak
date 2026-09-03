@@ -10,7 +10,7 @@ describe('channel-import credential encryption', () => {
     const encrypted = encryptChannelImportCredential('provider-token', key);
     expect(encrypted).not.toContain('provider-token');
     expect(decryptChannelImportCredential(encrypted, key)).toBe('provider-token');
-    expect(() => decryptChannelImportCredential(encrypted.slice(0, -1) + 'x', key)).toThrow(
+    expect(() => decryptChannelImportCredential(`${encrypted.slice(0, -1)}x`, key)).toThrow(
       'cannot be decrypted',
     );
   });
