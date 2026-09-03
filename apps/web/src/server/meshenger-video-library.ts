@@ -1191,6 +1191,8 @@ export class MeshengerVideoLibrary {
       openTasks.length === 0 &&
       inventorySpacesClassified(job.completeness) < job.completeness.expected;
     if (hasLostWork) {
+      // Operational marker only: deliberately omit account and source data.
+      console.info('[inventory-recovery] restarted-lost-work');
       job = await this.restartCatalogueJob(job, ownVault.eVaultUri);
       drainFinished = false;
       jobId = job.id;
