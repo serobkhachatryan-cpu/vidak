@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import {
+  compactMediaSourceMetadata,
   createMeshengerVideoLibrary,
   createMeshengerVideoStreamId,
   verifyMeshengerVideoStreamId,
@@ -44,6 +45,29 @@ function configuredLibrary() {
 }
 
 describe('Meshenger video library', () => {
+  it('keeps deferred resolver metadata small while retaining title and media hints', () => {
+    const metadata = compactMediaSourceMetadata({
+      type: 'file',
+      title: 'A useful title',
+      content: 'x'.repeat(5_000),
+      file: {
+        filename: 'friends-with-hats.mp4',
+        mimeType: 'video/mp4',
+        opaquePayload: 'x'.repeat(5_000),
+      },
+      unrelatedHistory: Array.from({ length: 500 }, () => ({ body: 'x'.repeat(500) })),
+    });
+
+    expect(metadata).toMatchObject({
+      type: 'file',
+      title: 'A useful title',
+      file: { filename: 'friends-with-hats.mp4', mimeType: 'video/mp4' },
+    });
+    expect(metadata.content).toHaveLength(512);
+    expect('unrelatedHistory' in metadata).toBe(false);
+    expect(JSON.stringify(metadata).length).toBeLessThan(2_000);
+  });
+
   it('creates an opaque signed stream id and restores only its validated reference', () => {
     const streamId = createMeshengerVideoStreamId(grant, secret);
     expect(streamId).not.toContain('http');

@@ -1,5 +1,9 @@
-/** Bump when catalogue display rules change and completed inventory jobs must rescan. */
-export const VIDEO_SPACE_CATALOGUE_VERSION = 6;
+/**
+ * Bump when catalogue rules or persisted checkpoint layout changes and jobs
+ * must rescan. Version 7 drops oversized historical message payloads from
+ * in-flight inventory checkpoints.
+ */
+export const VIDEO_SPACE_CATALOGUE_VERSION = 7;
 
 export function readCatalogueVersion(ledger: Record<string, unknown>): number {
   const value = ledger.catalogueVersion;

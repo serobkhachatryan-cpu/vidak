@@ -82,6 +82,12 @@ const maxRejectedAttempts = 4;
 // route still verifies the current user on every request.
 const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
+// The video library never needs to retain an unbounded copy of chat history.
+// Keeping this small compatibility payload prevents a large eVault from turning
+// an inventory checkpoint into a multi-hundred-megabyte JSON document.
+const maxRetainedLibraryMessages = 128;
+const maxRetainedLibraryConversations = 128;
+const maxDeferredMetadataStringLength = 512;
 
 export type MeshengerVideoKind = 'call-recording' | 'video-message' | 'file';
 export type EVaultVideoAccessScope = VideoSpaceAccessScope;
@@ -232,6 +238,65 @@ interface ResolvedVault {
 function isStaleGenericFileRecord(value: unknown): boolean {
   const item = record(value);
   return item?.sourceId === 'file-record' && isGenericVideoSpaceTitle(optionalString(item.title));
+}
+
+/**
+ * The deferred resolver only needs display and media-classification hints. A
+ * full Message payload can contain arbitrary message bodies and nested data;
+ * storing it in every pending task caused production inventory checkpoints to
+ * grow with the complete chat history. Keep a deliberately small, shallow
+ * allowlist so resolution can enrich a video card without retaining that data.
+ */
+export function compactMediaSourceMetadata(payload: RecordValue): RecordValue {
+  const result: RecordValue = {};
+  for (const key of [
+    'type',
+    'title',
+    'caption',
+    'content',
+    'chatTitle',
+    'createdAt',
+    'durationSec',
+    'shape',
+    'contentType',
+    'mimeType',
+    'filename',
+    'name',
+  ]) {
+    const value = payload[key];
+    if (typeof value === 'string') result[key] = value.slice(0, maxDeferredMetadataStringLength);
+    else if (typeof value === 'number' || typeof value === 'boolean') result[key] = value;
+  }
+  for (const key of ['file', 'attachment', 'media']) {
+    const nested = record(payload[key]);
+    if (!nested) continue;
+    const compact: RecordValue = {};
+    for (const nestedKey of [
+      'filename',
+      'name',
+      'displayName',
+      'contentType',
+      'mimeType',
+      'fileUri',
+      'mediaUri',
+      'uri',
+      'url',
+      'id',
+    ]) {
+      const value = nested[nestedKey];
+      if (typeof value === 'string')
+        compact[nestedKey] = value.slice(0, maxDeferredMetadataStringLength);
+      else if (typeof value === 'number' || typeof value === 'boolean') compact[nestedKey] = value;
+    }
+    if (Object.keys(compact).length) result[key] = compact;
+  }
+  return result;
+}
+
+function appendRetained<T>(target: T[], records: readonly T[], limit: number): void {
+  const available = limit - target.length;
+  if (available <= 0 || records.length === 0) return;
+  target.push(...records.slice(0, available));
 }
 
 /** A canonical record that is explicitly non-video must remove its temporary File-reference card. */
@@ -700,7 +765,11 @@ export class MeshengerVideoLibrary {
           found.push(
             ...this.discoverMessageVideos(envelopes, referenced, eName, eName, completeness),
           );
-          messages.push(...envelopes.map((message) => toMeshengerMessage(eName, message)));
+          appendRetained(
+            messages,
+            envelopes.map((message) => toMeshengerMessage(eName, message)),
+            maxRetainedLibraryMessages,
+          );
         },
       },
       {
@@ -1204,8 +1273,8 @@ export class MeshengerVideoLibrary {
       completeness.hydrate(job.completeness);
       Object.assign(counts, job.sourceCounts);
       if (Array.isArray(job.ledger.found)) found.push(...(job.ledger.found as DiscoveredVideo[]));
-      conversations.push(...job.conversations);
-      messageRecords.push(...job.messages);
+      appendRetained(conversations, job.conversations, maxRetainedLibraryConversations);
+      appendRetained(messageRecords, job.messages, maxRetainedLibraryMessages);
       if (Array.isArray(job.ledger.remaining)) {
         for (const entry of job.ledger.remaining as [string, number][])
           remaining.set(entry[0], entry[1]);
@@ -1544,7 +1613,11 @@ export class MeshengerVideoLibrary {
     }
     const ingestReferences = (envelopes: Envelope[]) => {
       const references = chatGrantsFromEnvelopes(envelopes, eName);
-      conversations.push(...chatEnvelopesToConversations(eName, references, envelopes));
+      appendRetained(
+        conversations,
+        chatEnvelopesToConversations(eName, references, envelopes),
+        maxRetainedLibraryConversations,
+      );
       for (const reference of references) {
         completeness.recordGrant(reference.basis);
         if (reference.type === 'group' || !reference.type) {
@@ -1584,7 +1657,11 @@ export class MeshengerVideoLibrary {
           },
         ),
       );
-      messageRecords.push(...items.map((message) => toMeshengerMessage(sourceEName, message)));
+      appendRetained(
+        messageRecords,
+        items.map((message) => toMeshengerMessage(sourceEName, message)),
+        maxRetainedLibraryMessages,
+      );
       mergeAuthorMap(historicalAuthors, authorsFromMessages(items));
       for (const author of historicalAuthors.get(chatId) ?? []) {
         if (sameEName(author, sourceEName) || sameEName(author, eName)) continue;
@@ -1747,8 +1824,10 @@ export class MeshengerVideoLibrary {
                     },
                   ),
                 );
-                messageRecords.push(
-                  ...page.value.items.map((message) => toMeshengerMessage(eName, message)),
+                appendRetained(
+                  messageRecords,
+                  page.value.items.map((message) => toMeshengerMessage(eName, message)),
+                  maxRetainedLibraryMessages,
                 );
                 mergeAuthorMap(historicalAuthors, authorsFromMessages(page.value.items));
                 for (const [chatId, authors] of historicalAuthors) {
@@ -1808,7 +1887,7 @@ export class MeshengerVideoLibrary {
                 return;
               }
               openedGroups.set(item.groupEName, { vault, member: space.currentMember === true });
-              conversations.push(...space.conversations);
+              appendRetained(conversations, space.conversations, maxRetainedLibraryConversations);
               recordCoveragePage(completeness, groupManifestOntology);
               recordCoveragePage(completeness, chatOntology);
               const chatIds = new Set([...referencedIds, ...(space.openedChatIds ?? [])]);
@@ -1958,8 +2037,10 @@ export class MeshengerVideoLibrary {
                   },
                 ),
               );
-              messageRecords.push(
-                ...page.value.items.map((message) => toMeshengerMessage(item.groupEName, message)),
+              appendRetained(
+                messageRecords,
+                page.value.items.map((message) => toMeshengerMessage(item.groupEName, message)),
+                maxRetainedLibraryMessages,
               );
               mergeAuthorMap(historicalAuthors, authorsFromMessages(page.value.items));
               for (const [chatId, authors] of historicalAuthors) {
@@ -2126,7 +2207,7 @@ export class MeshengerVideoLibrary {
                 return;
               }
               openedDirects.set(item.ownerEName, vault);
-              conversations.push(...space.conversations);
+              appendRetained(conversations, space.conversations, maxRetainedLibraryConversations);
               recordCoveragePage(completeness, chatOntology);
               const chatIds = [...new Set([...(space.openedChatIds ?? []), ...referencedIds])];
               for (const chatId of chatIds) {
@@ -2266,8 +2347,10 @@ export class MeshengerVideoLibrary {
                   },
                 ),
               );
-              messageRecords.push(
-                ...page.value.items.map((message) => toMeshengerMessage(item.ownerEName, message)),
+              appendRetained(
+                messageRecords,
+                page.value.items.map((message) => toMeshengerMessage(item.ownerEName, message)),
+                maxRetainedLibraryMessages,
               );
               mergeAuthorMap(historicalAuthors, authorsFromMessages(page.value.items));
               for (const [chatId, authors] of historicalAuthors) {
@@ -2367,10 +2450,12 @@ export class MeshengerVideoLibrary {
                   },
                 ),
               );
-              messageRecords.push(
-                ...authorRead.value.items.map((message) =>
+              appendRetained(
+                messageRecords,
+                authorRead.value.items.map((message) =>
                   toMeshengerMessage(item.authorEName, message),
                 ),
+                maxRetainedLibraryMessages,
               );
               if (!authorRead.value.complete && authorRead.value.endCursor) {
                 const { notBefore: _notBefore, ...rest } = item;
@@ -3115,6 +3200,7 @@ export class MeshengerVideoLibrary {
   ): DiscoveredVideo[] {
     const accepted: Envelope[] = [];
     for (const message of messages) {
+      const sourceMetadata = compactMediaSourceMetadata(message.parsed);
       completeness?.recordCandidate();
       const decision = classifyAuthorizedMedia({
         payload: message.parsed,
@@ -3130,7 +3216,7 @@ export class MeshengerVideoLibrary {
         continue;
       }
       if (decision.status === 'resolve') {
-        onResolve?.(decision.fileUri, message.id, message.parsed);
+        onResolve?.(decision.fileUri, message.id, sourceMetadata);
         continue;
       }
       const type = optionalString(message.parsed.type)?.toLowerCase();
@@ -3139,7 +3225,7 @@ export class MeshengerVideoLibrary {
         (type === 'file' || type === 'video' || type === 'circle' || !type) &&
         decision.reason === 'missing_w3ds_file_uri'
       ) {
-        onResolve('', message.id, message.parsed);
+        onResolve('', message.id, sourceMetadata);
         continue;
       }
       completeness?.recordUnresolved(decision.reason);

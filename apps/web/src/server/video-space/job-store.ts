@@ -108,6 +108,7 @@ export interface InventoryJobStore {
 }
 
 const drainLockTtlMs = 45_000;
+const maxPersistedLibraryMetadata = 128;
 
 export function inventoryDrainGateKey(jobId: string): string {
   return `inventory-drain:${jobId}`;
@@ -395,9 +396,11 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
     return {
       items,
       conversations: Array.isArray(ledger.conversations)
-        ? (ledger.conversations as MeshengerConversation[])
+        ? (ledger.conversations as MeshengerConversation[]).slice(0, maxPersistedLibraryMetadata)
         : [],
-      messages: Array.isArray(ledger.messages) ? (ledger.messages as MeshengerMessage[]) : [],
+      messages: Array.isArray(ledger.messages)
+        ? (ledger.messages as MeshengerMessage[]).slice(0, maxPersistedLibraryMetadata)
+        : [],
       sourceCounts:
         ledger.sourceCounts && typeof ledger.sourceCounts === 'object'
           ? (ledger.sourceCounts as InventorySourceCounts)
@@ -479,8 +482,8 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
       const completeness = toPostgresJson(job.completeness as unknown as Record<string, unknown>);
       const ledger = toPostgresJson({
         ...job.ledger,
-        conversations: job.conversations,
-        messages: job.messages,
+        conversations: job.conversations.slice(0, maxPersistedLibraryMetadata),
+        messages: job.messages.slice(0, maxPersistedLibraryMetadata),
         sourceCounts: job.sourceCounts,
       });
       await db()
