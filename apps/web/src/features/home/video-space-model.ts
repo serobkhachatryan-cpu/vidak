@@ -1,4 +1,4 @@
-import type { Video } from '@w3ds/types';
+import { isRenderableThumbnailUrl, type Video } from '@w3ds/types';
 import {
   completeInventory,
   coveragePageTotal,
@@ -222,6 +222,28 @@ export function canPlayLibraryVideo(
   video: Pick<VideoSpaceLibraryItem, 'accessScope' | 'streamIds'>,
 ): boolean {
   return video.accessScope === 'personal' && Boolean(video.streamIds?.length);
+}
+
+/**
+ * A same-origin owned-preview path is an asynchronous capture endpoint, not a
+ * completed thumbnail. Preserve that distinction so an ordinary 202/422 does
+ * not render as a broken preview on a draft card.
+ */
+export function ownedVideoPoster(input: Pick<Video, 'id' | 'thumbnailUrl' | 'status'>): {
+  generatedPoster: string;
+  existingPoster?: string;
+  state: 'ready' | 'processing';
+} {
+  const generatedPoster = `/api/videos/owned/${encodeURIComponent(input.id)}/preview`;
+  const existingPoster =
+    input.thumbnailUrl !== generatedPoster && isRenderableThumbnailUrl(input.thumbnailUrl)
+      ? input.thumbnailUrl
+      : undefined;
+  return {
+    generatedPoster,
+    ...(existingPoster ? { existingPoster } : {}),
+    state: input.status === 'processing' || !existingPoster ? 'processing' : 'ready',
+  };
 }
 
 export function ownedVideoSpaceVisibility(video: Pick<Video, 'status' | 'visibility'>): {

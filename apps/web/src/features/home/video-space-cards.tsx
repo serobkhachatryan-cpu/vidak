@@ -1,10 +1,11 @@
 'use client';
 
-import { isRenderableThumbnailUrl, type Video } from '@w3ds/types';
+import type { Video } from '@w3ds/types';
 import { Button, VideoSpacePoster } from '@w3ds/ui';
 import {
   canPlayLibraryVideo,
   libraryCardDetails,
+  ownedVideoPoster,
   ownedVideoSpaceVisibility,
   type VideoSpaceLibraryItem,
   videoSpaceVisibilityLabels,
@@ -28,20 +29,16 @@ export function OwnedVideoCard({
     video.status === 'published' &&
     Boolean(video.publicVideoId) &&
     (video.visibility === 'public' || video.visibility === 'unlisted');
-  const existingPoster = isRenderableThumbnailUrl(video.thumbnailUrl)
-    ? video.thumbnailUrl
-    : undefined;
-  const generatedPoster = `/api/videos/owned/${encodeURIComponent(video.id)}/preview`;
-  const processing = video.status === 'processing';
+  const poster = ownedVideoPoster(video);
 
   return (
     <article className="overflow-hidden rounded-xl border border-border bg-surface-raised">
       <VideoSpacePoster
         title={video.title}
-        {...(existingPoster
-          ? { posterUrl: existingPoster, fallbackPosterUrl: generatedPoster }
-          : { posterUrl: generatedPoster })}
-        state={processing ? 'processing' : existingPoster ? 'ready' : 'processing'}
+        {...(poster.existingPoster
+          ? { posterUrl: poster.existingPoster, fallbackPosterUrl: poster.generatedPoster }
+          : { posterUrl: poster.generatedPoster })}
+        state={poster.state}
         durationSeconds={video.durationSeconds}
         visibilityLabel={visibility.label}
         locked={visibility.id === 'private'}

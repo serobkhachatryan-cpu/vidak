@@ -8,6 +8,7 @@ import {
   libraryProgressCopy,
   libraryUpdatingCopy,
   ownedItemsForTab,
+  ownedVideoPoster,
   previewFallbackCopy,
   shareChangeConfirmation,
   sharedInventoryBanner,
@@ -79,6 +80,27 @@ describe('video space home model', () => {
     expect(previewFallbackCopy('processing').description).toBe('');
     expect(previewFallbackCopy('unavailable').label).toBe('Preview unavailable');
     expect(previewFallbackCopy('unsupported').description).toBe('');
+  });
+
+  it('treats a generated owned preview path as asynchronous rather than ready', () => {
+    expect(
+      ownedVideoPoster({
+        ...ownedPublic,
+        id: 'draft-1',
+        status: 'draft',
+        thumbnailUrl: '/api/videos/owned/draft-1/preview',
+      }),
+    ).toEqual({
+      generatedPoster: '/api/videos/owned/draft-1/preview',
+      state: 'processing',
+    });
+    expect(
+      ownedVideoPoster({ ...ownedPublic, thumbnailUrl: 'https://cdn.example/poster.jpg' }),
+    ).toEqual({
+      generatedPoster: '/api/videos/owned/vidak-1/preview',
+      existingPoster: 'https://cdn.example/poster.jpg',
+      state: 'ready',
+    });
   });
 
   it('keeps counts-only completeness copy and treats My videos / Shared with me as filters', () => {
