@@ -53,6 +53,7 @@ export function documentedMediaFileUris(
   for (const value of asArray(payload.mediaSegments)) add(value);
   for (const value of asArray(payload.attachments)) add(value);
   for (const value of asArray(payload.mediaFiles)) add(value);
+  for (const value of asArray(payload.files)) add(value);
   add(payload.fileId);
   add(payload.mediaUri);
   add(payload.mediaUrl);
@@ -63,6 +64,7 @@ export function documentedMediaFileUris(
   add(payload.media);
   add(payload.mediaFile);
   add(payload.attachment);
+  add(payload.recording);
   add(payload.data);
   add(file?.uri);
   add(file?.fileUri);
@@ -103,14 +105,21 @@ export function classifyAuthorizedMedia(input: {
 }): MediaDecision {
   const type = optionalString(input.payload.type)?.toLowerCase();
   const file = record(input.payload.file);
+  const attachment = record(input.payload.attachment);
+  const recording = record(input.payload.recording);
+  const media = record(input.payload.media);
   const contentType = (
     input.resolvedContentType ??
     optionalString(file?.contentType) ??
     optionalString(file?.mimeType) ??
+    optionalString(attachment?.contentType) ??
+    optionalString(attachment?.mimeType) ??
+    optionalString(media?.contentType) ??
+    optionalString(media?.mimeType) ??
     optionalString(input.payload.contentType) ??
     optionalString(input.payload.mimeType)
   )?.toLowerCase();
-  const filename = attachmentFilename(input.payload);
+  const filename = documentedMediaFilename(input.payload);
 
   if (
     isExplicitlyNonVideoMime(contentType) ||
@@ -124,6 +133,7 @@ export function classifyAuthorizedMedia(input: {
   const knownVideo =
     type === 'video' ||
     type === 'circle' ||
+    recording?.mediaIsVideo === true ||
     contentType?.startsWith('video/') === true ||
     (filename ? videoFilenamePattern.test(filename) : false);
 
@@ -179,15 +189,36 @@ export function classifyResolvedEnvelope(input: {
   });
 }
 
-function documentedFileUri(value: unknown, vaultOwnerEName?: string): string | undefined {
+function documentedFileUri(
+  value: unknown,
+  vaultOwnerEName?: string,
+  seen = new Set<object>(),
+): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const fileUri = documentedFileUri(item, vaultOwnerEName, seen);
+      if (fileUri) return fileUri;
+    }
+    return undefined;
+  }
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     const nested = value as Record<string, unknown>;
+    if (seen.has(nested)) return undefined;
+    seen.add(nested);
     return (
-      documentedFileUri(nested.uri, vaultOwnerEName) ??
-      documentedFileUri(nested.fileUri, vaultOwnerEName) ??
-      documentedFileUri(nested.url, vaultOwnerEName) ??
-      documentedFileUri(nested.id, vaultOwnerEName) ??
-      documentedFileUri(nested.data, vaultOwnerEName)
+      documentedFileUri(nested.fileUri, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.mediaUri, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.mediaUrl, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.fileUrl, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.uri, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.url, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.fileId, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.id, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.mediaFile, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.file, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.attachment, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.media, vaultOwnerEName, seen) ??
+      documentedFileUri(nested.data, vaultOwnerEName, seen)
     );
   }
   const text = optionalString(value);
@@ -213,11 +244,20 @@ function coerceEnvelopeValue(value: unknown, valueType: string | undefined): unk
   return value;
 }
 
-function attachmentFilename(message: Record<string, unknown>): string | undefined {
+/** A display filename carried by a documented file, attachment, or media object. */
+export function documentedMediaFilename(message: Record<string, unknown>): string | undefined {
   const file = record(message.file);
+  const attachment = record(message.attachment);
+  const media = record(message.media);
   return (
     optionalString(file?.filename) ??
     optionalString(file?.name) ??
+    optionalString(file?.displayName) ??
+    optionalString(attachment?.filename) ??
+    optionalString(attachment?.name) ??
+    optionalString(attachment?.displayName) ??
+    optionalString(media?.filename) ??
+    optionalString(media?.name) ??
     optionalString(message.filename) ??
     optionalString(message.name)
   );

@@ -224,6 +224,31 @@ describe('video space adapters', () => {
     ]);
   });
 
+  it('keeps an attachment filename when the documented file reference is nested', () => {
+    expect(
+      discoverVideoMessageVideos(
+        [
+          {
+            id: 'nested-file-message',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'file',
+              attachment: { fileId: 'nested-clip', name: 'Friends with hats.mp4' },
+            },
+          },
+        ],
+        new Set(),
+        owner,
+        owner,
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        title: 'Friends With Hats',
+        fileUris: ['w3ds://file?id=@owner.w3id/nested-clip'],
+      }),
+    ]);
+  });
+
   it('does not inventory zip, office, or other non-video file attachments as video', () => {
     expect(
       discoverVideoMessageVideos(

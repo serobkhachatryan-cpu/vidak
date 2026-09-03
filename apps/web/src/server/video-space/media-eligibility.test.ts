@@ -42,6 +42,42 @@ describe('documented media eligibility', () => {
     ).toEqual({ status: 'resolve', fileUri });
   });
 
+  it('resolves a nested attachment fileId on the authorized vault', () => {
+    expect(
+      documentedMediaFileUris(
+        { type: 'file', attachment: { fileId: 'nested-clip', name: 'Friends with hats.mp4' } },
+        vault,
+      ),
+    ).toEqual(['w3ds://file?id=@owner.w3id/nested-clip']);
+    expect(
+      classifyAuthorizedMedia({
+        payload: {
+          type: 'file',
+          attachment: { fileId: 'nested-clip', name: 'Friends with hats.mp4' },
+        },
+        vaultOwnerEName: vault,
+      }),
+    ).toEqual({ status: 'accept', fileUri: 'w3ds://file?id=@owner.w3id/nested-clip' });
+    expect(
+      classifyAuthorizedMedia({
+        payload: { type: 'file', attachment: { fileId: 'nested-clip' } },
+        vaultOwnerEName: vault,
+      }),
+    ).toEqual({ status: 'resolve', fileUri: 'w3ds://file?id=@owner.w3id/nested-clip' });
+  });
+
+  it('resolves nested media references in recording messages marked as video', () => {
+    expect(
+      classifyAuthorizedMedia({
+        payload: {
+          type: 'recording',
+          recording: { mediaIsVideo: true, mediaUri: 'nested-recording' },
+        },
+        vaultOwnerEName: vault,
+      }),
+    ).toEqual({ status: 'accept', fileUri: 'w3ds://file?id=@owner.w3id/nested-recording' });
+  });
+
   it('resolves a documented mediaUrl stored on envelopes rather than parsed', () => {
     const payload = mergeDocumentedEnvelopeFields({ type: 'file' }, [
       { fieldKey: 'mediaUrl', value: fileUri, valueType: 'string' },

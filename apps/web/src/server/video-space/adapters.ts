@@ -3,6 +3,7 @@ import { documentedOntologyId } from './documented-sources';
 import {
   classifyAuthorizedMedia,
   constructW3dsFileUri,
+  documentedMediaFilename,
   documentedMediaFileUris,
 } from './media-eligibility';
 import { isGenericVideoSpaceTitle, resolveVideoSpaceTitle } from './titles';
@@ -365,7 +366,6 @@ export function discoverVideoMessageVideos(
     if (decision.status !== 'accept') continue;
     const fileUris = [decision.fileUri];
     for (const fileUri of fileUris) referenced.add(fileUri);
-    const file = record(message.parsed.file);
     const shape = optionalString(message.parsed.shape) ?? optionalString(message.parsed.type);
     const accessScope = scopeForRecord({
       viewerEName,
@@ -380,10 +380,7 @@ export function discoverVideoMessageVideos(
       title: resolveVideoSpaceTitle({
         title: optionalString(message.parsed.title),
         caption: optionalString(message.parsed.caption),
-        filename:
-          optionalString(file?.filename) ??
-          optionalString(file?.name) ??
-          optionalString(file?.displayName),
+        filename: documentedMediaFilename(message.parsed),
         messageText: optionalString(message.parsed.content),
         conversationTitle: optionalString(message.parsed.chatTitle),
         ...(optionalString(message.parsed.createdAt)
