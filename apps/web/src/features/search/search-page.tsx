@@ -117,6 +117,13 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
     submit(undefined, nextQuery);
   };
 
+  const clearSearch = () => {
+    setInputValue('');
+    setQuery('');
+    window.history.replaceState(null, '', '/search');
+    inputRef.current?.focus();
+  };
+
   const videos = videoSearch.data?.pages.flatMap((page) => page.items) ?? [];
   const channels = channelSearch.data?.pages.flatMap((page) => page.items) ?? [];
   const resultType: SearchResultType = type === 'channels' ? 'channels' : 'videos';
@@ -127,7 +134,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
   return (
     <ApplicationShell currentHref="/search" searchValue={query}>
       <Page title="Search" description="Find videos and creator channels.">
-        <form onSubmit={submit} className="relative max-w-2xl">
+        <form onSubmit={submit} className="max-w-2xl">
           <SearchInput
             ref={inputRef}
             value={inputValue}
@@ -135,12 +142,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
               setInputValue(event.target.value);
               setActiveSuggestion(-1);
             }}
-            onClear={() => {
-              setInputValue('');
-              setQuery('');
-              window.history.replaceState(null, '', '/search');
-              inputRef.current?.focus();
-            }}
+            {...(inputValue ? { onClear: clearSearch } : {})}
             onKeyDown={(event) => {
               if (!suggestions.length) return;
               if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -169,7 +171,7 @@ export function SearchPage({ initialQuery = '' }: { initialQuery?: string }) {
               id="search-suggestions"
               role="listbox"
               aria-label="Search suggestions"
-              className="absolute z-10 mt-2 w-full overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
+              className="mt-2 w-full overflow-hidden rounded-lg border border-border bg-surface p-1 shadow-lg"
             >
               {suggestions.map((suggestion, index) => (
                 <div

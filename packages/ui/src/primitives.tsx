@@ -200,7 +200,11 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
       <Input
         ref={ref}
         type="search"
-        className={cx('pl-9', (onClear || shortcut) && 'pr-10', className)}
+        className={cx(
+          'appearance-none pl-9 [&::-webkit-search-cancel-button]:hidden',
+          (onClear || shortcut) && 'pr-10',
+          className,
+        )}
         {...props}
       />
       {onClear && (

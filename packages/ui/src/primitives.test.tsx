@@ -10,6 +10,7 @@ import {
   LoadingButton,
   Progress,
   Radio,
+  SearchInput,
   Select,
   Skeleton,
   Spinner,
@@ -38,6 +39,15 @@ describe('UI primitives', () => {
     const markup = renderToStaticMarkup(<Input invalid aria-label="Video title" />);
     expect(markup).toContain('aria-invalid="true"');
     expect(markup).toContain('focus-visible:ring-primary');
+  });
+
+  it('uses its accessible clear action instead of the browser-native search control', () => {
+    const markup = renderToStaticMarkup(
+      <SearchInput aria-label="Search public videos" onClear={() => undefined} />,
+    );
+    expect(markup).toContain('aria-label="Clear search"');
+    expect(markup).toContain('appearance-none');
+    expect(markup).toContain('webkit-search-cancel-button');
   });
 
   it('associates checkbox and radio labels with their controls', () => {
