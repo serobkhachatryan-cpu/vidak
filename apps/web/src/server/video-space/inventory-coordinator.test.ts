@@ -461,7 +461,10 @@ describe('inventory coordinator', () => {
     const store = createMemoryInventoryJobStore();
     setInventoryJobStoreForTests(store);
     const scanLibrary = vi.fn(
-      async (_user: unknown, options: { drain?: boolean; onSnapshot: SnapshotHandler }) => {
+      async (
+        _user: unknown,
+        options: { drain?: boolean; maxWaves?: number; onSnapshot: SnapshotHandler },
+      ) => {
         if (options.drain === true) {
           options.onSnapshot(library([clip], refreshing), 'batch', {
             personalPages: 2,
@@ -503,6 +506,13 @@ describe('inventory coordinator', () => {
     expect(
       scanLibrary.mock.calls.some((call) => (call[1] as { drain?: boolean }).drain === true),
     ).toBe(true);
+    expect(
+      scanLibrary.mock.calls.some(
+        (call) =>
+          (call[1] as { drain?: boolean; maxWaves?: number }).drain === true &&
+          (call[1] as { maxWaves?: number }).maxWaves === 2,
+      ),
+    ).toBe(true);
   });
 
   it('reports a pump outage once without including private failure details', async () => {
@@ -515,7 +525,9 @@ describe('inventory coordinator', () => {
     const logs: string[] = [];
     const coordinator = createInventoryCoordinator({
       createScanner: () => ({
-        scanLibrary: vi.fn().mockRejectedValue(new Error('private source details must not be logged')),
+        scanLibrary: vi
+          .fn()
+          .mockRejectedValue(new Error('private source details must not be logged')),
         probeSharedSpaceAccess: vi.fn(),
       }),
       log: (line) => logs.push(line),

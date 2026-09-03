@@ -108,6 +108,36 @@ describe('durable inventory checkpoints', () => {
     expect(log).toContain('@vault-b.w3id:group-files');
   });
 
+  it('yields a durable remainder after the configured number of active waves', async () => {
+    const queue: Work[] = [
+      { type: 'messages', vaultKey: '@vault-a.w3id', after: 'first', attempts: 0, id: 'a-1' },
+      { type: 'messages', vaultKey: '@vault-a.w3id', after: 'second', attempts: 0, id: 'a-2' },
+      { type: 'group-open', vaultKey: '@vault-b.w3id', after: null, attempts: 0, id: 'b-1' },
+    ];
+    const seen: string[] = [];
+    let persisted = 0;
+
+    await drainFairVaultQueue(
+      queue,
+      async (item) => {
+        seen.push(item.id);
+      },
+      {
+        vaultKey: (item) => item.vaultKey,
+        priority: () => 1,
+        maxVaultsPerWave: 1,
+        maxWaves: 1,
+        persist: () => {
+          persisted += 1;
+        },
+      },
+    );
+
+    expect(seen).toEqual(['a-1']);
+    expect(queue.map((item) => item.id).sort()).toEqual(['a-2', 'b-1']);
+    expect(persisted).toBe(1);
+  });
+
   it('keeps Retry-After on the same cursor and lets other vaults continue', async () => {
     let now = 1_000;
     const seen: string[] = [];

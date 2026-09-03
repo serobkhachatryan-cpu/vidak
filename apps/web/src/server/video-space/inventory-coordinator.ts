@@ -25,6 +25,9 @@ import { mapPool } from './map-pool';
 
 const cacheTtlMs = 45_000;
 const revalidateConcurrency = 4;
+// Keep a durable background pass short. The next pump resumes its exact queue,
+// allowing interactive playback and deployments to preempt deep history scans.
+const backgroundInventoryMaxWaves = 2;
 
 export interface InventorySnapshot {
   items: MeshengerVideo[];
@@ -43,6 +46,7 @@ export interface InventoryScanner {
       scope: InventoryScope;
       refresh?: boolean;
       drain?: boolean;
+      maxWaves?: number;
       onSnapshot: (
         library: MeshengerLibrary,
         phase: InventoryScanPhase,
@@ -284,6 +288,7 @@ export function createInventoryCoordinator(options?: {
           {
             scope: 'all',
             drain: true,
+            maxWaves: backgroundInventoryMaxWaves,
             onSnapshot: (library, phase, counts) => {
               entry.snapshot = mergeLibraries(entry.snapshot, library);
               entry.sourceCounts = counts;

@@ -77,6 +77,8 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
     sleep?: (ms: number) => Promise<void>;
     maxWaitMs?: number;
     maxVaultsPerWave?: number;
+    /** Stop after this many active waves and leave the remainder for the next durable drain. */
+    maxWaves?: number;
     vaultNotBefore?: (vaultKey: string, now: number) => number | Promise<number>;
     persist?: (queue: T[]) => void | Promise<void>;
     workKey?: (item: T) => string;
@@ -87,6 +89,8 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxWaitMs = options.maxWaitMs ?? 5_000;
   const maxVaults = options.maxVaultsPerWave ?? 8;
+  const maxWaves = options.maxWaves ?? Number.POSITIVE_INFINITY;
+  let waves = 0;
   const compact = () => {
     if (options.workKey) dedupeWork(queue, options.workKey);
   };
@@ -140,5 +144,7 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
     await mapPool(chosen, chosen.length || 1, process);
     compact();
     await options.persist?.(queue);
+    waves += 1;
+    if (waves >= maxWaves) return;
   }
 }

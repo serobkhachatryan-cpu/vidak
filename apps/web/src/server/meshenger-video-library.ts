@@ -477,6 +477,8 @@ export class MeshengerVideoLibrary {
       scope: InventoryScope;
       refresh?: boolean;
       drain?: boolean;
+      /** Optional checkpoint budget for a resumable background drain. */
+      maxWaves?: number;
       onSnapshot: (
         library: MeshengerLibrary,
         phase: InventoryScanPhase,
@@ -502,10 +504,26 @@ export class MeshengerVideoLibrary {
     if (options.scope === 'owned') {
       return this.scanOwnedProgressive(eName, ownVault, counts, options.onSnapshot, { drain });
     }
+    const resumableDrain = {
+      drain,
+      ...(options.maxWaves !== undefined ? { maxWaves: options.maxWaves } : {}),
+    };
     if (options.scope === 'shared') {
-      return this.scanSharedProgressive(eName, ownVault, counts, options.onSnapshot, { drain });
+      return this.scanSharedProgressive(
+        eName,
+        ownVault,
+        counts,
+        options.onSnapshot,
+        resumableDrain,
+      );
     }
-    return this.scanCompleteProgressive(eName, ownVault, counts, options.onSnapshot, { drain });
+    return this.scanCompleteProgressive(
+      eName,
+      ownVault,
+      counts,
+      options.onSnapshot,
+      resumableDrain,
+    );
   }
 
   /**
@@ -750,7 +768,7 @@ export class MeshengerVideoLibrary {
       phase: InventoryScanPhase,
       counts: InventorySourceCounts,
     ) => void,
-    options?: { drain?: boolean },
+    options?: { drain?: boolean; maxWaves?: number },
   ): Promise<MeshengerLibrary> {
     const accumulators: ProgressiveAccumulators = {
       completeness: createInventoryCompletenessTracker(),
@@ -764,6 +782,7 @@ export class MeshengerVideoLibrary {
       emitDone: true,
       includeOwned: true,
       drain: options?.drain !== false,
+      ...(options?.maxWaves !== undefined ? { maxWaves: options.maxWaves } : {}),
     });
   }
 
@@ -931,6 +950,7 @@ export class MeshengerVideoLibrary {
       emitDone?: boolean;
       includeOwned?: boolean;
       drain?: boolean;
+      maxWaves?: number;
     },
   ): Promise<MeshengerLibrary> {
     const completeness =
@@ -2529,6 +2549,7 @@ export class MeshengerVideoLibrary {
             priority: (item) => inventoryWorkPriority(item.type),
             now: this.now,
             maxVaultsPerWave: sharedSpaceConcurrency,
+            ...(options?.maxWaves !== undefined ? { maxWaves: options.maxWaves } : {}),
             vaultNotBefore: (vault, timestamp) => this.jobStore.vaultNotBefore(vault, timestamp),
             workKey,
             persist: async () => {
@@ -2541,11 +2562,16 @@ export class MeshengerVideoLibrary {
             },
           },
         );
+        if (queue.length > 0) {
+          // The durable queue still has ready work. Yield it to the next pump
+          // instead of holding the drain lock through an unbounded history.
+          await persistCheckpoint();
+          return snapshot('batch');
+        }
         if (remaining.size === 0) {
           keepDraining = false;
           break;
         }
-        if (queue.length > 0) continue;
         reseedUnsettledWork();
         dedupeWork(queue, workKey);
         completeness.reconcileRetrying(queue.filter((item) => item.attempts > 0).length);
