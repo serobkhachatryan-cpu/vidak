@@ -18,6 +18,7 @@ import {
   shareChangeConfirmation,
   type VideoSpaceLibraryItem,
   type VideoSpaceTab,
+  videoSpaceGuideCopy,
   videoSpaceEmptyCopy,
   videoSpaceTabs,
 } from './video-space-model';
@@ -145,6 +146,8 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         }
       >
         <div className="space-y-8">
+          <VideoSpaceGuide />
+
           <fieldset className="flex flex-wrap gap-2">
             <legend className="sr-only">Video space sections</legend>
             {videoSpaceTabs.map((option) => (
@@ -216,6 +219,36 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         </div>
       </Page>
     </ApplicationShell>
+  );
+}
+
+function VideoSpaceGuide() {
+  return (
+    <aside
+      className="rounded-xl border border-primary/20 bg-primary/5 p-4"
+      aria-label="Video space guide"
+    >
+      <details open>
+        <summary className="cursor-pointer font-medium text-foreground">
+          {videoSpaceGuideCopy.title}
+          <span className="ml-2 text-sm font-normal text-muted-foreground">
+            — {videoSpaceGuideCopy.summary}
+          </span>
+        </summary>
+        <div className="mt-3 grid gap-3 text-sm text-muted-foreground md:grid-cols-2">
+          {videoSpaceGuideCopy.points.map((point) => (
+            <p key={point}>{point}</p>
+          ))}
+        </div>
+        <p className="mt-3 text-sm text-muted-foreground">
+          Need help?{' '}
+          <a href="/support" className="font-medium text-foreground underline underline-offset-4">
+            Open support
+          </a>
+          .
+        </p>
+      </details>
+    </aside>
   );
 }
 

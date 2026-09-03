@@ -14,6 +14,7 @@ import {
   sharedInventoryBanner,
   type VideoSpaceLibraryItem,
   videoSpaceEmptyCopy,
+  videoSpaceGuideCopy,
   videoSpaceTabs,
 } from './video-space-model';
 
@@ -80,6 +81,16 @@ describe('video space home model', () => {
     expect(previewFallbackCopy('processing').description).toBe('');
     expect(previewFallbackCopy('unavailable').label).toBe('Preview unavailable');
     expect(previewFallbackCopy('unsupported').description).toBe('');
+  });
+
+  it('explains private ownership and refresh without platform-specific jargon', () => {
+    const guide = [videoSpaceGuideCopy.title, videoSpaceGuideCopy.summary, ...videoSpaceGuideCopy.points]
+      .join(' ')
+      .toLowerCase();
+    expect(guide).toContain('private');
+    expect(guide).toContain('authorized');
+    expect(guide).toContain('does not upload, copy, or change');
+    expect(guide).not.toContain('messenger');
   });
 
   it('treats a generated owned preview path as asynchronous rather than ready', () => {
