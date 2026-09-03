@@ -4,7 +4,10 @@
  */
 
 export async function register(): Promise<void> {
-  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  // In a standalone production server Next invokes instrumentation without
+  // setting NEXT_RUNTIME. Treat only an explicit Edge runtime as unsupported;
+  // otherwise the inventory pump would never start after deployment.
+  if (process.env.NEXT_RUNTIME === 'edge') return;
   // `next build` may load instrumentation; validate when the Node server boots.
   if (process.env.NEXT_PHASE === 'phase-production-build') return;
 
