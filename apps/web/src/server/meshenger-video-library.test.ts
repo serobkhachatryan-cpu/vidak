@@ -2953,7 +2953,7 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('keeps discovered cards when a completed catalogue is refreshed', async () => {
+  it('restarts a stale running catalogue without dropping discovered cards', async () => {
     const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
     const job = await store.createJob({
       ownerEName: '@person.w3id',
@@ -2961,11 +2961,12 @@ describe('Meshenger video library', () => {
     });
     await store.saveJob({
       ...job,
-      status: 'complete',
-      completeness: { ...job.completeness, complete: true, retryNeeded: false },
+      status: 'running',
+      completeness: { ...job.completeness, complete: false, retryNeeded: true },
       ledger: {
-        drainFinished: true,
+        drainFinished: false,
         catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION - 1,
+        queue: [{ type: 'messages', after: 'stale-cursor', attempts: 0 }],
         found: [
           {
             key: 'w3ds-file:@person.w3id/kept-clip',
@@ -2989,7 +2990,7 @@ describe('Meshenger video library', () => {
 
     const result = await library.scanLibrary(
       { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
-      { scope: 'all', refresh: true, drain: false, onSnapshot: () => undefined },
+      { scope: 'all', drain: false, onSnapshot: () => undefined },
     );
     const saved = await store.getByOwner('@person.w3id');
 
@@ -2997,6 +2998,10 @@ describe('Meshenger video library', () => {
     expect(saved?.id).toBe(job.id);
     expect(saved?.status).toBe('running');
     expect(saved?.ledger.drainFinished).toBe(false);
+    expect(saved?.ledger.queue).toEqual(
+      expect.arrayContaining([expect.objectContaining({ type: 'messages', after: null })]),
+    );
+    expect(JSON.stringify(saved?.ledger.queue)).not.toContain('stale-cursor');
   });
 
   it('resolves a shared File reference to its canonical title and preview source', async () => {

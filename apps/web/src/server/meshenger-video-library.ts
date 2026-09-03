@@ -14,6 +14,7 @@ import {
 import { parseRetryAfter, retryDelayMs, retryWithExponentialBackoff } from './video-space/backoff';
 import { assembleVideoSpaceCatalogue } from './video-space/catalogue';
 import {
+  hasCatalogueVersion,
   isStaleCatalogueVersion,
   VIDEO_SPACE_CATALOGUE_VERSION,
 } from './video-space/catalogue-version';
@@ -1154,7 +1155,11 @@ export class MeshengerVideoLibrary {
         ownerEVaultUri: ownVault.eVaultUri,
       }));
     let drainFinished = job.ledger.drainFinished === true;
-    if (drainFinished && isStaleCatalogueVersion(job.ledger)) {
+    // A deployment can land while a long-running inventory is partway through
+    // its pages. Resume cursors from the old parser would preserve every
+    // attachment it already skipped, so restart stale running jobs as well as
+    // stale completed jobs. `restartCatalogueJob` retains visible cards.
+    if (isStaleCatalogueVersion(job.ledger) && (drainFinished || hasCatalogueVersion(job.ledger))) {
       job = await this.restartCatalogueJob(job, ownVault.eVaultUri);
       drainFinished = false;
     }
