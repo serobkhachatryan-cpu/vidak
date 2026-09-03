@@ -1,5 +1,5 @@
 /** Bump when catalogue display rules change and completed inventory jobs must rescan. */
-export const VIDEO_SPACE_CATALOGUE_VERSION = 5;
+export const VIDEO_SPACE_CATALOGUE_VERSION = 6;
 
 export function readCatalogueVersion(ledger: Record<string, unknown>): number {
   const value = ledger.catalogueVersion;
