@@ -600,22 +600,62 @@ export class MeshengerVideoLibrary {
     // normally contention with catalogue work, not evidence that the File
     // disappeared, so use the bounded server-side retry policy here.
     const vault = await this.resolveEVault(file.ownerEName, 'backoff');
+    const dereferenced = await this.tryDereferenceFileMediaUrl(vault, file.metaEnvelopeId);
+    const mediaUrl =
+      dereferenced ?? (await this.resolveMediaUrlFromEnvelope(vault, file.metaEnvelopeId));
+    cacheMediaUrl(cacheKey, mediaUrl, grant.expiresAt);
+    return mediaUrl;
+  }
+
+  /**
+   * Dereference the canonical W3DS File URI first.  eVault returns a fresh
+   * media redirect here, avoiding a GraphQL metadata read on the playback
+   * path.  Older deployments that do not expose this endpoint retain the
+   * existing metadata resolver as a safe fallback.
+   */
+  private async tryDereferenceFileMediaUrl(
+    vault: ResolvedVault,
+    metaEnvelopeId: string,
+  ): Promise<string | undefined> {
+    let response: Response;
+    try {
+      response = await fetch(
+        new URL(`/files/${encodeURIComponent(metaEnvelopeId)}`, vault.eVaultUri),
+        {
+          method: 'GET',
+          headers: { 'X-ENAME': vault.ownerEName },
+          cache: 'no-store',
+          redirect: 'manual',
+          signal: AbortSignal.timeout(requestTimeoutMs),
+        },
+      );
+    } catch {
+      return undefined;
+    }
+    if (response.status !== 302) return undefined;
+    const location = response.headers.get('location');
+    return location ? safeMediaUrl(location) : undefined;
+  }
+
+  private async resolveMediaUrlFromEnvelope(
+    vault: ResolvedVault,
+    metaEnvelopeId: string,
+  ): Promise<string> {
     const envelope = await this.readEnvelope(
       vault.ownerEName,
       vault.eVaultUri,
-      file.metaEnvelopeId,
+      metaEnvelopeId,
       'backoff',
     );
     const url = optionalString(envelope.parsed.publicUrl) ?? optionalString(envelope.parsed.url);
-    if (!url)
+    if (!url) {
       throw new MeshengerVideoLibraryError(
         'The video file is unavailable.',
         'remote_rejected',
         404,
       );
-    const mediaUrl = safeMediaUrl(url);
-    cacheMediaUrl(cacheKey, mediaUrl, grant.expiresAt);
-    return mediaUrl;
+    }
+    return safeMediaUrl(url);
   }
 
   /**

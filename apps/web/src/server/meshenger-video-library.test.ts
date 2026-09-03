@@ -138,10 +138,43 @@ describe('Meshenger video library', () => {
       await expect(
         configuredLibrary().resolveMediaUrl(
           { eName: '@person.w3id' },
-          createMeshengerVideoStreamId({ ...grant, fileUri: 'w3ds://file?id=@person.w3id/retry-file' }, secret),
+          createMeshengerVideoStreamId(
+            { ...grant, fileUri: 'w3ds://file?id=@person.w3id/retry-file' },
+            secret,
+          ),
         ),
       ).resolves.toBe('https://media.example/personal-video.mp4');
       expect(fileReadAttempts).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses the canonical File redirect before querying video metadata', async () => {
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+      }
+      if (url.pathname === '/files/direct-file') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/direct-file.mp4' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl(
+          { eName: '@person.w3id' },
+          createMeshengerVideoStreamId(
+            { ...grant, fileUri: 'w3ds://file?id=@person.w3id/direct-file' },
+            secret,
+          ),
+        ),
+      ).resolves.toBe('https://media.example/direct-file.mp4');
+      expect(fetcher.mock.calls.some(([url]) => (url as URL).pathname === '/graphql')).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -661,6 +694,7 @@ describe('Meshenger video library', () => {
     const fetcher = vi.fn(async (url: URL) => {
       if (url.pathname === '/resolve')
         return json({ ename: '@vault.w3id', uri: 'https://vault.example' });
+      if (url.pathname.startsWith('/files/')) return new Response(null, { status: 404 });
       if (url.pathname === '/platforms/certification')
         return json({ token: 'registry-platform-token' });
       return json({
@@ -684,7 +718,7 @@ describe('Meshenger video library', () => {
       await expect(library.resolveMediaUrl({ eName: cachedGrant.eName }, streamId)).resolves.toBe(
         'https://media.example/video.mp4',
       );
-      expect(fetcher).toHaveBeenCalledTimes(3);
+      expect(fetcher).toHaveBeenCalledTimes(4);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -701,6 +735,7 @@ describe('Meshenger video library', () => {
     const fetcher = vi.fn(async (url: URL) => {
       if (url.pathname === '/resolve')
         return json({ ename: '@vault.w3id', uri: 'https://vault.example' });
+      if (url.pathname.startsWith('/files/')) return new Response(null, { status: 404 });
       if (url.pathname === '/platforms/certification')
         return json({ token: 'registry-platform-token' });
       readCount += 1;
