@@ -61,6 +61,7 @@ export const videoSpaceGuideCopy = {
     'Watching never makes a video public or changes its sharing rules. A card marked Private stays private.',
     'Vidak continues synchronizing your library automatically. Refresh checks for updates right away; it does not upload, copy, or change your original videos.',
     'Upload starts a new Vidak draft. You choose whether to publish it when it is ready.',
+    'Card actions explain your relationship to a video: Resume draft continues a Vidak upload, Watch video opens a video you can play, and Make private is available only on a Vidak video you published. Shared videos remain unavailable until Vidak verifies the owner’s source permission.',
   ],
 } as const;
 

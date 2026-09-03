@@ -84,12 +84,20 @@ describe('video space home model', () => {
   });
 
   it('explains private ownership and refresh without platform-specific jargon', () => {
-    const guide = [videoSpaceGuideCopy.title, videoSpaceGuideCopy.summary, ...videoSpaceGuideCopy.points]
+    const guide = [
+      videoSpaceGuideCopy.title,
+      videoSpaceGuideCopy.summary,
+      ...videoSpaceGuideCopy.points,
+    ]
       .join(' ')
       .toLowerCase();
     expect(guide).toContain('private');
     expect(guide).toContain('authorized');
     expect(guide).toContain('does not upload, copy, or change');
+    expect(guide).toContain('card actions explain your relationship');
+    expect(guide).toContain('resume draft');
+    expect(guide).toContain('watch video');
+    expect(guide).toContain('make private');
     expect(guide).not.toContain('messenger');
   });
 
