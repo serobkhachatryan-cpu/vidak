@@ -1,6 +1,7 @@
 /**
- * Exponential backoff for background 429 retries. Never used to stretch the
- * interactive HTTP request — fail-fast there, retry here.
+ * Exponential backoff for throttled eVault reads. Background work uses this
+ * routinely; an interactive source read may also opt in so a transient 429
+ * does not turn a valid personal video into a failed playback attempt.
  *
  * When the origin sends Retry-After, wait at least that long before the next
  * attempt so retries do not immediately re-trigger the limiter.

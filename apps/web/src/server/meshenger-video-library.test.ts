@@ -110,6 +110,42 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('retries a rate-limited personal File read before failing playback', async () => {
+    let fileReadAttempts = 0;
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.pathname === '/graphql') {
+        fileReadAttempts += 1;
+        if (fileReadAttempts === 1) return rateLimited('0');
+        return json({
+          data: {
+            metaEnvelope: {
+              id: 'retry-file',
+              ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+              parsed: { publicUrl: 'https://media.example/personal-video.mp4' },
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl(
+          { eName: '@person.w3id' },
+          createMeshengerVideoStreamId({ ...grant, fileUri: 'w3ds://file?id=@person.w3id/retry-file' }, secret),
+        ),
+      ).resolves.toBe('https://media.example/personal-video.mp4');
+      expect(fileReadAttempts).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('fails closed when the server-side W3DS registry configuration is missing', () => {
     expect(() =>
       createMeshengerVideoLibrary({

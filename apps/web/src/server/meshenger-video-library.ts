@@ -588,11 +588,15 @@ export class MeshengerVideoLibrary {
     const cached = cachedMediaUrls.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.url;
     if (cached) cachedMediaUrls.delete(cacheKey);
-    const vault = await this.resolveEVault(file.ownerEName);
+    // A user has explicitly requested this source.  A single eVault 429 is
+    // normally contention with catalogue work, not evidence that the File
+    // disappeared, so use the bounded server-side retry policy here.
+    const vault = await this.resolveEVault(file.ownerEName, 'backoff');
     const envelope = await this.readEnvelope(
       vault.ownerEName,
       vault.eVaultUri,
       file.metaEnvelopeId,
+      'backoff',
     );
     const url = optionalString(envelope.parsed.publicUrl) ?? optionalString(envelope.parsed.url);
     if (!url)
@@ -3544,8 +3548,13 @@ export class MeshengerVideoLibrary {
     return page;
   }
 
-  private async readEnvelope(owner: string, eVaultUri: string, id: string): Promise<Envelope> {
-    const data = await this.graphql(owner, eVaultUri, readQuery, { id });
+  private async readEnvelope(
+    owner: string,
+    eVaultUri: string,
+    id: string,
+    rateLimit: RateLimitMode = 'fail-fast',
+  ): Promise<Envelope> {
+    const data = await this.graphql(owner, eVaultUri, readQuery, { id }, rateLimit);
     const node = record(data.metaEnvelope);
     const envelopeId = optionalString(node?.id);
     const ontology = optionalString(node?.ontology);
@@ -3562,11 +3571,14 @@ export class MeshengerVideoLibrary {
     return { id: envelopeId, ontology, parsed };
   }
 
-  private async resolveEVault(eName: string): Promise<ResolvedVault> {
+  private async resolveEVault(
+    eName: string,
+    rateLimit: RateLimitMode = 'fail-fast',
+  ): Promise<ResolvedVault> {
     const requested = normalizeEName(eName);
     const url = new URL('/resolve', this.config.registryBaseUrl);
     url.searchParams.set('w3id', requested);
-    const resolved = record(await this.requestJson(url, { method: 'GET' }));
+    const resolved = record(await this.requestJson(url, { method: 'GET' }, rateLimit));
     const uri = optionalString(resolved?.uri);
     if (!uri) {
       throw new MeshengerVideoLibraryError(
@@ -3594,7 +3606,7 @@ export class MeshengerVideoLibrary {
     variables: Record<string, unknown>,
     rateLimit: RateLimitMode = 'fail-fast',
   ): Promise<RecordValue> {
-    const platformToken = await this.getPlatformToken();
+    const platformToken = await this.getPlatformToken(rateLimit);
     const body = record(
       await this.requestJson(
         new URL('/graphql', eVaultUri),
@@ -3623,9 +3635,9 @@ export class MeshengerVideoLibrary {
   }
 
   /** Registry-issued token used by the documented W3DS Web3 Adapter flow. */
-  private async getPlatformToken(): Promise<string> {
+  private async getPlatformToken(rateLimit: RateLimitMode = 'fail-fast'): Promise<string> {
     if (!this.platformToken) {
-      this.platformToken = this.requestPlatformToken();
+      this.platformToken = this.requestPlatformToken(rateLimit);
     }
     try {
       return await this.platformToken;
@@ -3635,13 +3647,17 @@ export class MeshengerVideoLibrary {
     }
   }
 
-  private async requestPlatformToken(): Promise<string> {
+  private async requestPlatformToken(rateLimit: RateLimitMode): Promise<string> {
     const payload = record(
-      await this.requestJson(new URL('/platforms/certification', this.config.registryBaseUrl), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ platform: this.config.platformName }),
-      }),
+      await this.requestJson(
+        new URL('/platforms/certification', this.config.registryBaseUrl),
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ platform: this.config.platformName }),
+        },
+        rateLimit,
+      ),
     );
     const token = optionalString(payload?.token);
     if (!token) {
