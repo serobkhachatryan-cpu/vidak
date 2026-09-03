@@ -50,6 +50,14 @@ describe('eVault video library route', () => {
           visibility: 'private',
           streamIds: ['opaque-stream-id'],
         },
+        {
+          id: 'w3ds-file:@group.w3id/video-2',
+          kind: 'file',
+          title: 'Shared video reference',
+          accessScope: 'shared',
+          visibility: 'shared-with-me',
+          streamIds: ['shared-stream-id'],
+        },
       ],
       conversations: [],
       messages: [],
@@ -102,7 +110,16 @@ describe('eVault video library route', () => {
       { scope: 'owned', refresh: false },
     );
     expect(mocks.getPreviewService).toHaveBeenCalled();
-    expect(scheduleLibraryBackfill).not.toHaveBeenCalled();
+    expect(scheduleLibraryBackfill).toHaveBeenCalledWith({ eName: '@person.w3id' }, [
+      expect.objectContaining({
+        id: 'w3ds-file:@person.w3id/video-1',
+        streamIds: ['opaque-stream-id'],
+      }),
+    ]);
+    expect(scheduleLibraryBackfill).not.toHaveBeenCalledWith(
+      { eName: '@person.w3id' },
+      expect.arrayContaining([expect.objectContaining({ id: 'w3ds-file:@group.w3id/video-2' })]),
+    );
   });
 
   it('defaults missing scope to all so Home inventories the complete union', async () => {
@@ -184,6 +201,7 @@ describe('eVault video library route', () => {
     });
     mocks.getPreviewService.mockReturnValue({
       peekLibraryPreview: vi.fn().mockRejectedValue(new Error('preview store unavailable')),
+      scheduleLibraryBackfill: vi.fn().mockResolvedValue(undefined),
     });
 
     const response = await GET(

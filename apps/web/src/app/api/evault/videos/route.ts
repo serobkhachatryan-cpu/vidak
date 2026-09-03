@@ -28,6 +28,17 @@ export async function GET(request: NextRequest) {
     const items = await Promise.all(
       snapshot.items.map(async (item) => attachPreviewFields(item, session.user, previewService)),
     );
+    const personalPreviewItems = snapshot.items.filter(
+      (item) => item.accessScope === 'personal' && item.streamIds.length > 0,
+    );
+    if (previewService && personalPreviewItems.length > 0) {
+      // Preview work is deliberately best-effort. It must never delay or hide
+      // the catalogue, and shared references are never fetched until their
+      // source permission can be verified.
+      void previewService
+        .scheduleLibraryBackfill(session.user, personalPreviewItems)
+        .catch(() => undefined);
+    }
 
     return privateJson({
       items,
