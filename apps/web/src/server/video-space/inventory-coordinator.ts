@@ -97,6 +97,7 @@ export function createInventoryCoordinator(options?: {
   const entries = new Map<string, CacheEntry>();
   let scanner: InventoryScanner | undefined;
   let pumpChain: Promise<void> = Promise.resolve();
+  let pumpFailureReported = false;
 
   function getScanner(): InventoryScanner {
     scanner ??= createScanner();
@@ -299,8 +300,13 @@ export function createInventoryCoordinator(options?: {
           },
         );
       }
+      pumpFailureReported = false;
     } catch {
-      // Pump must never crash the Node process.
+      // Keep the process alive, but do not make a broken production pump
+      // invisible. The event intentionally contains no error message, account,
+      // source, URI, or other private metadata, and is emitted once per outage.
+      if (!pumpFailureReported) log('[inventory-pump] failed');
+      pumpFailureReported = true;
     }
   }
 
@@ -361,6 +367,7 @@ export function createInventoryCoordinator(options?: {
       entries.clear();
       scanner = undefined;
       pumpChain = Promise.resolve();
+      pumpFailureReported = false;
     },
 
     /** Continues persisted jobs without an open browser tab. */

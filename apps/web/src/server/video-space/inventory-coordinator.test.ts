@@ -505,6 +505,28 @@ describe('inventory coordinator', () => {
     ).toBe(true);
   });
 
+  it('reports a pump outage once without including private failure details', async () => {
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const logs: string[] = [];
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary: vi.fn().mockRejectedValue(new Error('private source details must not be logged')),
+        probeSharedSpaceAccess: vi.fn(),
+      }),
+      log: (line) => logs.push(line),
+    });
+
+    await coordinator.pumpRunning();
+    await coordinator.pumpRunning();
+
+    expect(logs).toEqual(['[inventory-pump] failed']);
+  });
+
   it('does not start a second drain when two polls overlap', async () => {
     const refreshing = {
       indexed: 0,

@@ -7,6 +7,7 @@ let pump: ReturnType<typeof setInterval> | undefined;
 /** Process-level pump so inventory work continues without an open browser tab. */
 export function startInventoryJobPump(intervalMs = 750): void {
   if (pump || process.env.NEXT_PHASE === 'phase-production-build') return;
+  console.info('[inventory-pump] started');
   pump = setInterval(() => {
     void getInventoryCoordinator().pumpRunning();
   }, intervalMs);
