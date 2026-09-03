@@ -335,7 +335,7 @@ describe('VideoPreviewService', () => {
     expect(record?.status).toBe('ready');
   });
 
-  it('keeps rate-limited eVault previews retryable through the visible-card path', async () => {
+  it('uses a fallback poster until scheduled retry can repair a rate-limited eVault preview', async () => {
     const store = new InMemoryVideoPreviewStore();
     const service = new VideoPreviewService({
       store,
@@ -362,10 +362,14 @@ describe('VideoPreviewService', () => {
 
     await expect(
       service.peekLibraryPreview({ eName: '@owner.w3id' }, 'grant-rate-limit'),
-    ).resolves.toBe('processing');
+    ).resolves.toBe('ready');
     await expect(
       service.openEVaultPreview({ eName: '@owner.w3id' }, 'grant-rate-limit'),
-    ).resolves.toEqual({ status: 'processing' });
+    ).resolves.toMatchObject({ status: 'ready', contentType: 'image/svg+xml' });
+    await service.scheduleLibraryBackfill({ eName: '@owner.w3id' }, [
+      { streamIds: ['grant-rate-limit'] },
+    ]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
     await expect(
       store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/grant-rate-limit'),
     ).resolves.toMatchObject({ status: 'pending' });

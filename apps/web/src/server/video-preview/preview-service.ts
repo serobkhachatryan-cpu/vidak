@@ -126,9 +126,9 @@ export class VideoPreviewService {
   ): Promise<VideoPreviewState> {
     const fileUri = this.requireEVaultSource().inspectStream(user, streamId).fileUri;
     const record = await this.store.getBySource('evault-file', fileUri);
-    // A failed record can be a transient W3DS/HTTP failure. Keep it in the
-    // processing path so the visible-card queue can request a bounded retry.
-    if (record?.status === 'failed') return 'processing';
+    // A failed record receives a neutral poster. This keeps a valid video card
+    // usable even when its source has no decodable frame.
+    if (record?.status === 'failed') return 'ready';
     return statusToState(record?.status);
   }
 
@@ -175,7 +175,11 @@ export class VideoPreviewService {
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
   ): Promise<PreviewDownload | { status: 'processing' } | { status: 'unavailable' }> {
-    this.requireEVaultSource().inspectStream(user, streamId);
+    const fileUri = this.requireEVaultSource().inspectStream(user, streamId).fileUri;
+    const existing = await this.store.getBySource('evault-file', fileUri);
+    if (existing?.status === 'failed' && !isStaleFailed(existing)) {
+      return unavailableEVaultPosterDownload();
+    }
     const record = await this.ensureEVaultPreview(user, streamId, { retryFailed: true });
     // Some upstream File records are valid streams but have no decodable video
     // frame at any capture point. Keep the card useful instead of exposing an
