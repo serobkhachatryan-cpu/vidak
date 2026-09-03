@@ -145,6 +145,65 @@ describe('eVault video library route', () => {
     );
   });
 
+  it('keeps the catalogue available when one card preview cannot be inspected', async () => {
+    const getSnapshot = vi.fn().mockResolvedValue({
+      items: [
+        {
+          id: 'w3ds-file:@person.w3id/video-1',
+          kind: 'file',
+          title: 'Authorized personal video',
+          accessScope: 'personal',
+          visibility: 'private',
+          streamIds: ['opaque-stream-id'],
+        },
+      ],
+      conversations: [],
+      messages: [],
+      completeness: {
+        indexed: 1,
+        expected: 1,
+        denied: 0,
+        missing: 0,
+        complete: true,
+        retryNeeded: false,
+        retryUnavailable: 0,
+        retryRejected: 0,
+        retryRateLimited: 0,
+      },
+      discovery: 'complete',
+      scope: 'all',
+      metrics: {
+        cache: 'hit',
+        firstResultMs: 0,
+        sourceCounts: { personalPages: 1, sharedSpaces: 0, failed: 0 },
+      },
+    });
+    mocks.getCoordinator.mockReturnValue({ getSnapshot });
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: { eName: '@person.w3id' } }),
+    });
+    mocks.getPreviewService.mockReturnValue({
+      peekLibraryPreview: vi.fn().mockRejectedValue(new Error('preview store unavailable')),
+    });
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/evault/videos?scope=all', {
+        headers: { authorization: 'Bearer access-token' },
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      items: [
+        {
+          id: 'w3ds-file:@person.w3id/video-1',
+          previewState: 'unavailable',
+          previewUrl: '/api/evault/videos/opaque-stream-id/preview',
+        },
+      ],
+    });
+  });
+
   it('reuses a refresh scan instead of starting a duplicate', async () => {
     const getSnapshot = vi.fn().mockResolvedValue({
       items: [],

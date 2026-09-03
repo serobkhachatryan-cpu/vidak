@@ -68,7 +68,14 @@ async function attachPreviewFields(
 
   let previewState: VideoPreviewState = 'processing';
   if (previewService) {
-    previewState = await previewService.peekLibraryPreview(user, streamId);
+    try {
+      previewState = await previewService.peekLibraryPreview(user, streamId);
+    } catch {
+      // A poster is an enhancement, not a prerequisite for returning an
+      // authorized library card or opening another personal video. Keep this
+      // card's preview in its safe failed state without failing the catalogue.
+      previewState = 'unavailable';
+    }
   }
 
   return {
