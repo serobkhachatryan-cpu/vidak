@@ -14,6 +14,7 @@ import type {
   MeshengerMessage,
   MeshengerVideo,
 } from '../meshenger-video-library';
+import { isStaleCatalogueVersion } from './catalogue-version';
 import type { InventoryCompleteness } from './completeness';
 import {
   completeInventory,
@@ -194,7 +195,9 @@ export function createMemoryInventoryJobStore(): InventoryJobStore {
       return job ? cloneJob(job) : undefined;
     },
     async listRunning() {
-      return [...jobs.values()].filter((job) => inventoryJobNeedsDrain(job)).map(cloneJob);
+      return [...jobs.values()]
+        .filter((job) => inventoryJobNeedsDrain(job) || isStaleCatalogueVersion(job.ledger))
+        .map(cloneJob);
     },
     async createJob(input) {
       const existing = jobs.get(input.ownerEName);
@@ -431,7 +434,7 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
           extras.messages,
           extras.sourceCounts,
         );
-        if (inventoryJobNeedsDrain(job)) jobs.push(job);
+        if (inventoryJobNeedsDrain(job) || isStaleCatalogueVersion(job.ledger)) jobs.push(job);
       }
       return jobs;
     },

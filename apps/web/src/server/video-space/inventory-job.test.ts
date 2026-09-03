@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { VIDEO_SPACE_CATALOGUE_VERSION } from './catalogue-version';
 import { inventoryTaskKey } from './inventory-schedule';
 import { createMemoryInventoryJobStore, toPostgresJson } from './job-store';
 import { type DeferredWork, drainFairVaultQueue, upsertWork } from './work-queue';
@@ -11,6 +12,22 @@ type Work = DeferredWork & {
 };
 
 describe('durable inventory checkpoints', () => {
+  it('pumps completed stale catalogue jobs after a media-discovery repair', async () => {
+    const store = createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: { ...job.completeness, complete: true, retryNeeded: false },
+      ledger: { drainFinished: true, catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION - 1 },
+    });
+
+    expect((await store.listRunning()).map((item) => item.id)).toEqual([job.id]);
+  });
+
   it('resumes the exact unfinished vault cursor instead of restarting that scan', async () => {
     const store = createMemoryInventoryJobStore();
     const job = await store.createJob({
