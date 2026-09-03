@@ -18,6 +18,7 @@ export function VerifiedFullNameProfileAction() {
   const [visible, setVisible] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string>();
+  const [success, setSuccess] = useState<string>();
 
   const load = useCallback(async () => {
     if (
@@ -34,6 +35,7 @@ export function VerifiedFullNameProfileAction() {
         return;
       }
       setError(undefined);
+      setSuccess(undefined);
       setVisible(result.kind === 'profile' || result.kind === 'prompt');
     } catch {
       setVisible(true);
@@ -50,6 +52,7 @@ export function VerifiedFullNameProfileAction() {
   const apply = async () => {
     setSaving(true);
     setError(undefined);
+    setSuccess(undefined);
     try {
       const result = await submitVerifiedFullNameGrant(true);
       if (!result.ok) {
@@ -57,7 +60,11 @@ export function VerifiedFullNameProfileAction() {
         return;
       }
       if (user && result.user) updateSessionUser({ ...user, ...result.user });
-      setVisible(false);
+      setSuccess(
+        result.user?.displayName
+          ? `Your Vidak profile now uses “${result.user.displayName}”.`
+          : 'Your Vidak profile now uses your verified eID name.',
+      );
     } catch {
       setError('Your verified name is not available right now.');
     } finally {
@@ -67,24 +74,31 @@ export function VerifiedFullNameProfileAction() {
 
   return (
     <div className="space-y-2">
+      <Text size="sm" tone="muted">
+        “Vidak member” is only a temporary profile label for this eID. It is not another account.
+      </Text>
       <Button
         type="button"
         variant="secondary"
         size="sm"
         isLoading={saving}
-        loadingText="Using verified name"
+        loadingText="Updating profile name"
         onClick={() => void apply()}
       >
-        Use verified name from eID
+        Use my verified eID name
       </Button>
       {error ? (
         <Text size="sm" tone="danger" role="status">
           {error}
         </Text>
+      ) : success ? (
+        <Text size="sm" tone="success" role="status">
+          {success}
+        </Text>
       ) : (
         <Text size="sm" tone="muted">
-          Uses the full name from your verified identity document. This will not overwrite a name
-          you already chose.
+          This copies the full name verified by your existing eID into your Vidak profile. It does
+          not create another account and will not overwrite a name you already chose.
         </Text>
       )}
     </div>

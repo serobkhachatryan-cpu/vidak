@@ -78,6 +78,12 @@ describe('channel name repair', () => {
   });
 });
 
+describe('temporary profile labels', () => {
+  it('keeps the former new-member label replaceable for existing profiles', () => {
+    expect(isChosenPublicDisplayName('New Vidak member')).toBe(false);
+  });
+});
+
 describe('safe public channel projection and presentation', () => {
   it('never emits technical identifiers on the public projection', () => {
     const projection = toSafePublicChannelProjection({

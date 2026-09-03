@@ -3,7 +3,9 @@
  * Technical identifiers (UUIDs, eNames, eVault IDs, local IDs) stay private.
  */
 
-export const NEUTRAL_PUBLIC_DISPLAY_NAME = 'New Vidak member';
+export const NEUTRAL_PUBLIC_DISPLAY_NAME = 'Vidak member';
+/** Earlier accounts may still store this transitional label. */
+const LEGACY_NEUTRAL_PUBLIC_DISPLAY_NAMES = new Set(['New Vidak member']);
 /** Legacy mock/product placeholder — not a chosen public name. */
 export const STALE_CREATOR_PLACEHOLDER = 'Creator';
 
@@ -64,7 +66,8 @@ export function isValidPublicDisplayName(
 export function isPlatformPlaceholderDisplayName(value: string | null | undefined): boolean {
   const name = value?.trim() ?? '';
   if (!name) return true;
-  if (name === NEUTRAL_PUBLIC_DISPLAY_NAME) return true;
+  if (name === NEUTRAL_PUBLIC_DISPLAY_NAME || LEGACY_NEUTRAL_PUBLIC_DISPLAY_NAMES.has(name))
+    return true;
   return name.toLocaleLowerCase() === STALE_CREATOR_PLACEHOLDER.toLocaleLowerCase();
 }
 

@@ -160,10 +160,10 @@ describe('W3dsAuthService', () => {
     const creatorSession = await service.getSession(creatorAccess);
     const uuidSession = await service.getSession(uuidAccess);
 
-    expect(creatorSession.user.displayName).toBe('New Vidak member');
+    expect(creatorSession.user.displayName).toBe('Vidak member');
     expect(creatorSession.user.displayName).not.toBe('creator');
     expect(creatorSession.user.eName).toBe('@creator.w3id');
-    expect(uuidSession.user.displayName).toBe('New Vidak member');
+    expect(uuidSession.user.displayName).toBe('Vidak member');
     expect(uuidSession.user.displayName).not.toBe('fd10387a-b0d3-5f9c-bf54-7214a491cace');
     expect(uuidSession.user.eName).toBe(uuidEName);
     expect(uuidSession.user.profile.handle).toBeUndefined();

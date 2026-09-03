@@ -84,10 +84,10 @@ describe('W3dsVideoApiClient', () => {
       if (url.includes('/api/auth/me')) {
         return jsonResponse({
           id: 'w3ds_first-load-user',
-          displayName: 'New Vidak member',
+          displayName: 'Vidak member',
           eName: '@ada.w3id',
           eVaultId: 'evault-ada',
-          profile: { displayName: 'New Vidak member' },
+          profile: { displayName: 'Vidak member' },
         });
       }
       if (url.includes('/api/auth/preferences')) {
@@ -123,7 +123,7 @@ describe('W3dsVideoApiClient', () => {
       client.listConnectedAccounts(userId),
     ]);
 
-    expect(profile).toMatchObject({ id: userId, displayName: 'New Vidak member' });
+    expect(profile).toMatchObject({ id: userId, displayName: 'Vidak member' });
     expect(profile?.displayName).not.toBe('Creator');
     expect(profile?.handle.startsWith('w3ds_')).toBe(false);
     expect(preferences.appearance).toBe('system');

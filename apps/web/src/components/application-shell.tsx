@@ -14,7 +14,7 @@ import { useAuthentication, useCurrentUser } from '../features/auth/auth-provide
 import { useAppearancePreference } from '../features/settings/appearance-preference';
 import { headerAccountCta, headerVerifiedNameCta } from '../lib/public-display-name';
 
-const navigation = [
+const signedInNavigation = [
   { label: 'Home', href: '/', icon: '⌂' },
   { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
   { label: 'Support', href: '/support', icon: '⚑' },
@@ -22,6 +22,15 @@ const navigation = [
   { label: 'Your videos', href: '/your-videos', icon: '◌' },
   { label: 'Upload', href: '/upload', icon: '⇪' },
   { label: 'Settings', href: '/settings', icon: '⚙' },
+];
+
+// Public browsing should never look like a broken signed-in product. Keep
+// private destinations out of the anonymous shell instead of sending every
+// sidebar click into eID sign-in.
+const publicNavigation = [
+  { label: 'Home', href: '/', icon: '⌂' },
+  { label: 'Search public videos', href: '/search', icon: '⌕' },
+  { label: 'Support', href: '/support', icon: '⚑' },
 ];
 
 export interface ApplicationShellProps {
@@ -42,7 +51,7 @@ export function ApplicationShell({
   const { appearance, resolvedTheme, setAppearance } = useAppearancePreference();
   const [mobileNavigationOpen, setMobileNavigationOpen] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
-  const navigationItems = navigation.map((item) => ({
+  const navigationItems = (user ? signedInNavigation : publicNavigation).map((item) => ({
     ...item,
     current: item.href === currentHref,
   }));

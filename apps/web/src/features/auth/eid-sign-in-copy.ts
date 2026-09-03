@@ -9,12 +9,15 @@
 export const eidSignInCopy = {
   heading: 'Sign in with eID',
   intro:
-    'Continue with your eID wallet to sign in. Scan the code or open the sign-in link on this device.',
+    'Use eID to open your private Vidak video space. Public Vidak videos can be watched without signing in.',
   approveHint:
-    'Approve the request in your eID wallet. This page finishes automatically when approval completes.',
+    'Your first sign-in connects your existing eID to a Vidak profile; it does not create another eID or account. Approve the request in your eID wallet to continue.',
   linkLabel: 'Sign-in link',
   linkText: 'Continue with eID',
   waiting: 'Waiting for eID approval…',
+  checking: 'Checking for eID approval…',
+  requestExpired: 'This eID request expired. Create a new request to try again.',
+  requestFailed: 'This eID request could not be approved. Create a new request to try again.',
   continueButton: 'Continue with eID',
   retryButton: 'Try again',
   newRequest: 'Create a new eID request',

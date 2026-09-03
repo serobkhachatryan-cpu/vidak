@@ -425,17 +425,20 @@ function OwnedVideoCard({
       <div className="space-y-3 p-4">
         <div className="space-y-1">
           <h3 className="font-semibold text-foreground">{video.title}</h3>
+          <p className="text-sm text-muted-foreground">
+            {video.status === 'draft' ? 'Your Vidak draft' : 'Your Vidak video'}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {video.status === 'draft' ? (
             <Button size="sm" onClick={() => onContinueDraft(video)}>
-              Continue editing
+              Resume draft
             </Button>
           ) : (
             <>
               {canWatch ? (
-                <Button size="sm" variant="secondary" onClick={() => onWatch(video)}>
-                  View
+                <Button size="sm" onClick={() => onWatch(video)}>
+                  Watch video
                 </Button>
               ) : null}
               {visibility.id === 'public' || visibility.id === 'shared-by-me' ? (
@@ -483,12 +486,11 @@ function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
         </div>
         <Button
           size="sm"
-          variant="secondary"
           onClick={() => {
             window.location.assign(watchHref);
           }}
         >
-          Watch
+          Watch video
         </Button>
       </div>
     </article>
@@ -579,12 +581,49 @@ export function PublicHomeFeed() {
   return (
     <ApplicationShell currentHref="/">
       <Page
-        title="Home"
-        description="Public videos published in Vidak. Sign in to see every video you are authorized to view in your W3DS space."
+        title="Watch public videos"
+        description="Anyone can watch videos published publicly in Vidak. Sign in with eID only for your private W3DS video space, uploading, and visibility controls."
         containerSize="full"
-        actions={<Button onClick={() => router.push('/login?returnTo=/')}>Sign in</Button>}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => router.push('/support')}>
+              How Vidak works
+            </Button>
+            <Button onClick={() => router.push('/login?returnTo=/')}>Sign in to your space</Button>
+          </div>
+        }
       >
-        <PublicExplorePanel />
+        <div className="space-y-8">
+          <section className="grid gap-4 rounded-xl border border-border bg-surface-raised p-5 sm:grid-cols-3">
+            <div>
+              <h2 className="font-semibold text-foreground">Watch without an eID</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Public Vidak videos are available immediately. You can also search public videos and
+                channels.
+              </p>
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Sign in for private video</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                eID opens videos you own or are allowed to view in your W3DS space. It does not
+                create another eID.
+              </p>
+            </div>
+            <div>
+              <h2 className="font-semibold text-foreground">Choose visibility</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                After signing in, Vidak lets you keep a video private or publish it for others to
+                watch.
+              </p>
+            </div>
+          </section>
+          <section id="public-videos" aria-labelledby="public-videos-heading">
+            <h2 id="public-videos-heading" className="mb-2 text-xl font-semibold text-foreground">
+              Public videos
+            </h2>
+            <PublicExplorePanel />
+          </section>
+        </div>
       </Page>
     </ApplicationShell>
   );

@@ -107,6 +107,17 @@ describe('headerAccountCta', () => {
       href: SETTINGS_PROFILE_HREF,
     });
   });
+
+  it('turns the temporary Vidak member label into a clear Profile CTA', () => {
+    expect(headerAccountCta(NEUTRAL_PUBLIC_DISPLAY_NAME)).toEqual({
+      label: SET_PUBLIC_NAME_LABEL,
+      href: SETTINGS_PROFILE_HREF,
+    });
+    expect(headerAccountCta('New Vidak member')).toEqual({
+      label: SET_PUBLIC_NAME_LABEL,
+      href: SETTINGS_PROFILE_HREF,
+    });
+  });
 });
 
 describe('headerVerifiedNameCta', () => {

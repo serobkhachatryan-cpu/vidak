@@ -2,6 +2,7 @@ import QRCode from 'qrcode';
 import { getW3dsAuthService, type LoginOffer } from '../../server/w3ds-auth';
 import { buildLoginPath, buildOfferContinuePath } from './auth-session-handoff';
 import { eidSignInCopy } from './eid-sign-in-copy';
+import { W3dsServerOfferPoller } from './w3ds-server-offer-poller';
 
 export interface W3dsServerLoginPageProps {
   publicOrigin: string;
@@ -20,10 +21,8 @@ async function resolveOffer(publicOrigin: string, offerId?: string): Promise<Log
 }
 
 /**
- * eID login that works even when the browser cannot use fetch or JavaScript.
- * A regular redirect polls the same server-side offer until the wallet callback
- * completes; `/continue` sets cookies and `/auth/handoff` verifies them with an
- * HTTP redirect to the destination.
+ * eID login with stable client-side polling. The no-JavaScript fallback keeps
+ * a slower regular redirect so a wallet callback can still complete.
  */
 export async function W3dsServerLoginPage({
   publicOrigin,
@@ -41,7 +40,9 @@ export async function W3dsServerLoginPage({
 
   return (
     <main className="mx-auto flex min-h-screen w-full max-w-lg items-center px-6 py-12">
-      <meta httpEquiv="refresh" content={`2;url=${pollUrl}`} />
+      <noscript>
+        <meta httpEquiv="refresh" content={`5;url=${pollUrl}`} />
+      </noscript>
       <section className="w-full space-y-6 rounded-xl border border-border bg-surface p-6 shadow-sm">
         <div className="space-y-2">
           <h1 className="font-sans text-2xl font-semibold text-foreground">
@@ -77,7 +78,7 @@ export async function W3dsServerLoginPage({
             <p className="font-sans text-xs text-muted-foreground">
               Expires {new Date(offer.expiresAt).toLocaleTimeString()}
             </p>
-            <p className="font-sans text-sm text-muted-foreground">{eidSignInCopy.waiting}</p>
+            <W3dsServerOfferPoller offerId={offer.offerId} returnTo={returnTo} />
           </div>
         </div>
 
@@ -87,6 +88,14 @@ export async function W3dsServerLoginPage({
         >
           {eidSignInCopy.newRequest}
         </a>
+        <div className="flex justify-between gap-4 text-sm">
+          <a href="/" className="font-semibold text-primary hover:underline">
+            Watch public videos
+          </a>
+          <a href="/support" className="font-semibold text-primary hover:underline">
+            Support
+          </a>
+        </div>
       </section>
     </main>
   );

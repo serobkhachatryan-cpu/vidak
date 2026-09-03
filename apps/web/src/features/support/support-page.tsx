@@ -3,6 +3,7 @@
 import { Button, Card, Checkbox, Page, Textarea } from '@w3ds/ui';
 import { type FormEvent, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
+import { useAuthentication } from '../auth/auth-provider';
 
 type SubmitState =
   | { status: 'idle' }
@@ -11,6 +12,65 @@ type SubmitState =
   | { status: 'error'; message: string };
 
 export function SupportPageFeature() {
+  const { user, isLoading } = useAuthentication();
+
+  if (!isLoading && !user) {
+    return <PublicSupportPage />;
+  }
+
+  if (isLoading) {
+    return (
+      <ApplicationShell currentHref="/support">
+        <Page title="Support" description="Loading support options…" />
+      </ApplicationShell>
+    );
+  }
+
+  return <SignedInSupportPage />;
+}
+
+function PublicSupportPage() {
+  return (
+    <ApplicationShell currentHref="/support">
+      <Page
+        title="Support and how Vidak works"
+        description="You can explore and watch public Vidak videos without an eID. eID is only required to open your private W3DS video space, upload, or change a video’s visibility."
+      >
+        <div className="grid max-w-4xl gap-6 md:grid-cols-2">
+          <Card elevated className="space-y-3 p-5 sm:p-6">
+            <h2 className="font-semibold text-foreground">What eID is for</h2>
+            <p className="text-sm text-muted-foreground">
+              Signing in connects your existing eID to Vidak. It does not make another eID or a
+              separate identity. Vidak then shows videos you own or are allowed to view and lets you
+              choose whether your own videos stay private or become public.
+            </p>
+            <a
+              href="/"
+              className="inline-flex rounded-md bg-primary px-4 py-2 font-sans text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              Watch public videos
+            </a>
+          </Card>
+          <Card elevated className="space-y-3 p-5 sm:p-6">
+            <h2 className="font-semibold text-foreground">Need help with your account?</h2>
+            <p className="text-sm text-muted-foreground">
+              Sign in to send a private support report. This links the report to your account
+              without exposing your videos or eVault data.
+            </p>
+            <a
+              href="/login?returnTo=%2Fsupport"
+              className="inline-flex rounded-md bg-primary px-4 py-2 font-sans text-sm font-semibold text-primary-foreground hover:opacity-90"
+            >
+              Sign in to send a report
+            </a>
+          </Card>
+        </div>
+      </Page>
+    </ApplicationShell>
+  );
+}
+
+function SignedInSupportPage() {
   const [description, setDescription] = useState('');
   const [includeTechnicalDetails, setIncludeTechnicalDetails] = useState(true);
   const [allowAutomatedAnalysis, setAllowAutomatedAnalysis] = useState(true);

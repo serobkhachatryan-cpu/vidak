@@ -4,8 +4,8 @@
  */
 
 import {
+  isChosenPublicDisplayName,
   isReplaceableWithVerifiedFullName,
-  isValidPublicDisplayName,
   type PublicDisplayNameIdentity,
 } from '@w3ds/types';
 
@@ -23,7 +23,7 @@ export {
 } from '@w3ds/types';
 
 export const SET_PUBLIC_NAME_LABEL = 'Set your public name';
-export const USE_VERIFIED_NAME_LABEL = 'Use verified name from eID';
+export const USE_VERIFIED_NAME_LABEL = 'Use my verified eID name';
 export const SETTINGS_PROFILE_HREF = '/settings?section=profile';
 
 export function headerAccountCta(
@@ -31,7 +31,7 @@ export function headerAccountCta(
   identity?: PublicDisplayNameIdentity,
 ): { label: string; href: typeof SETTINGS_PROFILE_HREF } {
   return {
-    label: isValidPublicDisplayName(displayName, identity)
+    label: isChosenPublicDisplayName(displayName, identity)
       ? displayName.trim()
       : SET_PUBLIC_NAME_LABEL,
     href: SETTINGS_PROFILE_HREF,
