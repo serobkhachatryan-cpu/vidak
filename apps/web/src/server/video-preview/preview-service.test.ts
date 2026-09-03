@@ -256,6 +256,17 @@ describe('VideoPreviewService', () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
+  it('uses a neutral poster when a valid eVault stream has no decodable frame', async () => {
+    const { service } = createService({ extract: async () => undefined });
+
+    const download = await service.openEVaultPreview({ eName: '@owner.w3id' }, 'frame-less');
+
+    expect(download).toMatchObject({ status: 'ready', contentType: 'image/svg+xml' });
+    if (download.status === 'ready') {
+      expect(new TextDecoder().decode(download.body)).toContain('<svg');
+    }
+  });
+
   it('marks true generation failure as unavailable rather than serving a broken image', async () => {
     const { service, videos, media, storage } = createService({
       extract: async () => undefined,

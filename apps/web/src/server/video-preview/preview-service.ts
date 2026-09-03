@@ -70,6 +70,13 @@ export interface VideoPreviewServiceOptions {
 const inFlight = new Set<string>();
 const stalePendingMs = 2 * 60 * 1000;
 const staleFailedMs = 60 * 60 * 1000;
+const unavailableEVaultPoster = new TextEncoder().encode(`
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-label="Video">
+    <rect width="1280" height="720" fill="#202938"/>
+    <rect x="64" y="64" width="1152" height="592" rx="32" fill="#2d384b"/>
+    <path d="M547 252v216l190-108-190-108Z" fill="#9aa8c0"/>
+  </svg>
+`);
 
 export class VideoPreviewService {
   private readonly store: VideoPreviewStore;
@@ -170,6 +177,10 @@ export class VideoPreviewService {
   ): Promise<PreviewDownload | { status: 'processing' } | { status: 'unavailable' }> {
     this.requireEVaultSource().inspectStream(user, streamId);
     const record = await this.ensureEVaultPreview(user, streamId, { retryFailed: true });
+    // Some upstream File records are valid streams but have no decodable video
+    // frame at any capture point. Keep the card useful instead of exposing an
+    // error state for that non-actionable source condition.
+    if (record.status === 'failed') return unavailableEVaultPosterDownload();
     return this.openRecord(record);
   }
 
@@ -356,6 +367,14 @@ function isStaleFailed(record: VideoPreviewRecord): boolean {
 
 function shouldRetryFailed(record: VideoPreviewRecord, retryFailed: boolean): boolean {
   return retryFailed || isStaleFailed(record);
+}
+
+function unavailableEVaultPosterDownload(): PreviewDownload {
+  return {
+    status: 'ready',
+    body: unavailableEVaultPoster,
+    contentType: 'image/svg+xml',
+  };
 }
 
 export function sanitizeOwnedVideoForLibrary(video: Video): Video {
