@@ -80,6 +80,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   const searchParams = useSearchParams();
   const user = useCurrentUser();
   const tab = tabFromSearch(searchParams.get('tab'));
+  const sharingRequested = tab === 'yours' && searchParams.get('sharing') === '1';
   const [initialMemory] = useState<VideoSpaceMemorySnapshot | undefined>(() => {
     const cached = user ? videoSpaceMemory.get(user.id) : undefined;
     return cached ? cloneVideoSpaceMemory(cached) : undefined;
@@ -251,6 +252,9 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         containerSize="full"
         actions={
           <div className="flex flex-wrap gap-2">
+            <Button variant="secondary" onClick={() => router.push('/?tab=yours&sharing=1')}>
+              Sharing
+            </Button>
             <Button variant="secondary" onClick={() => void load(true)}>
               Refresh your video space
             </Button>
@@ -274,6 +278,26 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
               </Button>
             ))}
           </fieldset>
+
+          {sharingRequested ? (
+            <aside
+              className="rounded-xl border border-primary/30 bg-primary/5 p-4"
+              aria-labelledby="sharing-controls-heading"
+            >
+              <h2 id="sharing-controls-heading" className="font-semibold text-foreground">
+                Share your Vidak videos
+              </h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Choose <strong className="text-foreground">Share / manage access</strong> on the
+                video you own below. You can keep it private, allow specific signed-in eIDs, or
+                publish it for anyone to watch.
+              </p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                These controls apply to videos hosted in Vidak. Videos from other W3DS apps keep the
+                access policy set by their source.
+              </p>
+            </aside>
+          ) : null}
 
           {tab === 'explore' ? (
             <PublicExplorePanel />

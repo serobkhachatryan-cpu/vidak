@@ -62,7 +62,7 @@ export function OwnedVideoCard({
                 Resume draft
               </Button>
               <Button size="sm" variant="secondary" onClick={() => onManageSharing(video)}>
-                Sharing settings
+                Share / manage access
               </Button>
             </>
           ) : (
@@ -84,7 +84,7 @@ export function OwnedVideoCard({
                 </Button>
               ) : null}
               <Button size="sm" variant="secondary" onClick={() => onManageSharing(video)}>
-                Sharing settings
+                Share / manage access
               </Button>
             </>
           )}

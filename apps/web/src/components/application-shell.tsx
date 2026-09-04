@@ -19,6 +19,7 @@ const signedInNavigation = [
   // of duplicating it with a separate "Your videos" destination.
   { label: 'Your video space', href: '/', icon: '⌂' },
   { label: 'Upload a video', href: '/upload', icon: '⇪' },
+  { label: 'Sharing', href: '/?tab=yours&sharing=1', icon: '↗' },
   { label: 'Linked channels', href: '/library', icon: '▣' },
   { label: 'Settings', href: '/settings', icon: '⚙' },
   { label: 'Support', href: '/support', icon: '⚑' },
