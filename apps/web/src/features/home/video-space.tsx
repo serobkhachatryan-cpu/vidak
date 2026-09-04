@@ -189,7 +189,11 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   }, [load, user?.id]);
 
   useEffect(() => {
-    if (!user?.id || library.status !== 'ready' || owned.status !== 'ready') return;
+    // The independent Vidak-owned-video request is an enhancement to this
+    // eVault library. Keep an already loaded private library warm even if that
+    // request is temporarily unavailable, rather than making every return to
+    // this page start from an empty loading state.
+    if (!user?.id || library.status !== 'ready' || owned.status === 'loading') return;
     videoSpaceMemory.set(user.id, {
       library: cloneLibraryState(library),
       owned: cloneOwnedState(owned),
