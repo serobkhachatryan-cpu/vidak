@@ -198,7 +198,7 @@ describe('inventory coordinator', () => {
     );
   });
 
-  it('fails closed for an unverified shared source without hiding cached personal videos', async () => {
+  it('keeps a retryable shared source visible but disabled without rescanning the library', async () => {
     const ownedVideo = video({ id: 'own-1', title: 'Personal clip' });
     const sharedVideo = video({
       id: 'shared-1',
@@ -226,14 +226,22 @@ describe('inventory coordinator', () => {
     });
 
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
-    expect(first.items.map((item) => item.title)).toEqual(['Personal clip']);
+    expect(first.items.map((item) => item.title)).toEqual(['Personal clip', 'Shared clip']);
+    expect(first.items.find((item) => item.id === 'shared-1')).toMatchObject({
+      sourceAccess: 'checking',
+      streamIds: [],
+    });
     expect(first.discovery).toBe('refreshing');
 
     const afterProbeFailure = await coordinator.getSnapshot(
       { eName: '@person.w3id' },
       { scope: 'all' },
     );
-    expect(afterProbeFailure.items.map((item) => item.title)).toEqual(['Personal clip']);
+    expect(afterProbeFailure.items.map((item) => item.title)).toEqual([
+      'Personal clip',
+      'Shared clip',
+    ]);
+    expect(afterProbeFailure.metrics.cache).toBe('hit');
     expect(afterProbeFailure.discovery).toBe('refreshing');
     expect(afterProbeFailure.completeness).toMatchObject({
       complete: false,
@@ -241,7 +249,8 @@ describe('inventory coordinator', () => {
       deferred: 1,
     });
     expect(JSON.stringify(afterProbeFailure)).not.toContain('@group.w3id');
-    expect(scanLibrary).toHaveBeenCalledTimes(2);
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+    expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(2);
   });
 
   it('bounds a cached shared-access check so a stalled source cannot hang the library', async () => {
@@ -273,11 +282,11 @@ describe('inventory coordinator', () => {
     });
 
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
-    expect(first.items.map((item) => item.title)).toEqual(['Personal clip']);
+    expect(first.items.map((item) => item.title)).toEqual(['Personal clip', 'Shared clip']);
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
 
     const afterTimeout = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
-    expect(afterTimeout.items.map((item) => item.title)).toEqual(['Personal clip']);
+    expect(afterTimeout.items.map((item) => item.title)).toEqual(['Personal clip', 'Shared clip']);
     expect(afterTimeout.discovery).toBe('refreshing');
   });
 

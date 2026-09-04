@@ -125,7 +125,9 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
           </Button>
         ) : (
           <p className="text-sm text-muted-foreground">
-            Playback is unavailable until Vidak verifies the source permission.
+            {video.sourceAccess === 'checking'
+              ? 'Vidak is retrying this shared source. Playback will be available once its permission check completes.'
+              : 'Playback is unavailable until Vidak verifies the source permission.'}
           </p>
         )}
       </div>

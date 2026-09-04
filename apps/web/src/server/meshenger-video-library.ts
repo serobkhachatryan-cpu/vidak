@@ -128,6 +128,8 @@ export interface MeshengerVideo {
   sharedVia?: 'group' | 'conversation';
   /** A source owner's explicitly chosen public Vidak name, when available. */
   sharedBy?: string;
+  /** Safe UI state when a shared source is temporarily being rechecked. */
+  sourceAccess?: 'checking';
   /** Server-only. Stripped before any client JSON. */
   sourceSpaceKey?: string;
   /** Server-only. Stripped before any client JSON. */

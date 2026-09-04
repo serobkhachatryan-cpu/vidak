@@ -29,6 +29,8 @@ export interface VideoSpaceLibraryItem {
   sharedVia?: 'group' | 'conversation';
   /** An explicitly chosen public Vidak name for a verified direct share. */
   sharedBy?: string;
+  /** The card stays visible while Vidak retries a transient shared-source check. */
+  sourceAccess?: 'checking';
   previewState?: VideoSpacePreviewState;
   previewUrl?: string;
 }

@@ -78,6 +78,8 @@ interface CacheEntry {
   /** Per-viewer cache of safe, explicitly chosen source display names. */
   sharedSourceNames: Map<string, string>;
   resolvedSharedSourceNames: Set<string>;
+  /** Shared cards whose current source probe is retryable, never denied. */
+  checkingSharedItemIds: Set<string>;
 }
 
 export function publicLibraryItems(
@@ -161,6 +163,7 @@ export function createInventoryCoordinator(options?: {
       spaces: previous?.spaces ?? [],
       sharedSourceNames: previous?.sharedSourceNames ?? new Map(),
       resolvedSharedSourceNames: previous?.resolvedSharedSourceNames ?? new Set(),
+      checkingSharedItemIds: previous?.checkingSharedItemIds ?? new Set(),
       ...(previous?.snapshot.items.length
         ? { firstResultAt: previous.firstResultAt ?? now() }
         : {}),
@@ -243,7 +246,14 @@ export function createInventoryCoordinator(options?: {
       }),
     );
     return {
-      items: publicLibraryItems(snapshot.items, await sharedSourceNamesFor(snapshot.items, entry)),
+      items: publicLibraryItems(
+        snapshot.items,
+        await sharedSourceNamesFor(snapshot.items, entry),
+      ).map((item) =>
+        entry.checkingSharedItemIds.has(item.id)
+          ? { ...item, sourceAccess: 'checking' as const, streamIds: [] }
+          : item,
+      ),
       conversations: snapshot.conversations,
       messages: snapshot.messages,
       completeness: snapshot.completeness,
@@ -313,11 +323,15 @@ export function createInventoryCoordinator(options?: {
       outcomes.set(item.id, sharedItemAccess(item, accessBySpace));
     }
     if ([...outcomes.values()].every((outcome) => outcome === 'verified')) {
+      entry.checkingSharedItemIds.clear();
       return entry.snapshot;
     }
+    entry.checkingSharedItemIds = new Set(
+      [...outcomes].flatMap(([itemId, outcome]) => (outcome === 'retry' ? [itemId] : [])),
+    );
     const items = entry.snapshot.items.filter((item) => {
       const outcome = outcomes.get(item.id);
-      return outcome === undefined || outcome === 'verified';
+      return outcome === undefined || outcome === 'verified' || outcome === 'retry';
     });
     const denied = [...outcomes.values()].filter((outcome) => outcome === 'denied').length;
     const missing = [...outcomes.values()].filter((outcome) => outcome === 'missing').length;
@@ -366,6 +380,7 @@ export function createInventoryCoordinator(options?: {
           spaces: [],
           sharedSourceNames: new Map(),
           resolvedSharedSourceNames: new Set(),
+          checkingSharedItemIds: new Set(),
         };
         if (!previous) {
           entry.scanning = true;
@@ -441,9 +456,12 @@ export function createInventoryCoordinator(options?: {
           scanning: false,
           completeness: entry.snapshot.completeness,
         });
-        if (discovery === 'complete') {
+        // A soft shared-source probe failure is a partial result, not a reason
+        // to restart a full private inventory scan for every client poll.
+        // Revalidation still happens inside serve; explicit Refresh bypasses
+        // this TTL and starts a new discovery pass immediately.
+        if (discovery === 'complete' || entry.checkingSharedItemIds.size > 0)
           return serve(user, entry, requestStarted, 'hit');
-        }
       }
 
       entry = startScan(user, input.scope, entry);
