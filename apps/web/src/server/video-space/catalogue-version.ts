@@ -1,10 +1,9 @@
 /**
  * Bump when catalogue rules or persisted checkpoint layout changes and jobs
- * must rescan. Version 9 rebuilds shared entries with viewer-bound playback
- * grants and server-only source proof instead of preserving legacy
- * metadata-only records.
+ * must rescan. Version 10 rebuilds File-reference shares with their actual
+ * viewer-owned authorization proof instead of the incorrect group probe.
  */
-export const VIDEO_SPACE_CATALOGUE_VERSION = 9;
+export const VIDEO_SPACE_CATALOGUE_VERSION = 10;
 
 export function readCatalogueVersion(ledger: Record<string, unknown>): number {
   const value = ledger.catalogueVersion;

@@ -97,7 +97,9 @@ describe('video space adapters', () => {
         accessScope: 'shared',
         fileUris: ['w3ds://file?id=@friend.w3id/canonical-clip'],
         sourceSpaceKey: '@friend.w3id',
-        accessBasis: 'membership',
+        sourceReferenceId: 'local-reference',
+        sourceReferenceFileId: 'canonical-clip',
+        accessBasis: 'reference',
       }),
     ]);
     expect(referenced.has('w3ds://file?id=@friend.w3id/canonical-clip')).toBe(false);

@@ -1,7 +1,11 @@
 vi.mock('server-only', () => ({}));
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MeshengerLibrary, MeshengerVideo } from '../meshenger-video-library';
+import type {
+  MeshengerLibrary,
+  MeshengerVideo,
+  SharedSpaceProbe,
+} from '../meshenger-video-library';
 import { setOperationalLogSinkForTests } from '../ops-observability';
 import { completeInventory } from './completeness';
 import type { InventorySourceCounts } from './discovery';
@@ -168,14 +172,16 @@ describe('inventory coordinator', () => {
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a canonical shared File reference only while the source membership verifies', async () => {
+  it('keeps a canonical shared File reference when its local viewer reference verifies', async () => {
     const sharedReference = video({
       id: 'shared-file-reference',
       title: 'Shared video',
       accessScope: 'shared',
       visibility: 'shared-with-me',
       sourceSpaceKey: '@canonical-owner.w3id',
-      accessBasis: 'membership',
+      sourceReferenceId: 'local-reference',
+      sourceReferenceFileId: 'canonical-file',
+      accessBasis: 'reference',
     });
     const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
       options.onSnapshot(library([sharedReference]), 'done', {
@@ -196,7 +202,12 @@ describe('inventory coordinator', () => {
     expect(snapshot.items.map((item) => item.title)).toEqual(['Shared video']);
     expect(probeSharedSpaceAccess).toHaveBeenCalledWith(
       { eName: '@person.w3id' },
-      { eName: '@canonical-owner.w3id', kind: 'group' },
+      {
+        eName: '@canonical-owner.w3id',
+        kind: 'reference',
+        referenceId: 'local-reference',
+        fileId: 'canonical-file',
+      },
     );
   });
 
@@ -321,13 +332,12 @@ describe('inventory coordinator', () => {
       });
       return library([historyShared]);
     });
-    const probeSharedSpaceAccess = vi.fn(
-      (_user: unknown, space: { kind: 'direct' | 'group'; chatId?: string }) =>
-        Promise.resolve(
-          space.kind === 'group'
-            ? { access: 'ok' as const, member: true }
-            : { access: 'missing' as const, member: false },
-        ),
+    const probeSharedSpaceAccess = vi.fn((_user: unknown, space: SharedSpaceProbe) =>
+      Promise.resolve(
+        space.kind === 'group'
+          ? { access: 'ok' as const, member: true }
+          : { access: 'missing' as const, member: false },
+      ),
     );
     const coordinator = createInventoryCoordinator({
       createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
@@ -488,11 +498,15 @@ describe('inventory coordinator', () => {
         id: 'own-1',
         title: 'Mine',
         sourceSpaceKey: '@secret.w3id',
+        sourceReferenceId: 'private-reference',
+        sourceReferenceFileId: 'private-file',
         accessBasis: 'personal',
       }),
     ]);
     expect(JSON.stringify(items)).not.toMatch(/@secret|cookie|Bearer|https:\/\//i);
     expect(items[0]).not.toHaveProperty('sourceSpaceKey');
+    expect(items[0]).not.toHaveProperty('sourceReferenceId');
+    expect(items[0]).not.toHaveProperty('sourceReferenceFileId');
   });
 
   it('adds safe shared-source context without exposing the source identity', () => {

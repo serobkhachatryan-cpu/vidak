@@ -24,7 +24,13 @@ export interface FileRecordReferenceTarget {
   fileUri: string;
 }
 
-export type VideoAccessBasis = 'personal' | 'membership' | 'history';
+/**
+ * Why the viewer may currently access a non-personal record. A `reference`
+ * basis is a File reference in the viewer's own vault; it is re-read before
+ * listing or playing, so it is neither mistaken for a group grant nor trusted
+ * merely because it was discovered earlier.
+ */
+export type VideoAccessBasis = 'personal' | 'membership' | 'history' | 'reference';
 
 export interface DiscoveredVideoRecord {
   key: string;
@@ -40,6 +46,10 @@ export interface DiscoveredVideoRecord {
   sourceSpaceKey?: string;
   /** Server-only direct-chat identity for current shared-playback verification. */
   sourceChatId?: string;
+  /** Server-only local File-reference envelope used to prove a direct share. */
+  sourceReferenceId?: string;
+  /** Canonical File envelope that the local reference must still target. */
+  sourceReferenceFileId?: string;
   accessBasis?: VideoAccessBasis;
 }
 
@@ -82,6 +92,11 @@ function optionalEName(value: unknown): string | undefined {
   if (!trimmed) return undefined;
   const eName = trimmed.startsWith('@') ? trimmed : `@${trimmed}`;
   return eNamePattern.test(eName) ? eName : undefined;
+}
+
+function sameEName(left: string, right: string): boolean {
+  const normalizedLeft = optionalEName(left);
+  return Boolean(normalizedLeft && normalizedLeft === optionalEName(right));
 }
 
 /**
@@ -306,12 +321,19 @@ export function discoverFileRecordVideos(
         : {}),
       accessScope,
       sourceId: 'file-record',
-      // A local File reference is only a pointer; the canonical owner is the
-      // authority that must still authorize a shared playback grant. Treating
-      // the viewer's vault as a personal source let a foreign reference skip
-      // revalidation and then disappear from the shared inventory.
+      // A File reference in the viewer's own vault is the authorization
+      // artifact for this direct share. It is re-read before list/playback;
+      // do not incorrectly require an unrelated group manifest from the
+      // canonical owner's vault.
       sourceSpaceKey: reference?.ownerEName ?? vaultOwnerEName,
-      accessBasis: accessScope === 'personal' ? 'personal' : 'membership',
+      ...(reference ? { sourceReferenceId: file.id } : {}),
+      ...(reference ? { sourceReferenceFileId: reference.metaEnvelopeId } : {}),
+      accessBasis:
+        accessScope === 'personal'
+          ? 'personal'
+          : reference && sameEName(vaultOwnerEName, viewerEName)
+            ? 'reference'
+            : 'membership',
     });
     // The canonical lookup below must still be able to add the richer target
     // record, so only non-reference File rows reserve their URI here.

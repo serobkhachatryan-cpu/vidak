@@ -96,6 +96,41 @@ describe('assembleVideoSpaceCatalogue', () => {
     ]);
   });
 
+  it('mints a shared File-reference grant with only its server-side reference proof', () => {
+    const grants: VideoSpaceStreamGrantInput[] = [];
+    const { sourceChatId: _chat, ...sharedWithoutChat } = shared;
+    const reference: DiscoveredVideoRecord = {
+      ...sharedWithoutChat,
+      key: 'file:@owner.w3id/local-reference',
+      kind: 'file',
+      sourceSpaceKey: '@friend.w3id',
+      sourceReferenceId: 'local-reference',
+      sourceReferenceFileId: 'canonical-file',
+      accessBasis: 'reference',
+    };
+    const snapshot = assembleVideoSpaceCatalogue({
+      records: [reference],
+      completeness: createInventoryCompletenessTracker().snapshot(),
+      viewerEName: '@owner.w3id',
+      toStreamId: (grant) => {
+        grants.push(grant);
+        return 'reference-stream';
+      },
+    });
+
+    expect(snapshot.items[0]?.streamIds).toEqual(['reference-stream']);
+    expect(grants).toEqual([
+      {
+        fileUri: 'w3ds://file?id=@friend.w3id/call-1',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceReferenceId: 'local-reference',
+        sourceReferenceFileId: 'canonical-file',
+        accessBasis: 'reference',
+      },
+    ]);
+  });
+
   it('relabels stale generic ontology titles with the verified ownership scope', () => {
     const snapshot = assembleVideoSpaceCatalogue({
       records: [{ ...personal, title: 'Video' }],

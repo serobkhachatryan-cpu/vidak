@@ -134,7 +134,11 @@ export interface MeshengerVideo {
   sourceSpaceKey?: string;
   /** Server-only. Stripped before any client JSON. */
   sourceChatId?: string;
-  accessBasis?: 'personal' | 'membership' | 'history';
+  /** Server-only local File-reference envelope used for current authorization. */
+  sourceReferenceId?: string;
+  /** Server-only canonical File id that the reference must still target. */
+  sourceReferenceFileId?: string;
+  accessBasis?: VideoAccessBasis;
 }
 
 /** A chat surfaced from the user's own vault or a currently-authorized group. */
@@ -212,6 +216,8 @@ interface StreamGrant {
   /** Authorization context for a shared source; signed but never client-readable. */
   sourceSpaceKey?: string;
   sourceChatId?: string;
+  sourceReferenceId?: string;
+  sourceReferenceFileId?: string;
   accessBasis?: VideoAccessBasis;
   expiresAt: number;
 }
@@ -238,11 +244,10 @@ interface ChatReference {
 }
 type SourceFailure = 'denied' | 'missing' | 'unavailable' | 'rate_limited' | 'rejected';
 type RateLimitMode = 'fail-fast' | 'backoff';
-export type SharedSpaceProbe = {
-  eName: string;
-  kind: 'group' | 'direct';
-  chatId?: string;
-};
+export type SharedSpaceProbe =
+  | { eName: string; kind: 'group' }
+  | { eName: string; kind: 'direct'; chatId: string }
+  | { eName: string; kind: 'reference'; referenceId: string; fileId: string };
 export type SharedSpaceAccess = {
   access: 'ok' | 'denied' | 'missing' | 'retry';
   member: boolean;
@@ -610,6 +615,47 @@ export class MeshengerVideoLibrary {
     rateLimit: RateLimitMode = 'fail-fast',
   ): Promise<SharedSpaceAccess> {
     requireEName(user.eName);
+    if (space.kind === 'reference') {
+      // A direct File share is represented by a reference stored in the
+      // viewer's own eVault. Re-read that specific envelope and bind it to the
+      // canonical file before returning the card or opening its media. This is
+      // the actual authorization evidence; a canonical owner's vault need not
+      // have a GroupManifest, so probing one here made legitimate shares vanish.
+      const viewerVaultRead = await this.readSource(
+        () => this.resolveEVault(user.eName, rateLimit),
+        undefined,
+      );
+      if (viewerVaultRead.failure === 'denied') return { access: 'denied', member: false };
+      if (viewerVaultRead.failure === 'missing') return { access: 'missing', member: false };
+      if (isRetryFailure(viewerVaultRead.failure) || !viewerVaultRead.value) {
+        return { access: 'retry', member: false };
+      }
+      const viewerVault = viewerVaultRead.value;
+      const referenceRead = await this.readSource(
+        () =>
+          this.readEnvelope(
+            viewerVault.ownerEName,
+            viewerVault.eVaultUri,
+            space.referenceId,
+            rateLimit,
+          ),
+        undefined,
+      );
+      if (referenceRead.failure === 'denied') return { access: 'denied', member: false };
+      if (referenceRead.failure === 'missing') return { access: 'missing', member: false };
+      if (isRetryFailure(referenceRead.failure) || !referenceRead.value) {
+        return { access: 'retry', member: false };
+      }
+      const target = fileRecordReferenceTarget(referenceRead.value);
+      if (!target) return { access: 'missing', member: false };
+      return {
+        access:
+          sameEName(target.ownerEName, space.eName) && target.metaEnvelopeId === space.fileId
+            ? 'ok'
+            : 'denied',
+        member: sameEName(target.ownerEName, space.eName) && target.metaEnvelopeId === space.fileId,
+      };
+    }
     const vaultRead = await this.readSource(
       () => this.resolveEVault(space.eName, rateLimit),
       undefined,
@@ -823,8 +869,12 @@ export class MeshengerVideoLibrary {
     if (
       !sourceSpaceKey ||
       !isEName(sourceSpaceKey) ||
-      (accessBasis !== 'personal' && accessBasis !== 'membership' && accessBasis !== 'history') ||
-      (accessBasis === 'history' && !grant.sourceChatId)
+      (accessBasis !== 'personal' &&
+        accessBasis !== 'membership' &&
+        accessBasis !== 'history' &&
+        accessBasis !== 'reference') ||
+      (accessBasis === 'history' && !grant.sourceChatId) ||
+      (accessBasis === 'reference' && (!grant.sourceReferenceId || !grant.sourceReferenceFileId))
     ) {
       throw new MeshengerVideoLibraryError(
         'This source cannot be played until its access is verified.',
@@ -843,14 +893,23 @@ export class MeshengerVideoLibrary {
     const probes: SharedSpaceProbe[] =
       accessBasis === 'membership'
         ? [{ eName: sourceSpaceKey, kind: 'group' }]
-        : [
-            {
-              eName: sourceSpaceKey,
-              kind: 'direct',
-              ...(grant.sourceChatId ? { chatId: grant.sourceChatId } : {}),
-            },
-            { eName: sourceSpaceKey, kind: 'group' },
-          ];
+        : accessBasis === 'reference'
+          ? [
+              {
+                eName: sourceSpaceKey,
+                kind: 'reference',
+                referenceId: grant.sourceReferenceId as string,
+                fileId: grant.sourceReferenceFileId as string,
+              },
+            ]
+          : [
+              {
+                eName: sourceSpaceKey,
+                kind: 'direct',
+                chatId: grant.sourceChatId as string,
+              },
+              { eName: sourceSpaceKey, kind: 'group' },
+            ];
     let retrying = false;
     for (const source of probes) {
       // Playback is interactive work. A short bounded retry turns a transient
@@ -915,6 +974,12 @@ export class MeshengerVideoLibrary {
             accessScope: grantInput.accessScope,
             ...(grantInput.sourceSpaceKey ? { sourceSpaceKey: grantInput.sourceSpaceKey } : {}),
             ...(grantInput.sourceChatId ? { sourceChatId: grantInput.sourceChatId } : {}),
+            ...(grantInput.sourceReferenceId
+              ? { sourceReferenceId: grantInput.sourceReferenceId }
+              : {}),
+            ...(grantInput.sourceReferenceFileId
+              ? { sourceReferenceFileId: grantInput.sourceReferenceFileId }
+              : {}),
             ...(grantInput.accessBasis ? { accessBasis: grantInput.accessBasis } : {}),
             expiresAt: Date.now() + streamLifetimeMs,
           },
@@ -1835,9 +1900,14 @@ export class MeshengerVideoLibrary {
         queue.push({ type: 'direct-open', ownerEName: spaceKey, attempts: 0 });
       }
     };
-    const enqueueFileReference = (target: FileRecordReferenceTarget, sourceSpaceKey: string) => {
-      if (scheduledFileReferences.has(target.fileUri)) return;
-      scheduledFileReferences.add(target.fileUri);
+    const enqueueFileReference = (
+      target: FileRecordReferenceTarget,
+      sourceSpaceKey: string,
+      referenceId: string,
+    ) => {
+      const referenceKey = `${sourceSpaceKey}\u0000${referenceId}\u0000${target.fileUri}`;
+      if (scheduledFileReferences.has(referenceKey)) return;
+      scheduledFileReferences.add(referenceKey);
       queue.push({
         type: 'resolve-media',
         vaultKey: target.ownerEName,
@@ -1847,7 +1917,7 @@ export class MeshengerVideoLibrary {
         envelopeId: target.metaEnvelopeId,
         sourceId: 'file-reference',
         sourceSpaceKey,
-        sourceMetadata: { type: 'file' },
+        sourceMetadata: { type: 'file', sourceReferenceId: referenceId },
         attempts: 0,
       });
     };
@@ -1980,8 +2050,12 @@ export class MeshengerVideoLibrary {
                 );
               } else if (item.ontologyId === fileOntology) {
                 found.push(
-                  ...this.discoverFileVideos(eName, page.value.items, referenced, eName, (target) =>
-                    enqueueFileReference(target, eName),
+                  ...this.discoverFileVideos(
+                    eName,
+                    page.value.items,
+                    referenced,
+                    eName,
+                    (target, referenceId) => enqueueFileReference(target, eName, referenceId),
                   ),
                 );
               } else {
@@ -2403,7 +2477,8 @@ export class MeshengerVideoLibrary {
                     page.value.items,
                     referenced,
                     eName,
-                    (target) => enqueueFileReference(target, item.groupEName),
+                    (target, referenceId) =>
+                      enqueueFileReference(target, item.groupEName, referenceId),
                   ),
                 );
               }
@@ -3512,6 +3587,7 @@ export class MeshengerVideoLibrary {
     // only the conversation id that originally authorized the reference so
     // its eventual playback grant can be checked against that same source.
     const sourceChatId = optionalString(item.sourceMetadata?.chatId);
+    const sourceReferenceId = optionalString(item.sourceMetadata?.sourceReferenceId);
     const parsedFile = parseW3dsFileUri(item.fileUri);
     const envelopeId = parsedFile?.metaEnvelopeId ?? item.envelopeId;
     const ownerHint = parsedFile?.ownerEName ?? item.owner;
@@ -3583,18 +3659,29 @@ export class MeshengerVideoLibrary {
         return;
       }
       const canonicalOwnerEName = vaultRead.value.vault.ownerEName;
+      const viewerOwnedReference =
+        Boolean(sourceReferenceId) && sameEName(item.sourceSpaceKey, viewerEName);
       found.push(
         ...records.map((record) => ({
           ...record,
-          // The dereferenced envelope, rather than the viewer's local
-          // reference, is the source whose current authorization governs a
-          // foreign File. Keep a personal canonical file personal, but make
-          // every foreign canonical file revalidate against its own space.
+          // A reference stored in the viewer's own vault is its own durable
+          // authorization proof. Foreign/group references keep the source
+          // space that exposed them and stay membership-gated.
           sourceSpaceKey:
-            record.accessScope === 'personal' ? item.sourceSpaceKey : canonicalOwnerEName,
+            record.accessScope === 'personal'
+              ? item.sourceSpaceKey
+              : viewerOwnedReference
+                ? canonicalOwnerEName
+                : item.sourceSpaceKey,
           ...(sourceChatId ? { sourceChatId } : {}),
+          ...(viewerOwnedReference && sourceReferenceId ? { sourceReferenceId } : {}),
+          ...(viewerOwnedReference ? { sourceReferenceFileId: envelopeId } : {}),
           accessBasis:
-            record.accessScope === 'personal' ? ('personal' as const) : ('membership' as const),
+            record.accessScope === 'personal'
+              ? ('personal' as const)
+              : viewerOwnedReference
+                ? ('reference' as const)
+                : ('membership' as const),
         })),
       );
       return;
@@ -3682,11 +3769,11 @@ export class MeshengerVideoLibrary {
     files: Envelope[],
     referenced: Set<string>,
     viewerEName: string,
-    onReference?: (target: FileRecordReferenceTarget) => void,
+    onReference?: (target: FileRecordReferenceTarget, referenceId: string) => void,
   ): DiscoveredVideo[] {
     for (const file of files) {
       const target = fileRecordReferenceTarget(file);
-      if (target) onReference?.(target);
+      if (target) onReference?.(target, file.id);
     }
     return discoverFileRecordVideos(ownerEName, files, referenced, viewerEName);
   }
@@ -4054,6 +4141,8 @@ export function verifyMeshengerVideoStreamId(
   const accessScope = optionalString(grant?.accessScope);
   const sourceSpaceKey = optionalString(grant?.sourceSpaceKey);
   const sourceChatId = optionalString(grant?.sourceChatId);
+  const sourceReferenceId = optionalString(grant?.sourceReferenceId);
+  const sourceReferenceFileId = optionalString(grant?.sourceReferenceFileId);
   const accessBasis = optionalString(grant?.accessBasis);
   if (
     !eName ||
@@ -4068,8 +4157,12 @@ export function verifyMeshengerVideoStreamId(
     accessScope === 'shared' &&
     (!sourceSpaceKey ||
       !isEName(sourceSpaceKey) ||
-      (accessBasis !== 'personal' && accessBasis !== 'membership' && accessBasis !== 'history') ||
-      (accessBasis === 'history' && !sourceChatId))
+      (accessBasis !== 'personal' &&
+        accessBasis !== 'membership' &&
+        accessBasis !== 'history' &&
+        accessBasis !== 'reference') ||
+      (accessBasis === 'history' && !sourceChatId) ||
+      (accessBasis === 'reference' && (!sourceReferenceId || !sourceReferenceFileId)))
   )
     invalidStream();
   if (expiresAt <= Date.now() && !options?.allowExpired)
@@ -4084,6 +4177,8 @@ export function verifyMeshengerVideoStreamId(
     accessScope,
     ...(sourceSpaceKey ? { sourceSpaceKey } : {}),
     ...(sourceChatId ? { sourceChatId } : {}),
+    ...(sourceReferenceId ? { sourceReferenceId } : {}),
+    ...(sourceReferenceFileId ? { sourceReferenceFileId } : {}),
     ...(accessBasis ? { accessBasis: accessBasis as VideoAccessBasis } : {}),
     expiresAt,
   };

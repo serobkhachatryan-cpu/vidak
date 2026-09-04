@@ -93,6 +93,8 @@ export function publicLibraryItems(
     const {
       sourceSpaceKey: _space,
       sourceChatId: _chat,
+      sourceReferenceId: _reference,
+      sourceReferenceFileId: _referenceFile,
       accessBasis: _basis,
       sharedBy: _untrustedSharedBy,
       ...publicItem
@@ -589,6 +591,16 @@ function sharedItemProbes(item: MeshengerVideo): SharedSpaceProbe[] {
   if (item.accessBasis === 'membership') {
     return [{ eName: item.sourceSpaceKey, kind: 'group' }];
   }
+  if (item.accessBasis === 'reference' && item.sourceReferenceId && item.sourceReferenceFileId) {
+    return [
+      {
+        eName: item.sourceSpaceKey,
+        kind: 'reference',
+        referenceId: item.sourceReferenceId,
+        fileId: item.sourceReferenceFileId,
+      },
+    ];
+  }
   if (item.accessBasis === 'history' && item.sourceChatId) {
     return [
       { eName: item.sourceSpaceKey, kind: 'direct', chatId: item.sourceChatId },
@@ -599,5 +611,9 @@ function sharedItemProbes(item: MeshengerVideo): SharedSpaceProbe[] {
 }
 
 function sharedSpaceProbeKey(space: SharedSpaceProbe): string {
-  return `${space.kind}\u0000${space.eName}\u0000${space.chatId ?? ''}`;
+  return `${space.kind}\u0000${space.eName}\u0000${
+    space.kind === 'direct' ? space.chatId : ''
+  }\u0000${space.kind === 'reference' ? space.referenceId : ''}\u0000${
+    space.kind === 'reference' ? space.fileId : ''
+  }`;
 }

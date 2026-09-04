@@ -203,6 +203,110 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('opens a shared File reference after checking the viewer-owned reference proof', async () => {
+    const library = configuredLibrary();
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/files/shared-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/shared-video.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/shared-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceReferenceId: 'local-reference',
+        sourceReferenceFileId: 'shared-file',
+        accessBasis: 'reference',
+      },
+      secret,
+    );
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/shared-video.mp4',
+      );
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        {
+          eName: '@friend.w3id',
+          kind: 'reference',
+          referenceId: 'local-reference',
+          fileId: 'shared-file',
+        },
+        'backoff',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('verifies that a shared File reference still targets the exact canonical file', async () => {
+    let canonicalFileId = 'shared-file';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@person.w3id', uri: 'https://person-vault.example' });
+        }
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as { query?: string };
+          if (body.query?.includes('metaEnvelope(id:')) {
+            return json({
+              data: {
+                metaEnvelope: {
+                  id: 'local-reference',
+                  ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+                  parsed: {
+                    isReference: true,
+                    canonicalOwnerEName: '@friend.w3id',
+                    canonicalFileId,
+                  },
+                  envelopes: [],
+                },
+              },
+            });
+          }
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+    const library = configuredLibrary();
+    const probe = {
+      eName: '@friend.w3id',
+      kind: 'reference' as const,
+      referenceId: 'local-reference',
+      fileId: 'shared-file',
+    };
+
+    try {
+      await expect(
+        library.probeSharedSpaceAccess({ eName: '@person.w3id' }, probe),
+      ).resolves.toEqual({ access: 'ok', member: true });
+      canonicalFileId = 'a-different-file';
+      await expect(
+        library.probeSharedSpaceAccess({ eName: '@person.w3id' }, probe),
+      ).resolves.toEqual({ access: 'denied', member: false });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('refuses a shared stream when its current source access is gone', async () => {
     const library = configuredLibrary();
     vi.spyOn(library, 'probeSharedSpaceAccess').mockResolvedValue({
@@ -3473,7 +3577,9 @@ describe('Meshenger video library', () => {
       expect(card?.title).not.toBe('Untitled video');
       expect(card?.accessScope).toBe('shared');
       expect(card?.sourceSpaceKey).toBe('@friend.w3id');
-      expect(card?.accessBasis).toBe('membership');
+      expect(card?.sourceReferenceId).toBe('local-reference');
+      expect(card?.sourceReferenceFileId).toBe('canonical-clip');
+      expect(card?.accessBasis).toBe('reference');
       expect(card?.streamIds).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();

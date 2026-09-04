@@ -25,6 +25,9 @@ export interface VideoSpaceCatalogueItem {
   streamIds: string[];
   sourceSpaceKey?: string;
   sourceChatId?: string;
+  /** Server-only proof for a File reference stored in the viewer's vault. */
+  sourceReferenceId?: string;
+  sourceReferenceFileId?: string;
   accessBasis?: VideoAccessBasis;
 }
 
@@ -38,6 +41,8 @@ export interface VideoSpaceStreamGrantInput {
   accessScope: VideoSpaceAccessScope;
   sourceSpaceKey?: string;
   sourceChatId?: string;
+  sourceReferenceId?: string;
+  sourceReferenceFileId?: string;
   accessBasis?: VideoAccessBasis;
 }
 
@@ -47,6 +52,9 @@ function canIssueViewerStream(item: DiscoveredVideoRecord): boolean {
   return (
     item.accessBasis === 'personal' ||
     item.accessBasis === 'membership' ||
+    (item.accessBasis === 'reference' &&
+      Boolean(item.sourceReferenceId) &&
+      Boolean(item.sourceReferenceFileId)) ||
     Boolean(item.sourceChatId)
   );
 }
@@ -87,12 +95,20 @@ export function assembleVideoSpaceCatalogue(input: {
                 accessScope: item.accessScope,
                 ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
                 ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
+                ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
+                ...(item.sourceReferenceFileId
+                  ? { sourceReferenceFileId: item.sourceReferenceFileId }
+                  : {}),
                 ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
               }),
             )
           : [],
         ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
         ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
+        ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
+        ...(item.sourceReferenceFileId
+          ? { sourceReferenceFileId: item.sourceReferenceFileId }
+          : {}),
         ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
       }))
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
