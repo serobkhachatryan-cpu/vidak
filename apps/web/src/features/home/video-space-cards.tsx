@@ -2,6 +2,8 @@
 
 import type { Video } from '@w3ds/types';
 import { Button, VideoSpacePoster } from '@w3ds/ui';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   canPlayLibraryVideo,
   libraryCardDetails,
@@ -83,6 +85,7 @@ export function OwnedVideoCard({
 }
 
 export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
+  const router = useRouter();
   const visibilityLabel = videoSpaceVisibilityLabels[video.visibility];
   const watchHref = `/watch/space/${encodeURIComponent(video.id)}`;
   const canPlay = canPlayLibraryVideo(video);
@@ -105,9 +108,9 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   return (
     <article className="overflow-hidden rounded-xl border border-border bg-surface-raised">
       {canPlay ? (
-        <a href={watchHref} aria-label={`Watch ${video.title}`} className="block">
+        <Link href={watchHref} aria-label={`Watch ${video.title}`} className="block">
           {poster}
-        </a>
+        </Link>
       ) : (
         poster
       )}
@@ -117,12 +120,7 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
           <p className="text-sm text-muted-foreground">{libraryCardDetails(video)}</p>
         </div>
         {canPlay ? (
-          <Button
-            size="sm"
-            onClick={() => {
-              window.location.assign(watchHref);
-            }}
-          >
+          <Button size="sm" onClick={() => router.push(watchHref)}>
             Watch video
           </Button>
         ) : (
