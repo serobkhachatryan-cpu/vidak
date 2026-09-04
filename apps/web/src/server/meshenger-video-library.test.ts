@@ -115,6 +115,25 @@ describe('Meshenger video library', () => {
     ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied' }));
   });
 
+  it('reuses one renewed grant for repeated ranges on the same expired stream', async () => {
+    let now = 1_000;
+    const expired = createMeshengerVideoStreamId({ ...grant, expiresAt: now - 1 }, secret);
+    const library = createMeshengerVideoLibrary(
+      {
+        W3DS_AUTH_PLATFORM_NAME: 'vidak',
+        W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        W3DS_AUTH_JWT_SECRET: secret,
+      },
+      { now: () => now },
+    );
+
+    const first = await library.renewPlayableStream({ eName: grant.eName }, expired);
+    now += 1_000;
+    const second = await library.renewPlayableStream({ eName: grant.eName }, expired);
+
+    expect(second).toBe(first);
+  });
+
   it('rejects a shared source without signed source context before contacting an eVault', async () => {
     const fetcher = vi.fn();
     vi.stubGlobal('fetch', fetcher);

@@ -95,6 +95,7 @@ const maxRejectedAttempts = 4;
 // route still verifies the current user on every request.
 const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
+const maxRenewedStreams = 256;
 // Give a user-initiated source read a short quiet window before the next
 // inventory wave hits the same eVault. Inventory is resumable; playback is
 // immediately visible, so the interactive request takes precedence.
@@ -219,6 +220,11 @@ interface Config {
 }
 interface CachedMediaUrl {
   url: string;
+  expiresAt: number;
+}
+interface RenewedStream {
+  eName: string;
+  streamId: string;
   expiresAt: number;
 }
 type DiscoveredVideo = DiscoveredVideoRecord;
@@ -357,6 +363,11 @@ const chatMessagesQuery = `query AuthorizedChatMessages($ontologyId: ID!, $chatI
 }`;
 const readQuery = `query MeshengerVideoEnvelope($id: ID!) { metaEnvelope(id: $id) { ${envelopeNode} } }`;
 const cachedMediaUrls = new Map<string, CachedMediaUrl>();
+// Native media elements retain their original `src` while issuing subsequent
+// Range requests. Retain the renewed opaque grant server-side so one expired
+// URL does not mint a fresh grant per range. Every request still calls
+// resolveMediaUrl and rechecks current source authorization.
+const renewedStreams = new Map<string, RenewedStream>();
 
 function getInventoryJobStoreForLibrary(): InventoryJobStore {
   if (process.env.DATABASE_URL?.trim()) return getInventoryJobStore();
@@ -732,16 +743,32 @@ export class MeshengerVideoLibrary {
 
   /** Reissues a viewer-bound stream after rechecking its current source access. */
   async renewPlayableStream(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string> {
+    const bound = this.requireBoundStreamGrant(user, streamId, { allowExpired: true });
+    const now = this.now();
+    const cached = renewedStreams.get(streamId);
+    if (cached && cached.eName === bound.grant.eName && cached.expiresAt > now) {
+      return cached.streamId;
+    }
     const { grant } = await this.requirePlayableStreamGrant(user, streamId, {
       allowExpired: true,
     });
-    return createMeshengerVideoStreamId(
+    const renewedStreamId = createMeshengerVideoStreamId(
       {
         ...grant,
-        expiresAt: this.now() + streamLifetimeMs,
+        expiresAt: now + streamLifetimeMs,
       },
       this.config.signingSecret,
     );
+    cacheRenewedStream(
+      streamId,
+      {
+        eName: grant.eName,
+        streamId: renewedStreamId,
+        expiresAt: now + streamLifetimeMs,
+      },
+      now,
+    );
+    return renewedStreamId;
   }
 
   /**
@@ -4414,6 +4441,13 @@ function cacheMediaUrl(key: string, url: string, expiresAt: number): void {
       cachedMediaUrls.delete(cachedKey);
   }
   cachedMediaUrls.set(key, { url, expiresAt });
+}
+function cacheRenewedStream(key: string, renewed: RenewedStream, now: number): void {
+  for (const [cachedKey, cached] of renewedStreams) {
+    if (cached.expiresAt <= now || renewedStreams.size >= maxRenewedStreams)
+      renewedStreams.delete(cachedKey);
+  }
+  renewedStreams.set(key, renewed);
 }
 function httpUrl(value: string): string {
   try {
