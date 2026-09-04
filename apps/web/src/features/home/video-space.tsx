@@ -6,6 +6,8 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { videoApiClient } from '../../lib/video-api-client';
+import { useCurrentUser } from '../auth/auth-provider';
+import { createExpiringMemoryCache } from './expiring-memory-cache';
 import { createLatestRequestTracker, shouldStartRequest } from './latest-request';
 import { libraryPollingDelayMs } from './library-polling';
 import { PublicExplorePanel } from './public-explore-panel';
@@ -38,6 +40,34 @@ type OwnedState =
   | { status: 'ready'; items: readonly Video[] }
   | { status: 'error' };
 
+type VideoSpaceMemorySnapshot = {
+  library: LibraryState;
+  owned: OwnedState;
+};
+
+const videoSpaceMemory = createExpiringMemoryCache<VideoSpaceMemorySnapshot>({
+  maxAgeMs: 2 * 60 * 1_000,
+  maxEntries: 2,
+});
+
+function cloneLibraryState(library: LibraryState): LibraryState {
+  return {
+    ...library,
+    items: [...library.items],
+  };
+}
+
+function cloneOwnedState(owned: OwnedState): OwnedState {
+  return owned.status === 'ready' ? { ...owned, items: [...owned.items] } : { ...owned };
+}
+
+function cloneVideoSpaceMemory(snapshot: VideoSpaceMemorySnapshot): VideoSpaceMemorySnapshot {
+  return {
+    library: cloneLibraryState(snapshot.library),
+    owned: cloneOwnedState(snapshot.owned),
+  };
+}
+
 function tabFromSearch(value: string | null): VideoSpaceTab {
   if (value === 'yours' || value === 'shared' || value === 'explore') return value;
   return 'all';
@@ -47,14 +77,22 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const user = useCurrentUser();
   const tab = tabFromSearch(searchParams.get('tab'));
-  const [library, setLibrary] = useState<LibraryState>({ status: 'idle', items: [] });
-  const [owned, setOwned] = useState<OwnedState>({ status: 'loading' });
+  const [initialMemory] = useState<VideoSpaceMemorySnapshot | undefined>(() => {
+    const cached = user ? videoSpaceMemory.get(user.id) : undefined;
+    return cached ? cloneVideoSpaceMemory(cached) : undefined;
+  });
+  const [library, setLibrary] = useState<LibraryState>(
+    initialMemory?.library ?? { status: 'idle', items: [] },
+  );
+  const [owned, setOwned] = useState<OwnedState>(initialMemory?.owned ?? { status: 'loading' });
   const [pendingVideoId, setPendingVideoId] = useState<string | undefined>();
   const [actionError, setActionError] = useState<string | undefined>();
   const libraryRequest = useRef(createLatestRequestTracker());
   const ownedRequest = useRef(createLatestRequestTracker());
   const libraryAbort = useRef<AbortController | undefined>(undefined);
+  const loadedUserId = useRef<string | undefined>(undefined);
 
   const loadEvault = useCallback(async (refresh = false) => {
     if (
@@ -134,8 +172,29 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   );
 
   useEffect(() => {
+    const userId = user?.id;
+    if (!userId || loadedUserId.current === userId) return;
+    loadedUserId.current = userId;
+
+    const cached = videoSpaceMemory.get(userId);
+    if (cached) {
+      const snapshot = cloneVideoSpaceMemory(cached);
+      setLibrary(snapshot.library);
+      setOwned(snapshot.owned);
+    } else {
+      setLibrary({ status: 'idle', items: [] });
+      setOwned({ status: 'loading' });
+    }
     void load(false);
-  }, [load]);
+  }, [load, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || library.status !== 'ready' || owned.status !== 'ready') return;
+    videoSpaceMemory.set(user.id, {
+      library: cloneLibraryState(library),
+      owned: cloneOwnedState(owned),
+    });
+  }, [library, owned, user?.id]);
 
   useEffect(() => {
     return () => {
