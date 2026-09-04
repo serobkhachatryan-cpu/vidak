@@ -39,7 +39,6 @@ export async function GET(request: NextRequest) {
       ...page,
       items: page.items.map((channel) => ({
         id: channel.id,
-        ownerId: channel.ownerId,
         handle: channel.handle,
         name: channel.name,
         ...(channel.description ? { description: channel.description } : {}),

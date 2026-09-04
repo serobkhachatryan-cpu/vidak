@@ -105,4 +105,41 @@ describe('eVault video stream route', () => {
     expect(renewPlayableStream).toHaveBeenCalledWith(viewer, 'expired-stream');
     expect(resolveMediaUrl).toHaveBeenNthCalledWith(2, viewer, 'renewed-stream');
   });
+
+  it('refreshes the renewed stream when its first upstream source is rejected', async () => {
+    const resolveMediaUrl = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new EVaultVideoLibraryError('This video link has expired.', 'stream_expired', 401),
+      )
+      .mockResolvedValueOnce('https://media.example/renewed.mp4')
+      .mockResolvedValueOnce('https://media.example/recovered.mp4');
+    const renewPlayableStream = vi.fn().mockResolvedValue('renewed-stream');
+    const invalidateMediaUrl = vi.fn();
+    mocks.createLibrary.mockReturnValue({
+      resolveMediaUrl,
+      renewPlayableStream,
+      invalidateMediaUrl,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 403 }))
+        .mockResolvedValueOnce(new Response('recovered', { status: 206 })),
+    );
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/evault/videos/expired-stream', {
+        headers: { authorization: 'Bearer access-token' },
+      }),
+      { params: Promise.resolve({ streamId: 'expired-stream' }) },
+    );
+
+    expect(response.status).toBe(206);
+    await expect(response.text()).resolves.toBe('recovered');
+    expect(renewPlayableStream).toHaveBeenCalledWith(viewer, 'expired-stream');
+    expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'renewed-stream');
+    expect(resolveMediaUrl).toHaveBeenLastCalledWith(viewer, 'renewed-stream');
+  });
 });
