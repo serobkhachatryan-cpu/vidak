@@ -10,8 +10,8 @@ function LibraryContent() {
   return (
     <ApplicationShell currentHref="/library">
       <Page
-        title="Linked channel videos"
-        description="Public videos from channels you chose to link to Vidak. Your private eVault videos are in Your videos."
+        title="Linked public-channel videos"
+        description="This optional library contains public videos from channels you choose to link. Your private W3DS videos are in Your video space."
       >
         <ImportedVideosLibrary />
       </Page>

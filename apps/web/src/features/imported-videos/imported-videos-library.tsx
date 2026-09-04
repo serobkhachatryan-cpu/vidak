@@ -58,13 +58,13 @@ export function ImportedVideosLibrary() {
       <EmptyState
         icon="◌"
         title="No linked-channel videos yet"
-        description="This area contains only public videos from channels you deliberately link. Your private eVault videos stay in Your videos."
+        description="This optional library contains only public videos from channels you deliberately link. Vidak does not copy their media. Your private W3DS videos stay in Your video space."
         action={
           <div className="flex flex-col items-center gap-2 sm:flex-row">
             <Button onClick={() => router.push('/settings?section=imports')}>
-              Add a public YouTube channel
+              Link a public YouTube channel
             </Button>
-            <Button variant="secondary" onClick={() => router.push('/your-videos')}>
+            <Button variant="secondary" onClick={() => router.push('/')}>
               Open your video space
             </Button>
           </div>
