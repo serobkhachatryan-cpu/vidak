@@ -423,6 +423,43 @@ describe('VideoPreviewService', () => {
     ).resolves.toMatchObject({ status: 'pending' });
   });
 
+  it('retries a retryable scheduled preview once without a second library request', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    let resolves = 0;
+    const service = new VideoPreviewService({
+      store,
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      extractor: { extractUsefulFrame: async () => ({ jpeg, captureSeconds: 3 }) },
+      evault: {
+        inspectStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        resolveMediaUrl: async () => {
+          resolves += 1;
+          if (resolves === 1) {
+            const error = Object.assign(new Error('rate limited'), { status: 429 });
+            throw error;
+          }
+          return 'https://media.example/private.mp4';
+        },
+      },
+      backfillRetryDelayMs: 0,
+    });
+
+    await service.scheduleLibraryBackfill({ eName: '@owner.w3id' }, [
+      { streamIds: ['retry-once'] },
+    ]);
+
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/retry-once'),
+      ).resolves.toMatchObject({ status: 'ready' });
+    });
+    expect(resolves).toBe(2);
+  });
+
   it('does not treat LocalDiskMediaStorage as a public URL surface', () => {
     expect(new LocalDiskMediaStorage('/tmp/vidak-preview-test').createStorageKey()).toMatch(
       /^media_/,

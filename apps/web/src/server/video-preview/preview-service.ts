@@ -65,12 +65,20 @@ export interface VideoPreviewServiceOptions {
   extractor?: VideoFrameExtractor;
   evault?: AuthorizedEVaultPreviewSource;
   createId?: () => string;
+  /** Delay before the background queue retries a retryable preview source once. */
+  backfillRetryDelayMs?: number;
 }
 
 const inFlight = new Set<string>();
 const stalePendingMs = 2 * 60 * 1000;
 const staleFailedMs = 60 * 60 * 1000;
 const maxConcurrentBackfillPreviews = 2;
+const backfillRetryDelayMs = 15_000;
+type BackfillTask = {
+  key: string;
+  run: () => Promise<VideoPreviewRecord>;
+  retryPending?: () => Promise<VideoPreviewRecord>;
+};
 const unavailableEVaultPoster = new TextEncoder().encode(`
   <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" role="img" aria-label="Video">
     <rect width="1280" height="720" fill="#202938"/>
@@ -90,8 +98,10 @@ export class VideoPreviewService {
   private readonly extractor: VideoFrameExtractor;
   private readonly evault: AuthorizedEVaultPreviewSource | undefined;
   private readonly createId: () => string;
+  private readonly backfillRetryDelayMs: number;
   private readonly queuedBackfillKeys = new Set<string>();
-  private readonly backfillQueue: Array<{ key: string; run: () => Promise<void> }> = [];
+  private readonly backfillQueue: BackfillTask[] = [];
+  private readonly pendingBackfillRetries = new Map<string, number>();
   private activeBackfills = 0;
 
   constructor(options: VideoPreviewServiceOptions) {
@@ -102,6 +112,7 @@ export class VideoPreviewService {
     this.extractor = options.extractor ?? new FfmpegVideoFrameExtractor();
     this.evault = options.evault;
     this.createId = options.createId ?? (() => randomUUID());
+    this.backfillRetryDelayMs = options.backfillRetryDelayMs ?? backfillRetryDelayMs;
   }
 
   describeOwnedPoster(video: Pick<Video, 'id' | 'thumbnailUrl'>): VideoPosterDescriptor {
@@ -141,9 +152,10 @@ export class VideoPreviewService {
     videos: ReadonlyArray<Pick<Video, 'id' | 'thumbnailUrl'>>,
   ): Promise<void> {
     for (const video of videos) {
-      this.enqueueBackfill(`owned:${user.id}:${video.id}`, () =>
-        this.ensureOwnedPreview(user, video.id).then(() => undefined),
-      );
+      this.enqueueBackfill({
+        key: `owned:${user.id}:${video.id}`,
+        run: () => this.ensureOwnedPreview(user, video.id),
+      });
     }
   }
 
@@ -154,9 +166,12 @@ export class VideoPreviewService {
     for (const item of items) {
       const streamId = item.streamIds?.[0];
       if (!streamId) continue;
-      this.enqueueBackfill(`evault:${user.eName}:${streamId}`, () =>
-        this.ensureEVaultPreview(user, streamId, { retryFailed: true }).then(() => undefined),
-      );
+      this.enqueueBackfill({
+        key: `evault:${user.eName}:${streamId}`,
+        run: () => this.ensureEVaultPreview(user, streamId, { retryFailed: true }),
+        retryPending: () =>
+          this.ensureEVaultPreview(user, streamId, { retryFailed: true, retryPending: true }),
+      });
     }
   }
 
@@ -165,10 +180,10 @@ export class VideoPreviewService {
    * per card. A small shared worker pool keeps a large private catalogue from
    * saturating ffmpeg, storage, or the authorized eVault media endpoint.
    */
-  private enqueueBackfill(key: string, run: () => Promise<void>): void {
-    if (this.queuedBackfillKeys.has(key)) return;
-    this.queuedBackfillKeys.add(key);
-    this.backfillQueue.push({ key, run });
+  private enqueueBackfill(task: BackfillTask): void {
+    if (this.queuedBackfillKeys.has(task.key)) return;
+    this.queuedBackfillKeys.add(task.key);
+    this.backfillQueue.push(task);
     this.drainBackfillQueue();
   }
 
@@ -179,6 +194,13 @@ export class VideoPreviewService {
       this.activeBackfills += 1;
       void next
         .run()
+        .then((record) => {
+          if (record.status === 'pending' && next.retryPending) {
+            this.schedulePendingBackfillRetry(next);
+          } else {
+            this.pendingBackfillRetries.delete(next.key);
+          }
+        })
         .catch(() => undefined)
         .finally(() => {
           this.activeBackfills -= 1;
@@ -186,6 +208,22 @@ export class VideoPreviewService {
           this.drainBackfillQueue();
         });
     }
+  }
+
+  /** Retry a pending retryable source once without making the catalogue request wait. */
+  private schedulePendingBackfillRetry(task: BackfillTask): void {
+    const attempts = this.pendingBackfillRetries.get(task.key) ?? 0;
+    const retryPending = task.retryPending;
+    if (!retryPending) return;
+    if (attempts >= 1) {
+      this.pendingBackfillRetries.delete(task.key);
+      return;
+    }
+    this.pendingBackfillRetries.set(task.key, attempts + 1);
+    const timer = setTimeout(() => {
+      this.enqueueBackfill({ ...task, run: retryPending });
+    }, this.backfillRetryDelayMs);
+    timer.unref?.();
   }
 
   async openOwnedPreview(
@@ -258,7 +296,7 @@ export class VideoPreviewService {
   private async ensureEVaultPreview(
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
-    options?: { retryFailed?: boolean },
+    options?: { retryFailed?: boolean; retryPending?: boolean },
   ): Promise<VideoPreviewRecord> {
     const evault = this.requireEVaultSource();
     const { fileUri } = evault.inspectStream(user, streamId);
@@ -277,7 +315,7 @@ export class VideoPreviewService {
     sourceKind: VideoPreviewSourceKind,
     sourceKey: string,
     resolveSource: () => Promise<PreviewFrameSource | undefined>,
-    options?: { retryFailed?: boolean },
+    options?: { retryFailed?: boolean; retryPending?: boolean },
   ): Promise<VideoPreviewRecord> {
     const existing = await this.store.getBySource(sourceKind, sourceKey);
     if (existing?.status === 'ready' && existing.storageKey) return existing;
@@ -287,7 +325,7 @@ export class VideoPreviewService {
     ) {
       return existing;
     }
-    if (existing?.status === 'pending' && !isStale(existing)) {
+    if (existing?.status === 'pending' && !isStale(existing) && !options?.retryPending) {
       return existing;
     }
 
