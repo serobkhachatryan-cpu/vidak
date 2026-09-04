@@ -1,4 +1,5 @@
 import type { VideoSpaceKind } from './adapters';
+import type { VideoSpaceAccessScope } from './visibility';
 
 export interface ResolveVideoSpaceTitleInput {
   title?: string | undefined;
@@ -73,6 +74,20 @@ export function normalizeCatalogueDisplayTitle(title: string | undefined): strin
   const trimmed = title?.trim();
   if (!trimmed || isGenericVideoSpaceTitle(trimmed)) return 'Untitled video';
   return trimmed;
+}
+
+/**
+ * Preserve the generic title internally so richer metadata can still replace
+ * it during discovery, but never show a private-library card as an error-like
+ * “Untitled video”. The scope is already verified before catalogue output.
+ */
+export function privateLibraryDisplayTitle(
+  title: string | undefined,
+  accessScope: VideoSpaceAccessScope,
+): string {
+  const normalized = normalizeCatalogueDisplayTitle(title);
+  if (normalized !== 'Untitled video') return normalized;
+  return accessScope === 'personal' ? 'Private video' : 'Shared video';
 }
 
 export function resolveVideoSpaceTitle(input: ResolveVideoSpaceTitleInput): string {

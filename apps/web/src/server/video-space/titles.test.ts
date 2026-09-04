@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveVideoSpaceTitle, titleFromFilename } from './titles';
+import { privateLibraryDisplayTitle, resolveVideoSpaceTitle, titleFromFilename } from './titles';
 
 describe('video space titles', () => {
   it('prefers explicit title and caption over filename', () => {
@@ -46,6 +46,12 @@ describe('video space titles', () => {
 
   it('uses Untitled video as the final fallback', () => {
     expect(resolveVideoSpaceTitle({ kind: 'file' })).toBe('Untitled video');
+  });
+
+  it('uses ownership-aware labels only when rendering the private library', () => {
+    expect(privateLibraryDisplayTitle('Untitled video', 'personal')).toBe('Private video');
+    expect(privateLibraryDisplayTitle(undefined, 'shared')).toBe('Shared video');
+    expect(privateLibraryDisplayTitle('A real title', 'personal')).toBe('A real title');
   });
 
   it('ignores generic ontology placeholders in favour of filenames', () => {

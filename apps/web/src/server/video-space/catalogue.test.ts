@@ -80,13 +80,21 @@ describe('assembleVideoSpaceCatalogue', () => {
     expect(snapshot.items[0]?.streamIds).toEqual([]);
   });
 
-  it('relabels stale generic ontology titles for display', () => {
+  it('relabels stale generic ontology titles with the verified ownership scope', () => {
     const snapshot = assembleVideoSpaceCatalogue({
       records: [{ ...personal, title: 'Video' }],
       completeness: createInventoryCompletenessTracker().snapshot(),
       viewerEName: '@owner.w3id',
       toStreamId: () => 'stream',
     });
-    expect(snapshot.items[0]?.title).toBe('Untitled video');
+    expect(snapshot.items[0]?.title).toBe('Private video');
+
+    const sharedSnapshot = assembleVideoSpaceCatalogue({
+      records: [{ ...shared, title: 'Untitled video' }],
+      completeness: createInventoryCompletenessTracker().snapshot(),
+      viewerEName: '@owner.w3id',
+      toStreamId: () => 'must-not-be-created',
+    });
+    expect(sharedSnapshot.items[0]?.title).toBe('Shared video');
   });
 });
