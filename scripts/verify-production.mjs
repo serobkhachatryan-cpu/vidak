@@ -74,7 +74,9 @@ function usableSearchTerm(title) {
 }
 
 function isPlaceholderTitle(title) {
-  return /^(?:untitled video|img[ _-]?\d+|dsc[ _-]?\d+)$/i.test(title.trim());
+  return /^(?:untitled video|(?:img|dsc|mov|video|clip|recording)[ _-]?\d+(?:\s*\(\d+\))?)$/i.test(
+    title.trim(),
+  );
 }
 
 async function getJson(fetchImpl, url, label) {

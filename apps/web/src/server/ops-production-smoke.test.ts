@@ -103,4 +103,38 @@ describe('production smoke verifier', () => {
       }),
     ).rejects.not.toThrow('must-not-leak');
   });
+
+  it('rejects a camera-default public title without echoing it', async () => {
+    const technicalTitle = 'MOV-00421';
+    await expect(
+      smokeModule.runProductionSmoke({
+        origin,
+        fetchImpl: createFetch({
+          video: {
+            id: 'pub-video',
+            publicVideoId: 'pub-video',
+            title: technicalTitle,
+            durationSeconds: 42,
+            thumbnailUrl: '/api/videos/public/pub-video/thumbnail',
+            mediaContentUrl: '/api/videos/public/pub-video/media',
+          },
+        }),
+      }),
+    ).rejects.toThrow(smokeModule.ProductionSmokeError);
+    await expect(
+      smokeModule.runProductionSmoke({
+        origin,
+        fetchImpl: createFetch({
+          video: {
+            id: 'pub-video',
+            publicVideoId: 'pub-video',
+            title: technicalTitle,
+            durationSeconds: 42,
+            thumbnailUrl: '/api/videos/public/pub-video/thumbnail',
+            mediaContentUrl: '/api/videos/public/pub-video/media',
+          },
+        }),
+      }),
+    ).rejects.not.toThrow(technicalTitle);
+  });
 });
