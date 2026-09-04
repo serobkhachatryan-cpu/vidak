@@ -15,6 +15,7 @@ import {
   type VideoSpaceLibraryItem,
   videoSpaceEmptyCopy,
   videoSpaceGuideCopy,
+  videoSpacePanelCopy,
   videoSpaceTabs,
 } from './video-space-model';
 
@@ -74,6 +75,14 @@ describe('video space home model', () => {
       'Shared with me',
       'Public videos published in Vidak',
     ]);
+  });
+
+  it('describes the private library without suggesting a direct Messenger connection', () => {
+    const copy = Object.values(videoSpacePanelCopy).join(' ').toLocaleLowerCase();
+    expect(copy).toContain('w3ds space');
+    expect(copy).toContain('other w3ds apps');
+    expect(copy).not.toContain('messenger');
+    expect(copy).not.toContain('meshenger');
   });
 
   it('keeps processing copy off error language and failure copy secondary', () => {

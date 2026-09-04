@@ -22,6 +22,7 @@ import {
   type VideoSpaceTab,
   videoSpaceEmptyCopy,
   videoSpaceGuideCopy,
+  videoSpacePanelCopy,
   videoSpaceTabs,
 } from './video-space-model';
 
@@ -374,10 +375,10 @@ function PrivateLibraryPanel({
         }
         description={
           tab === 'shared'
-            ? 'When someone authorizes you to view a video in their W3DS space, it will appear here.'
+            ? videoSpacePanelCopy.emptyShared
             : tab === 'yours'
-              ? 'Videos you own — including Messenger, calls, groups, and other W3DS apps — appear here.'
-              : 'Videos you own or are authorized to view will appear here. Public videos published in Vidak stay in that tab.'
+              ? videoSpacePanelCopy.emptyMine
+              : videoSpacePanelCopy.emptyAll
         }
       />
     );
@@ -409,10 +410,10 @@ function PrivateLibraryPanel({
           </h2>
           <Text size="sm" tone="muted">
             {tab === 'shared'
-              ? 'Videos other people own that you are currently authorized to view. Finding them never changes their sharing rules.'
+              ? videoSpacePanelCopy.shared
               : tab === 'yours'
-                ? 'Every video you own in your W3DS space, including Messenger, calls, groups, and other apps. Finding them never changes their sharing rules.'
-                : 'Every video you own or are authorized to view. My videos and Shared with me filter this same list.'}
+                ? videoSpacePanelCopy.mine
+                : videoSpacePanelCopy.all}
           </Text>
           {completenessBanner ? (
             <div className="flex flex-wrap items-center gap-3">

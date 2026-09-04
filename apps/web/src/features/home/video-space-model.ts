@@ -52,6 +52,19 @@ export const videoSpaceEmptyCopy = {
     'Vidak is a viewer and sharing layer over your W3DS space. It shows video you already own or are authorized to view — including files created in other apps — without importing from a specific app first.',
 };
 
+/** Product copy deliberately describes the W3DS space, not a source app. */
+export const videoSpacePanelCopy = {
+  all: 'Every video you own or are authorized to view. My videos and Shared with me filter this same list.',
+  mine: 'Every video you own in your W3DS space, including videos created in other W3DS apps. Finding them never changes their sharing rules.',
+  shared:
+    'Videos other people own that you are currently authorized to view. Finding them never changes their sharing rules.',
+  emptyMine: 'Videos you own in your W3DS space appear here.',
+  emptyShared:
+    'When someone authorizes you to view a video in their W3DS space, it will appear here.',
+  emptyAll:
+    'Videos you own or are authorized to view will appear here. The Public videos tab contains Vidak-published videos.',
+} as const;
+
 /** Plain-language orientation for the private W3DS library. */
 export const videoSpaceGuideCopy = {
   title: 'How your video space works',
