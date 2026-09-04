@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createLatestRequestTracker } from './latest-request';
+import { createLatestRequestTracker, shouldStartRequest } from './latest-request';
 
 describe('latest request tracker', () => {
   it('accepts only the most recent request result', () => {
@@ -18,5 +18,11 @@ describe('latest request tracker', () => {
     tracker.invalidate();
 
     expect(tracker.isCurrent(request)).toBe(false);
+  });
+
+  it('waits for an active background request but lets an explicit refresh replace it', () => {
+    expect(shouldStartRequest({ hasActiveRequest: false })).toBe(true);
+    expect(shouldStartRequest({ hasActiveRequest: true })).toBe(false);
+    expect(shouldStartRequest({ hasActiveRequest: true, supersede: true })).toBe(true);
   });
 });

@@ -19,3 +19,14 @@ export function createLatestRequestTracker() {
     },
   };
 }
+
+/**
+ * Background polling should wait for the current request rather than repeatedly
+ * cancelling it. A user-triggered refresh is intentionally allowed to replace it.
+ */
+export function shouldStartRequest(input: {
+  hasActiveRequest: boolean;
+  supersede?: boolean;
+}): boolean {
+  return input.supersede === true || !input.hasActiveRequest;
+}

@@ -6,7 +6,7 @@ import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { videoApiClient } from '../../lib/video-api-client';
-import { createLatestRequestTracker } from './latest-request';
+import { createLatestRequestTracker, shouldStartRequest } from './latest-request';
 import { PublicExplorePanel } from './public-explore-panel';
 import { LibraryVideoCard, OwnedVideoCard } from './video-space-cards';
 import {
@@ -55,6 +55,14 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   const libraryAbort = useRef<AbortController | undefined>(undefined);
 
   const loadEvault = useCallback(async (refresh = false) => {
+    if (
+      !shouldStartRequest({
+        hasActiveRequest: libraryAbort.current !== undefined,
+        supersede: refresh,
+      })
+    ) {
+      return;
+    }
     const request = libraryRequest.current.next();
     libraryAbort.current?.abort();
     const controller = new AbortController();
