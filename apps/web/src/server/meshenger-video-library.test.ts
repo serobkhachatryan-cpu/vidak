@@ -88,6 +88,21 @@ describe('Meshenger video library', () => {
     ).toThrow(expect.objectContaining({ code: 'stream_expired' }));
   });
 
+  it('renews a signed expired personal stream only for its owner', () => {
+    const expired = createMeshengerVideoStreamId({ ...grant, expiresAt: Date.now() - 1 }, secret);
+    const renewed = configuredLibrary().renewPersonalStream({ eName: grant.eName }, expired);
+
+    expect(renewed).not.toBe(expired);
+    expect(verifyMeshengerVideoStreamId(renewed, secret)).toMatchObject({
+      eName: grant.eName,
+      fileUri: grant.fileUri,
+      accessScope: 'personal',
+    });
+    expect(() =>
+      configuredLibrary().renewPersonalStream({ eName: '@other.w3id' }, expired),
+    ).toThrow(expect.objectContaining({ code: 'authorization_denied' }));
+  });
+
   it('denies a foreign or shared source before contacting an eVault', async () => {
     const fetcher = vi.fn();
     vi.stubGlobal('fetch', fetcher);

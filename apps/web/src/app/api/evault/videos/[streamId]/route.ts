@@ -26,8 +26,18 @@ export async function GET(
     const { streamId } = await context.params;
     const library = createEVaultVideoLibrary();
     let retriedSource = false;
+    let renewedExpiredStream = false;
     const resolutionStartedAt = Date.now();
-    let mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+    let mediaUrl: string;
+    try {
+      mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+    } catch (error) {
+      if (!(error instanceof EVaultVideoLibraryError) || error.code !== 'stream_expired')
+        throw error;
+      const renewedStreamId = library.renewPersonalStream(session.user, streamId);
+      mediaUrl = await library.resolveMediaUrl(session.user, renewedStreamId);
+      renewedExpiredStream = true;
+    }
     const resolutionMs = Date.now() - resolutionStartedAt;
     const upstreamStartedAt = Date.now();
     let upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
@@ -47,6 +57,7 @@ export async function GET(
     console.info('private_video_proxy', {
       upstreamStatus: upstream.status,
       retriedSource,
+      renewedExpiredStream,
       resolutionMs,
       upstreamMs: Date.now() - upstreamStartedAt,
       durationMs: Date.now() - startedAt,

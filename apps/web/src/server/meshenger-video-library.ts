@@ -690,6 +690,22 @@ export class MeshengerVideoLibrary {
   }
 
   /**
+   * Reissues a signed private stream after its short-lived viewer link expires.
+   * The original signature, signed-in owner, and canonical personal File URI
+   * are all checked before a replacement is issued.
+   */
+  renewPersonalStream(user: Pick<AuthUser, 'eName'>, streamId: string): string {
+    const { grant } = this.requirePersonalStreamGrant(user, streamId, { allowExpired: true });
+    return createMeshengerVideoStreamId(
+      {
+        ...grant,
+        expiresAt: this.now() + streamLifetimeMs,
+      },
+      this.config.signingSecret,
+    );
+  }
+
+  /**
    * Drops a cached signed source after the upstream reports an expired or denied
    * media URL. The next request resolves the File envelope again.
    */
@@ -707,8 +723,9 @@ export class MeshengerVideoLibrary {
   private requirePersonalStreamGrant(
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
+    options?: { allowExpired?: boolean },
   ): { grant: StreamGrant; file: NonNullable<ReturnType<typeof parseW3dsFileUri>> } {
-    const grant = verifyMeshengerVideoStreamId(streamId, this.config.signingSecret);
+    const grant = verifyMeshengerVideoStreamId(streamId, this.config.signingSecret, options);
     const eName = requireEName(user.eName);
     const file = parseW3dsFileUri(grant.fileUri);
     if (
@@ -3843,7 +3860,11 @@ export function createMeshengerVideoStreamId(grant: StreamGrant, secret: string)
   return `${encoded}.${createHmac('sha256', secret).update(encoded).digest('base64url')}`;
 }
 
-export function verifyMeshengerVideoStreamId(value: string, secret: string): StreamGrant {
+export function verifyMeshengerVideoStreamId(
+  value: string,
+  secret: string,
+  options?: { allowExpired?: boolean },
+): StreamGrant {
   const [encoded, signature, ...rest] = value.split('.');
   if (!encoded || !signature || rest.length) invalidStream();
   const expected = createHmac('sha256', secret).update(encoded).digest('base64url');
@@ -3874,7 +3895,7 @@ export function verifyMeshengerVideoStreamId(value: string, secret: string): Str
     !parseW3dsFileUri(fileUri)
   )
     invalidStream();
-  if (expiresAt <= Date.now())
+  if (expiresAt <= Date.now() && !options?.allowExpired)
     throw new MeshengerVideoLibraryError(
       'This video link has expired. Refresh the library and try again.',
       'stream_expired',
