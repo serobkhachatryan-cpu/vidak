@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
@@ -11,6 +11,7 @@ import {
   MediaStorageError,
   type MediaUploadSession,
 } from '../media-storage';
+import { setOperationalLogSinkForTests } from '../ops-observability';
 import { sanitizeOwnedVideoForLibrary, VideoPreviewService } from './preview-service';
 import { InMemoryVideoPreviewStore } from './preview-store';
 
@@ -116,6 +117,10 @@ function createService(options?: {
 }
 
 describe('VideoPreviewService', () => {
+  afterEach(() => {
+    setOperationalLogSinkForTests(undefined);
+  });
+
   it('uses an existing valid poster when a ready thumbnail asset is present', async () => {
     const { videos, media, storage } = createService();
     const video = await seedOwnedDraft(videos, {
@@ -324,6 +329,8 @@ describe('VideoPreviewService', () => {
   });
 
   it('marks true generation failure as unavailable rather than serving a broken image', async () => {
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
     const { service, videos, media, storage } = createService({
       extract: async () => undefined,
     });
@@ -348,6 +355,11 @@ describe('VideoPreviewService', () => {
 
     const download = await service.openOwnedPreview({ id: 'user-1' }, video.id);
     expect(download.status).toBe('unavailable');
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('"category":"video_preview"');
+    expect(logs[0]).toContain('"code":"preview_frame_unavailable"');
+    expect(logs[0]).not.toContain(video.id);
+    expect(logs[0]).not.toContain(storageKey);
   });
 
   it('keeps library poster URLs on the authorized evault preview path', () => {

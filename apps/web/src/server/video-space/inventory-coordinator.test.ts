@@ -2,6 +2,7 @@ vi.mock('server-only', () => ({}));
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MeshengerLibrary, MeshengerVideo } from '../meshenger-video-library';
+import { setOperationalLogSinkForTests } from '../ops-observability';
 import { completeInventory } from './completeness';
 import type { InventorySourceCounts } from './discovery';
 import { createInventoryCoordinator, publicLibraryItems } from './inventory-coordinator';
@@ -37,6 +38,7 @@ describe('inventory coordinator', () => {
   afterEach(() => {
     vi.useRealTimers();
     setInventoryJobStoreForTests(undefined);
+    setOperationalLogSinkForTests(undefined);
   });
 
   it('scopes owned and shared scans and coalesces in-flight work', async () => {
@@ -199,6 +201,8 @@ describe('inventory coordinator', () => {
   });
 
   it('keeps a retryable shared source visible but disabled without rescanning the library', async () => {
+    const operationalLogs: string[] = [];
+    setOperationalLogSinkForTests((line) => operationalLogs.push(line));
     const ownedVideo = video({ id: 'own-1', title: 'Personal clip' });
     const sharedVideo = video({
       id: 'shared-1',
@@ -251,6 +255,15 @@ describe('inventory coordinator', () => {
     expect(JSON.stringify(afterProbeFailure)).not.toContain('@group.w3id');
     expect(scanLibrary).toHaveBeenCalledTimes(1);
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(2);
+    expect(operationalLogs).toHaveLength(1);
+    const operationalLog = operationalLogs[0] ?? '';
+    expect(JSON.parse(operationalLog)).toMatchObject({
+      level: 'info',
+      category: 'video_library',
+      code: 'shared_source_recheck_deferred',
+    });
+    expect(operationalLog).not.toContain('@group.w3id');
+    expect(operationalLog).not.toContain('private eVault transport detail');
   });
 
   it('bounds a cached shared-access check so a stalled source cannot hang the library', async () => {
@@ -727,6 +740,8 @@ describe('inventory coordinator', () => {
       ownerEVaultUri: 'https://vault.example',
     });
     const logs: string[] = [];
+    const operationalLogs: string[] = [];
+    setOperationalLogSinkForTests((line) => operationalLogs.push(line));
     const coordinator = createInventoryCoordinator({
       createScanner: () => ({
         scanLibrary: vi
@@ -741,6 +756,10 @@ describe('inventory coordinator', () => {
     await coordinator.pumpRunning();
 
     expect(logs).toEqual(['[inventory-pump] failed']);
+    expect(operationalLogs).toEqual([expect.stringContaining('"category":"video_library"')]);
+    expect(operationalLogs[0]).toContain('"code":"background_pump_failed"');
+    expect(operationalLogs[0]).not.toContain('private source details');
+    expect(operationalLogs[0]).not.toContain('@person.w3id');
   });
 
   it('does not start a second drain when two polls overlap', async () => {

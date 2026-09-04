@@ -10,6 +10,7 @@ import {
   type MediaStorage,
   resolveLocalMediaStorageRoot,
 } from '../media-storage';
+import { reportOperationalEvent } from '../ops-observability';
 import { evaultVideoPreviewPath, ownedVideoPreviewPath } from './capture-time';
 import {
   FfmpegVideoFrameExtractor,
@@ -436,11 +437,13 @@ export class VideoPreviewService {
     try {
       const source = await resolveSource();
       if (!source) {
+        reportOperationalEvent({ category: 'video_preview', code: 'preview_source_unavailable' });
         const failed = await this.store.update(record.id, { status: 'failed' });
         return failed ?? { ...record, status: 'failed' };
       }
       const extracted = await this.extractor.extractUsefulFrame(source);
       if (!extracted) {
+        reportOperationalEvent({ category: 'video_preview', code: 'preview_frame_unavailable' });
         const failed = await this.store.update(record.id, { status: 'failed' });
         return failed ?? { ...record, status: 'failed' };
       }
@@ -456,9 +459,11 @@ export class VideoPreviewService {
       return ready ?? { ...record, status: 'ready', storageKey };
     } catch (error) {
       if (isRetryablePreviewSourceError(error)) {
+        reportOperationalEvent({ category: 'video_preview', code: 'preview_source_retryable' });
         const pending = await this.store.update(record.id, { status: 'pending' });
         return pending ?? { ...record, status: 'pending' };
       }
+      reportOperationalEvent({ category: 'video_preview', code: 'preview_generation_failed' });
       const failed = await this.store.update(record.id, { status: 'failed' });
       return failed ?? { ...record, status: 'failed' };
     } finally {

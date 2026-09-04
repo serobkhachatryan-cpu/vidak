@@ -19,12 +19,16 @@ vi.mock('../../../../../server/w3ds-auth', async (importOriginal) => ({
 }));
 
 import { EVaultVideoLibraryError } from '../../../../../server/evault-video-library';
+import { setOperationalLogSinkForTests } from '../../../../../server/ops-observability';
 import { GET } from './route';
 
 const viewer = { eName: '@viewer.w3id' };
+let operationalLogs: string[] = [];
 
 describe('eVault video stream route', () => {
   beforeEach(() => {
+    operationalLogs = [];
+    setOperationalLogSinkForTests((line) => operationalLogs.push(line));
     mocks.createLibrary.mockReset();
     mocks.getAuthService.mockReset();
     mocks.getAuthService.mockReturnValue({
@@ -33,6 +37,7 @@ describe('eVault video stream route', () => {
   });
 
   afterEach(() => {
+    setOperationalLogSinkForTests(undefined);
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -131,7 +136,7 @@ describe('eVault video stream route', () => {
 
     const response = await GET(
       new NextRequest('https://vidak.example/api/evault/videos/expired-stream', {
-        headers: { authorization: 'Bearer access-token' },
+        headers: { authorization: 'Bearer access-token', 'x-request-id': 'playback-recovery-1' },
       }),
       { params: Promise.resolve({ streamId: 'expired-stream' }) },
     );
@@ -141,5 +146,36 @@ describe('eVault video stream route', () => {
     expect(renewPlayableStream).toHaveBeenCalledWith(viewer, 'expired-stream');
     expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'renewed-stream');
     expect(resolveMediaUrl).toHaveBeenLastCalledWith(viewer, 'renewed-stream');
+    expect(operationalLogs).toContain(
+      JSON.stringify({
+        level: 'info',
+        category: 'video_playback',
+        correlationId: 'playback-recovery-1',
+        code: 'stream_renewed_source_recovered',
+      }),
+    );
+  });
+
+  it('reports an opaque playback failure without source details', async () => {
+    mocks.createLibrary.mockReturnValue({
+      resolveMediaUrl: vi
+        .fn()
+        .mockRejectedValue(new Error('https://signed.example/private-source?token=secret')),
+    });
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/evault/videos/private-stream', {
+        headers: { authorization: 'Bearer access-token', 'x-request-id': 'playback-failure-1' },
+      }),
+      { params: Promise.resolve({ streamId: 'private-stream' }) },
+    );
+
+    expect(response.status).toBe(500);
+    expect(operationalLogs).toHaveLength(1);
+    expect(operationalLogs[0]).toContain('"category":"video_playback"');
+    expect(operationalLogs[0]).toContain('"code":"internal_error"');
+    expect(operationalLogs[0]).not.toContain('private-stream');
+    expect(operationalLogs[0]).not.toContain('signed.example');
+    expect(operationalLogs[0]).not.toContain('secret');
   });
 });

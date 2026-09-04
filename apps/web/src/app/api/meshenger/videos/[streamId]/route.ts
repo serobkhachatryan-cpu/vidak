@@ -4,6 +4,11 @@ import {
   MeshengerVideoLibraryError,
 } from '../../../../../server/meshenger-video-library';
 import {
+  reportOperationalEvent,
+  reportOperationalFailure,
+  resolveCorrelationId,
+} from '../../../../../server/ops-observability';
+import {
   getBearerToken,
   getW3dsAuthService,
   W3dsAuthError,
@@ -16,7 +21,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ streamId: string }> },
 ) {
-  const startedAt = Date.now();
+  const correlationId = resolveCorrelationId(request.headers);
   try {
     const accessToken =
       getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
@@ -57,12 +62,18 @@ export async function GET(
         502,
       );
     }
-    console.info('private_video_proxy', {
-      upstreamStatus: upstream.status,
-      retriedSource,
-      renewedExpiredStream,
-      durationMs: Date.now() - startedAt,
-    });
+    if (renewedExpiredStream || retriedSource) {
+      reportOperationalEvent({
+        category: 'video_playback',
+        correlationId,
+        code:
+          renewedExpiredStream && retriedSource
+            ? 'stream_renewed_source_recovered'
+            : renewedExpiredStream
+              ? 'stream_renewed'
+              : 'source_recovered',
+      });
+    }
     const headers = new Headers({
       'Cache-Control': 'private, no-store, max-age=0',
       'X-Content-Type-Options': 'nosniff',
@@ -73,18 +84,21 @@ export async function GET(
     }
     return new NextResponse(upstream.body, { status: upstream.status, headers });
   } catch (error) {
-    logProxyFailure(error, Date.now() - startedAt);
+    logProxyFailure(error, correlationId);
     return errorResponse(error);
   }
 }
 
 /** Logs operational outcome only; never stream IDs, eNames, source URLs, or credentials. */
-function logProxyFailure(error: unknown, durationMs: number): void {
+function logProxyFailure(error: unknown, correlationId: string): void {
   const known = error instanceof MeshengerVideoLibraryError || error instanceof W3dsAuthError;
-  console.warn('private_video_proxy_failed', {
+  reportOperationalFailure({
+    category: 'video_playback',
+    correlationId,
     code: known ? error.code : 'internal_error',
-    status: known ? error.status : 500,
-    durationMs,
+    // Do not include an upstream error: it can contain a signed source URL or
+    // other private metadata. The fixed code above is enough for aggregation.
+    error: new Error('Private video proxy failed.'),
   });
 }
 

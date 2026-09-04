@@ -14,7 +14,10 @@ export type OperationalFailureCategory =
   | 'authentication'
   | 'media_storage'
   | 'migration_readiness'
-  | 'w3ds_sync';
+  | 'w3ds_sync'
+  | 'video_playback'
+  | 'video_preview'
+  | 'video_library';
 
 export type RequestHeadersLike = {
   get(name: string): string | null;

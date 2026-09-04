@@ -8,6 +8,7 @@ import {
   type SharedSpaceAccess,
   type SharedSpaceProbe,
 } from '../meshenger-video-library';
+import { reportOperationalEvent } from '../ops-observability';
 import { getW3dsAuthService } from '../w3ds-auth';
 import type { InventoryCompleteness } from './completeness';
 import { completeInventory } from './completeness';
@@ -80,6 +81,8 @@ interface CacheEntry {
   resolvedSharedSourceNames: Set<string>;
   /** Shared cards whose current source probe is retryable, never denied. */
   checkingSharedItemIds: Set<string>;
+  /** Emit at most one aggregate event while the same shared retry state persists. */
+  sharedRetryReported: boolean;
 }
 
 export function publicLibraryItems(
@@ -164,6 +167,7 @@ export function createInventoryCoordinator(options?: {
       sharedSourceNames: previous?.sharedSourceNames ?? new Map(),
       resolvedSharedSourceNames: previous?.resolvedSharedSourceNames ?? new Set(),
       checkingSharedItemIds: previous?.checkingSharedItemIds ?? new Set(),
+      sharedRetryReported: previous?.sharedRetryReported ?? false,
       ...(previous?.snapshot.items.length
         ? { firstResultAt: previous.firstResultAt ?? now() }
         : {}),
@@ -324,6 +328,7 @@ export function createInventoryCoordinator(options?: {
     }
     if ([...outcomes.values()].every((outcome) => outcome === 'verified')) {
       entry.checkingSharedItemIds.clear();
+      entry.sharedRetryReported = false;
       return entry.snapshot;
     }
     entry.checkingSharedItemIds = new Set(
@@ -336,6 +341,12 @@ export function createInventoryCoordinator(options?: {
     const denied = [...outcomes.values()].filter((outcome) => outcome === 'denied').length;
     const missing = [...outcomes.values()].filter((outcome) => outcome === 'missing').length;
     const unavailable = [...outcomes.values()].filter((outcome) => outcome === 'retry').length;
+    if (unavailable > 0 && !entry.sharedRetryReported) {
+      reportOperationalEvent({ category: 'video_library', code: 'shared_source_recheck_deferred' });
+      entry.sharedRetryReported = true;
+    } else if (unavailable === 0) {
+      entry.sharedRetryReported = false;
+    }
     const completeness = {
       ...entry.snapshot.completeness,
       denied: entry.snapshot.completeness.denied + denied,
@@ -381,6 +392,7 @@ export function createInventoryCoordinator(options?: {
           sharedSourceNames: new Map(),
           resolvedSharedSourceNames: new Set(),
           checkingSharedItemIds: new Set(),
+          sharedRetryReported: false,
         };
         if (!previous) {
           entry.scanning = true;
@@ -413,7 +425,10 @@ export function createInventoryCoordinator(options?: {
       // Keep the process alive, but do not make a broken production pump
       // invisible. The event intentionally contains no error message, account,
       // source, URI, or other private metadata, and is emitted once per outage.
-      if (!pumpFailureReported) log('[inventory-pump] failed');
+      if (!pumpFailureReported) {
+        log('[inventory-pump] failed');
+        reportOperationalEvent({ category: 'video_library', code: 'background_pump_failed' });
+      }
       pumpFailureReported = true;
     }
   }
