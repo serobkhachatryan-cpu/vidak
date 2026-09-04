@@ -1,7 +1,13 @@
 'use client';
 
-import { parseSettingsSectionParam, SettingsPageData } from '@w3ds/settings-page';
+import {
+  parseSettingsSectionParam,
+  resolveActiveSettingsSection,
+  SettingsPageData,
+  settingsSectionsForCapabilities,
+} from '@w3ds/settings-page';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { authApiClient } from '../../lib/auth-api-client';
 import { videoApiClient } from '../../lib/video-api-client';
@@ -14,7 +20,16 @@ export function SettingsPageFeature() {
   const searchParams = useSearchParams();
   const { session, logout, updateSessionUser } = useAuthentication();
   const { setAppearance } = useAppearancePreference();
-  const sectionFromUrl = parseSettingsSectionParam(searchParams.get('section')) ?? 'profile';
+  const requestedSection = parseSettingsSectionParam(searchParams.get('section'));
+  const sectionFromUrl = resolveActiveSettingsSection(
+    settingsSectionsForCapabilities(authApiClient.capabilities),
+    requestedSection ?? 'profile',
+  );
+
+  useEffect(() => {
+    if (!searchParams.get('section') || requestedSection === sectionFromUrl) return;
+    router.replace(`/settings?section=${sectionFromUrl}`, { scroll: false });
+  }, [requestedSection, router, searchParams, sectionFromUrl]);
 
   if (!session) return <SessionLoadingSkeleton />;
 
