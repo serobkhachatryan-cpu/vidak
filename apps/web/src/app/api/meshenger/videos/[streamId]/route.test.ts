@@ -18,6 +18,7 @@ vi.mock('../../../../../server/w3ds-auth', async (importOriginal) => ({
   getW3dsAuthService: mocks.getAuthService,
 }));
 
+import { MeshengerVideoLibraryError } from '../../../../../server/meshenger-video-library';
 import { GET } from './route';
 
 const viewer = { eName: '@viewer.w3id' };
@@ -104,5 +105,32 @@ describe('Meshenger video stream route', () => {
     await expect(response.text()).resolves.toBe('recovered');
     expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
     expect(resolveMediaUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('renews an expired Meshenger stream before opening the upstream video', async () => {
+    const resolveMediaUrl = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new MeshengerVideoLibraryError('This video link has expired.', 'stream_expired', 401),
+      )
+      .mockResolvedValueOnce('https://media.example/renewed.mp4');
+    const renewPlayableStream = vi.fn().mockResolvedValue('renewed-stream');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl, renewPlayableStream });
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: viewer }),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('renewed', { status: 206 })));
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/expired-stream', {
+        headers: { authorization: 'Bearer access-token' },
+      }),
+      { params: Promise.resolve({ streamId: 'expired-stream' }) },
+    );
+
+    expect(response.status).toBe(206);
+    await expect(response.text()).resolves.toBe('renewed');
+    expect(renewPlayableStream).toHaveBeenCalledWith(viewer, 'expired-stream');
+    expect(resolveMediaUrl).toHaveBeenNthCalledWith(2, viewer, 'renewed-stream');
   });
 });

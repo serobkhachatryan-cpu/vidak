@@ -16,6 +16,7 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ streamId: string }> },
 ) {
+  const startedAt = Date.now();
   try {
     const accessToken =
       getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
@@ -24,9 +25,18 @@ export async function GET(
     const session = await getW3dsAuthService().getSession(accessToken);
     const { streamId } = await context.params;
     const library = createMeshengerVideoLibrary();
-    const startedAt = Date.now();
     let retriedSource = false;
-    let mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+    let renewedExpiredStream = false;
+    let mediaUrl: string;
+    try {
+      mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+    } catch (error) {
+      if (!(error instanceof MeshengerVideoLibraryError) || error.code !== 'stream_expired')
+        throw error;
+      const renewedStreamId = await library.renewPlayableStream(session.user, streamId);
+      mediaUrl = await library.resolveMediaUrl(session.user, renewedStreamId);
+      renewedExpiredStream = true;
+    }
     let upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
     if (!upstream.ok && upstream.status !== 206) {
       if ([401, 403, 404].includes(upstream.status)) {
@@ -48,6 +58,7 @@ export async function GET(
     console.info('private_video_proxy', {
       upstreamStatus: upstream.status,
       retriedSource,
+      renewedExpiredStream,
       durationMs: Date.now() - startedAt,
     });
     const headers = new Headers({
@@ -60,8 +71,19 @@ export async function GET(
     }
     return new NextResponse(upstream.body, { status: upstream.status, headers });
   } catch (error) {
+    logProxyFailure(error, Date.now() - startedAt);
     return errorResponse(error);
   }
+}
+
+/** Logs operational outcome only; never stream IDs, eNames, source URLs, or credentials. */
+function logProxyFailure(error: unknown, durationMs: number): void {
+  const known = error instanceof MeshengerVideoLibraryError || error instanceof W3dsAuthError;
+  console.warn('private_video_proxy_failed', {
+    code: known ? error.code : 'internal_error',
+    status: known ? error.status : 500,
+    durationMs,
+  });
 }
 
 async function discardUpstreamBody(response: Response): Promise<void> {
