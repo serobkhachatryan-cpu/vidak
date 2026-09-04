@@ -287,9 +287,16 @@ export class CreatorVideoService {
    * Anonymous discovery page: only `published` + `public` videos.
    * `unlisted`, `private`, and drafts are never included.
    */
-  async listPublicVideos(params: PaginationParams = {}): Promise<CursorPage<Video>> {
+  async listPublicVideos(
+    params: PaginationParams & { query?: string } = {},
+  ): Promise<CursorPage<Video>> {
     const { offset, limit } = normalizePublicPagination(params);
-    const rows = await this.store.listPublishedPublicVideos(limit + 1, offset);
+    const query = params.query?.trim().slice(0, 100);
+    const rows = await this.store.listPublishedPublicVideos(
+      limit + 1,
+      offset,
+      query && query.length > 0 ? query : undefined,
+    );
     const items = rows.slice(0, limit);
     return {
       items,

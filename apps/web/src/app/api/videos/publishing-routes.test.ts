@@ -366,6 +366,12 @@ describe('video publishing and public discovery routes', () => {
     expect(
       [...firstBody.items, ...secondBody.items].map((item) => item.publicVideoId).sort(),
     ).toEqual([...publicIds].sort());
+
+    const search = await listPublicVideos(
+      new NextRequest('https://vidak.example/api/videos/public?search=bravo&limit=2'),
+    );
+    expect(search.status).toBe(200);
+    await expect(search.json()).resolves.toMatchObject({ items: [{ title: 'Bravo' }] });
   });
 
   it('streams ready media for published public and unlisted videos anonymously', async () => {

@@ -125,7 +125,7 @@ export function filterPublicVideos(
     items = [...items].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   }
 
-  const filtered = Boolean(filters?.search || filters?.channelId || filters?.sort);
+  const filtered = Boolean(filters?.channelId || (filters?.sort && filters.sort !== 'relevance'));
   if (filtered) return createCursorPage(items, pagination);
   return { items, ...(page.nextCursor ? { nextCursor: page.nextCursor } : {}) };
 }

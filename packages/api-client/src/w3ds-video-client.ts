@@ -115,8 +115,11 @@ export class W3dsVideoApiClient implements VideoApiClient {
     filters?: VideoListFilters,
     pagination?: PaginationParams,
   ): Promise<CursorPage<Video>> {
-    const page = await this.listPublicVideos(pagination);
-    return filterPublicVideos(page, filters, pagination);
+    const search = filters?.search?.trim();
+    const page = await this.requestPublicVideos(pagination, search || undefined);
+    const { search: _search, ...localFilters } = filters ?? {};
+    void _search;
+    return filterPublicVideos(page, localFilters, pagination);
   }
 
   listChannels(
@@ -412,9 +415,17 @@ export class W3dsVideoApiClient implements VideoApiClient {
   }
 
   async listPublicVideos(pagination: PaginationParams = {}): Promise<CursorPage<Video>> {
+    return this.requestPublicVideos(pagination);
+  }
+
+  private async requestPublicVideos(
+    pagination: PaginationParams = {},
+    search?: string,
+  ): Promise<CursorPage<Video>> {
     const params = new URLSearchParams();
     if (pagination.cursor) params.set('cursor', pagination.cursor);
     if (pagination.limit !== undefined) params.set('limit', String(pagination.limit));
+    if (search) params.set('search', search);
     const query = params.toString();
     return this.requestJson<CursorPage<Video>>(`/api/videos/public${query ? `?${query}` : ''}`);
   }

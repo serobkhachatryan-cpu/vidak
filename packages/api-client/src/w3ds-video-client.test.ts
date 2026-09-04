@@ -156,50 +156,54 @@ describe('W3dsVideoApiClient', () => {
 
   it('filters public discovery instead of reading mock feed data', async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      expect(String(input)).toContain('/api/videos/public');
-      return jsonResponse({
-        items: [
-          {
-            id: 'v-ada',
-            channelId: 'channel-ada',
-            title: 'Ada lecture',
-            description: '',
-            thumbnailUrl: '/api/videos/public/pub_ada/thumbnail',
-            durationSeconds: 12,
-            status: 'published',
-            visibility: 'public',
-            publicVideoId: 'pub_ada',
-            createdAt: '2026-08-01T00:00:00.000Z',
-            updatedAt: '2026-08-01T00:00:00.000Z',
-            viewCount: 2,
-            likeCount: 0,
-            commentCount: 0,
-            tags: [],
-          },
-          {
-            id: 'v-other',
-            channelId: 'channel-other',
-            title: 'Other clip',
-            description: '',
-            thumbnailUrl: '',
-            durationSeconds: 8,
-            status: 'published',
-            visibility: 'public',
-            publicVideoId: 'pub_other',
-            createdAt: '2026-08-02T00:00:00.000Z',
-            updatedAt: '2026-08-02T00:00:00.000Z',
-            viewCount: 9,
-            likeCount: 0,
-            commentCount: 0,
-            tags: [],
-          },
-        ],
-      });
+      const url = String(input);
+      expect(url).toContain('/api/videos/public');
+      const items = [
+        {
+          id: 'v-ada',
+          channelId: 'channel-ada',
+          title: 'Ada lecture',
+          description: '',
+          thumbnailUrl: '/api/videos/public/pub_ada/thumbnail',
+          durationSeconds: 12,
+          status: 'published',
+          visibility: 'public',
+          publicVideoId: 'pub_ada',
+          createdAt: '2026-08-01T00:00:00.000Z',
+          updatedAt: '2026-08-01T00:00:00.000Z',
+          viewCount: 2,
+          likeCount: 0,
+          commentCount: 0,
+          tags: [],
+        },
+        {
+          id: 'v-other',
+          channelId: 'channel-other',
+          title: 'Other clip',
+          description: '',
+          thumbnailUrl: '',
+          durationSeconds: 8,
+          status: 'published',
+          visibility: 'public',
+          publicVideoId: 'pub_other',
+          createdAt: '2026-08-02T00:00:00.000Z',
+          updatedAt: '2026-08-02T00:00:00.000Z',
+          viewCount: 9,
+          likeCount: 0,
+          commentCount: 0,
+          tags: [],
+        },
+      ];
+      return jsonResponse({ items: url.includes('search=Ada') ? [items[0]] : items });
     });
     const client = new W3dsVideoApiClient({ fetch: fetchMock });
     await expect(client.listVideos({ search: 'Ada', status: 'published' })).resolves.toMatchObject({
       items: [{ id: 'v-ada' }],
     });
+    expect(fetchMock).toHaveBeenCalledWith(
+      expect.stringContaining('/api/videos/public?search=Ada'),
+      expect.anything(),
+    );
     await expect(client.getVideo('legacy-mock-id')).resolves.toBeUndefined();
   });
 

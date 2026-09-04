@@ -25,6 +25,7 @@ export async function GET(request: NextRequest) {
   try {
     const { searchParams } = request.nextUrl;
     const cursor = searchParams.get('cursor') ?? undefined;
+    const query = searchParams.get('search') ?? undefined;
     const limitParam = searchParams.get('limit');
     const limit =
       limitParam !== null && limitParam !== '' && /^\d+$/.test(limitParam)
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest) {
     const page = await getCreatorVideoService().listPublicVideos({
       ...(cursor ? { cursor } : {}),
       ...(limit !== undefined ? { limit } : {}),
+      ...(query ? { query } : {}),
     });
     // Existing published rows are repaired in the background. Discovery stays
     // fast, while a later card render can use the derived public poster and

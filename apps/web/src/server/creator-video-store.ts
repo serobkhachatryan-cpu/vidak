@@ -116,7 +116,7 @@ export interface CreatorVideoStore {
    * `visibility === 'public'` only. Ordered by `publishedAt` descending.
    * Callers page with `limit` / `offset` (fetch `limit + 1` to detect a next page).
    */
-  listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]>;
+  listPublishedPublicVideos(limit: number, offset: number, query?: string): Promise<Video[]>;
   /**
    * Anonymous channel discovery: channels that have at least one
    * `published` + `public` video. Optional `query` matches name or handle.
@@ -586,12 +586,28 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
     return match ? this.withPublicChannel(match) : undefined;
   }
 
-  async listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]> {
+  async listPublishedPublicVideos(limit: number, offset: number, query?: string): Promise<Video[]> {
     const safeLimit = Math.max(0, Math.floor(limit));
     const safeOffset = Math.max(0, Math.floor(offset));
     if (safeLimit === 0) return [];
+    const needle = query?.trim().toLocaleLowerCase();
     return [...this.videosById.values()]
       .filter((video) => video.status === 'published' && video.visibility === 'public')
+      .filter((video) => {
+        if (!needle) return true;
+        const channel = this.channelsById.get(video.channelId);
+        const haystack = [
+          video.title,
+          video.description,
+          ...video.tags,
+          channel?.name,
+          channel?.handle,
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLocaleLowerCase();
+        return haystack.includes(needle);
+      })
       .sort((left, right) => {
         const leftPublished = left.publishedAt ?? left.createdAt;
         const rightPublished = right.publishedAt ?? right.createdAt;
@@ -1041,16 +1057,26 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
     return row ? toVideo(row.video, toPublicChannelProjection(row.channel, row.owner)) : undefined;
   }
 
-  async listPublishedPublicVideos(limit: number, offset: number): Promise<Video[]> {
+  async listPublishedPublicVideos(limit: number, offset: number, query?: string): Promise<Video[]> {
     const safeLimit = Math.max(0, Math.floor(limit));
     const safeOffset = Math.max(0, Math.floor(offset));
     if (safeLimit === 0) return [];
+    const needle = query?.trim();
+    const search =
+      needle && needle.length > 0
+        ? or(
+            ilike(videos.title, likeContains(needle)),
+            ilike(videos.description, likeContains(needle)),
+            ilike(creatorChannels.name, likeContains(needle)),
+            ilike(creatorChannels.handle, likeContains(needle)),
+          )
+        : undefined;
     const rows = await this.db
       .select({ video: videos, channel: creatorChannels, owner: w3dsPlatformUsers })
       .from(videos)
       .innerJoin(creatorChannels, eq(videos.channelId, creatorChannels.id))
       .innerJoin(w3dsPlatformUsers, eq(creatorChannels.ownerId, w3dsPlatformUsers.id))
-      .where(and(eq(videos.status, 'published'), eq(videos.visibility, 'public')))
+      .where(and(eq(videos.status, 'published'), eq(videos.visibility, 'public'), search))
       .orderBy(desc(videos.publishedAt), desc(videos.id))
       .limit(safeLimit)
       .offset(safeOffset);
