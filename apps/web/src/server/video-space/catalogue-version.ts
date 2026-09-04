@@ -1,9 +1,9 @@
 /**
  * Bump when catalogue rules or persisted checkpoint layout changes and jobs
- * must rescan. Version 7 drops oversized historical message payloads from
- * in-flight inventory checkpoints.
+ * must rescan. Version 8 rebuilds shared entries with viewer-bound playback
+ * grants and the server-only source proof required to revalidate them.
  */
-export const VIDEO_SPACE_CATALOGUE_VERSION = 7;
+export const VIDEO_SPACE_CATALOGUE_VERSION = 8;
 
 export function readCatalogueVersion(ledger: Record<string, unknown>): number {
   const value = ledger.catalogueVersion;
