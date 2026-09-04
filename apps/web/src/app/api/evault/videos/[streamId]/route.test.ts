@@ -74,15 +74,15 @@ describe('eVault video stream route', () => {
     );
   });
 
-  it('renews an expired personal stream before opening the upstream video', async () => {
+  it('renews an expired playable stream before opening the upstream video', async () => {
     const resolveMediaUrl = vi
       .fn()
       .mockRejectedValueOnce(
         new EVaultVideoLibraryError('This video link has expired.', 'stream_expired', 401),
       )
       .mockResolvedValueOnce('https://media.example/renewed.mp4');
-    const renewPersonalStream = vi.fn().mockReturnValue('renewed-stream');
-    mocks.createLibrary.mockReturnValue({ resolveMediaUrl, renewPersonalStream });
+    const renewPlayableStream = vi.fn().mockResolvedValue('renewed-stream');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl, renewPlayableStream });
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(
@@ -102,7 +102,7 @@ describe('eVault video stream route', () => {
 
     expect(response.status).toBe(206);
     await expect(response.text()).resolves.toBe('renewed');
-    expect(renewPersonalStream).toHaveBeenCalledWith(viewer, 'expired-stream');
+    expect(renewPlayableStream).toHaveBeenCalledWith(viewer, 'expired-stream');
     expect(resolveMediaUrl).toHaveBeenNthCalledWith(2, viewer, 'renewed-stream');
   });
 });

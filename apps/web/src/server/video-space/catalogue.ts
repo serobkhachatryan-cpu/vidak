@@ -24,12 +24,31 @@ export interface VideoSpaceCatalogueItem {
   visibility: VideoSpaceVisibility;
   streamIds: string[];
   sourceSpaceKey?: string;
+  sourceChatId?: string;
   accessBasis?: VideoAccessBasis;
 }
 
 export interface VideoSpaceCatalogueSnapshot {
   items: VideoSpaceCatalogueItem[];
   completeness: InventoryCompleteness;
+}
+
+export interface VideoSpaceStreamGrantInput {
+  fileUri: string;
+  accessScope: VideoSpaceAccessScope;
+  sourceSpaceKey?: string;
+  sourceChatId?: string;
+  accessBasis?: VideoAccessBasis;
+}
+
+function canIssueViewerStream(item: DiscoveredVideoRecord): boolean {
+  if (item.accessScope === 'personal') return true;
+  if (!item.sourceSpaceKey) return false;
+  return (
+    item.accessBasis === 'personal' ||
+    item.accessBasis === 'membership' ||
+    Boolean(item.sourceChatId)
+  );
 }
 
 /**
@@ -41,7 +60,7 @@ export function assembleVideoSpaceCatalogue(input: {
   records: readonly DiscoveredVideoRecord[];
   completeness: InventoryCompleteness;
   viewerEName: string;
-  toStreamId: (fileUri: string) => string;
+  toStreamId: (input: VideoSpaceStreamGrantInput) => string;
 }): VideoSpaceCatalogueSnapshot {
   const unique = dedupeDiscoveredVideos(input.records);
   return {
@@ -58,14 +77,22 @@ export function assembleVideoSpaceCatalogue(input: {
           accessScope: item.accessScope,
           viewerEName: input.viewerEName,
         }),
-        // Shared records are metadata only until the platform can verify the
-        // current user's entitlement to the canonical file on every request.
-        // Do not mint a private playback grant for them.
-        streamIds:
-          item.accessScope === 'personal'
-            ? item.fileUris.map((fileUri) => input.toStreamId(fileUri))
-            : [],
+        // Stream grants are viewer-bound. Shared grants retain only opaque,
+        // server-side source context so their authorization can be checked on
+        // every media request before the foreign File is opened.
+        streamIds: canIssueViewerStream(item)
+          ? item.fileUris.map((fileUri) =>
+              input.toStreamId({
+                fileUri,
+                accessScope: item.accessScope,
+                ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
+                ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
+                ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
+              }),
+            )
+          : [],
         ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
+        ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
         ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
       }))
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),

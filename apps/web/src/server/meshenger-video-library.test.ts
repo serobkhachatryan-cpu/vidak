@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
@@ -50,6 +51,7 @@ describe('Meshenger video library', () => {
     const metadata = compactMediaSourceMetadata({
       type: 'file',
       title: 'A useful title',
+      chatId: 'chat-1',
       content: 'x'.repeat(5_000),
       file: {
         filename: 'friends-with-hats.mp4',
@@ -62,6 +64,7 @@ describe('Meshenger video library', () => {
     expect(metadata).toMatchObject({
       type: 'file',
       title: 'A useful title',
+      chatId: 'chat-1',
       file: { filename: 'friends-with-hats.mp4', mimeType: 'video/mp4' },
     });
     expect(metadata.content).toHaveLength(512);
@@ -72,7 +75,16 @@ describe('Meshenger video library', () => {
   it('creates an opaque signed stream id and restores only its validated reference', () => {
     const streamId = createMeshengerVideoStreamId(grant, secret);
     expect(streamId).not.toContain('http');
+    expect(streamId).not.toContain('@person.w3id');
+    expect(streamId.split('.')).toHaveLength(4);
     expect(verifyMeshengerVideoStreamId(streamId, secret)).toEqual(grant);
+  });
+
+  it('continues to verify a valid legacy personal stream while outstanding links expire', () => {
+    const encoded = Buffer.from(JSON.stringify(grant)).toString('base64url');
+    const legacy = `${encoded}.${createHmac('sha256', secret).update(encoded).digest('base64url')}`;
+
+    expect(verifyMeshengerVideoStreamId(legacy, secret)).toEqual(grant);
   });
 
   it('rejects forged and expired stream ids', () => {
@@ -88,9 +100,9 @@ describe('Meshenger video library', () => {
     ).toThrow(expect.objectContaining({ code: 'stream_expired' }));
   });
 
-  it('renews a signed expired personal stream only for its owner', () => {
+  it('renews a signed expired personal stream only for its owner', async () => {
     const expired = createMeshengerVideoStreamId({ ...grant, expiresAt: Date.now() - 1 }, secret);
-    const renewed = configuredLibrary().renewPersonalStream({ eName: grant.eName }, expired);
+    const renewed = await configuredLibrary().renewPlayableStream({ eName: grant.eName }, expired);
 
     expect(renewed).not.toBe(expired);
     expect(verifyMeshengerVideoStreamId(renewed, secret)).toMatchObject({
@@ -98,12 +110,12 @@ describe('Meshenger video library', () => {
       fileUri: grant.fileUri,
       accessScope: 'personal',
     });
-    expect(() =>
-      configuredLibrary().renewPersonalStream({ eName: '@other.w3id' }, expired),
-    ).toThrow(expect.objectContaining({ code: 'authorization_denied' }));
+    await expect(
+      configuredLibrary().renewPlayableStream({ eName: '@other.w3id' }, expired),
+    ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied' }));
   });
 
-  it('denies a foreign or shared source before contacting an eVault', async () => {
+  it('rejects a shared source without signed source context before contacting an eVault', async () => {
     const fetcher = vi.fn();
     vi.stubGlobal('fetch', fetcher);
     try {
@@ -119,7 +131,82 @@ describe('Meshenger video library', () => {
             secret,
           ),
         ),
-      ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied', status: 403 }));
+      ).rejects.toThrow(expect.objectContaining({ code: 'invalid_stream', status: 401 }));
+      expect(fetcher).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens an authorized shared stream after checking its current conversation access', async () => {
+    const library = configuredLibrary();
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/files/shared-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/shared-video.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/shared-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'chat-1',
+        accessBasis: 'history',
+      },
+      secret,
+    );
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/shared-video.mp4',
+      );
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('refuses a shared stream when its current source access is gone', async () => {
+    const library = configuredLibrary();
+    vi.spyOn(library, 'probeSharedSpaceAccess').mockResolvedValue({
+      access: 'denied',
+      member: false,
+    });
+    const fetcher = vi.fn();
+    vi.stubGlobal('fetch', fetcher);
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/shared-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'chat-1',
+        accessBasis: 'history',
+      },
+      secret,
+    );
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).rejects.toThrow(
+        expect.objectContaining({ code: 'authorization_denied', status: 403 }),
+      );
       expect(fetcher).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
@@ -596,7 +683,7 @@ describe('Meshenger video library', () => {
         }),
       );
       expect(call?.accessScope).toBe('shared');
-      expect(call?.streamIds).toEqual([]);
+      expect(call?.streamIds).toHaveLength(2);
       expect(videos).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -777,7 +864,7 @@ describe('Meshenger video library', () => {
       await expect(library.resolveMediaUrl({ eName: staleGrant.eName }, streamId)).resolves.toBe(
         'https://media.example/expired.mp4',
       );
-      library.invalidateMediaUrl({ eName: staleGrant.eName }, streamId);
+      await library.invalidateMediaUrl({ eName: staleGrant.eName }, streamId);
       await expect(library.resolveMediaUrl({ eName: staleGrant.eName }, streamId)).resolves.toBe(
         'https://media.example/refreshed.mp4',
       );
@@ -3244,7 +3331,7 @@ describe('Meshenger video library', () => {
     );
   });
 
-  it('resolves a shared File reference to its canonical title without minting playback access', async () => {
+  it('resolves a shared File reference to its canonical title with a viewer-bound playback grant', async () => {
     const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
     vi.stubGlobal(
       'fetch',
@@ -3317,7 +3404,7 @@ describe('Meshenger video library', () => {
       expect(card).toBeDefined();
       expect(card?.title).not.toBe('Untitled video');
       expect(card?.accessScope).toBe('shared');
-      expect(card?.streamIds).toEqual([]);
+      expect(card?.streamIds).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();
     }

@@ -104,6 +104,11 @@ describe('eVault video library route', () => {
     expect(body.scope).toBe('owned');
     expect(body.items[0].previewUrl).toBe('/api/evault/videos/opaque-stream-id/preview');
     expect(body.items[0].previewState).toBe('ready');
+    expect(body.items[1]).toMatchObject({
+      id: 'w3ds-file:@group.w3id/video-2',
+      previewState: 'unavailable',
+    });
+    expect(body.items[1]).not.toHaveProperty('previewUrl');
     expect(JSON.stringify(body)).not.toMatch(/w3ds:\/\/file|https:\/\/media|Bearer/i);
     expect(getSnapshot).toHaveBeenCalledWith(
       { eName: '@person.w3id' },

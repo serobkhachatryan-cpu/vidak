@@ -34,7 +34,7 @@ export async function GET(
     } catch (error) {
       if (!(error instanceof EVaultVideoLibraryError) || error.code !== 'stream_expired')
         throw error;
-      const renewedStreamId = library.renewPersonalStream(session.user, streamId);
+      const renewedStreamId = await library.renewPlayableStream(session.user, streamId);
       mediaUrl = await library.resolveMediaUrl(session.user, renewedStreamId);
       renewedExpiredStream = true;
     }
@@ -44,7 +44,7 @@ export async function GET(
     if (!upstream.ok && upstream.status !== 206) {
       if ([401, 403, 404].includes(upstream.status)) {
         await discardUpstreamBody(upstream);
-        library.invalidateMediaUrl(session.user, streamId);
+        await library.invalidateMediaUrl(session.user, streamId);
         mediaUrl = await library.resolveMediaUrl(session.user, streamId);
         upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
         retriedSource = true;

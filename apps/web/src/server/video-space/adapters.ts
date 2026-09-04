@@ -38,6 +38,8 @@ export interface DiscoveredVideoRecord {
   sourceId: 'w3ds-file' | 'file-record' | 'call-recording' | 'video-message';
   /** Server-only space identity for cache revalidation. Never sent to clients. */
   sourceSpaceKey?: string;
+  /** Server-only direct-chat identity for current shared-playback verification. */
+  sourceChatId?: string;
   accessBasis?: VideoAccessBasis;
 }
 
@@ -358,6 +360,7 @@ export function discoverCallRecordingVideos(input: {
       accessScope,
       sourceId: 'call-recording',
       sourceSpaceKey: input.sourceEName,
+      ...(callChatId ? { sourceChatId: callChatId } : {}),
       accessBasis: accessScope === 'personal' ? 'personal' : 'history',
     });
   }
@@ -380,6 +383,7 @@ export function discoverVideoMessageVideos(
     const fileUris = [decision.fileUri];
     for (const fileUri of fileUris) referenced.add(fileUri);
     const shape = optionalString(message.parsed.shape) ?? optionalString(message.parsed.type);
+    const sourceChatId = optionalString(message.parsed.chatId);
     const accessScope = scopeForRecord({
       viewerEName,
       payload: message.parsed,
@@ -411,6 +415,7 @@ export function discoverVideoMessageVideos(
       accessScope,
       sourceId: 'video-message',
       ...(sourceSpaceKey ? { sourceSpaceKey } : {}),
+      ...(sourceChatId ? { sourceChatId } : {}),
       accessBasis: accessScope === 'personal' ? 'personal' : 'history',
     });
   }

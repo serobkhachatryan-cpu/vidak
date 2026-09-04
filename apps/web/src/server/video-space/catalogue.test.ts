@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import type { DiscoveredVideoRecord } from './adapters';
-import { assembleVideoSpaceCatalogue } from './catalogue';
+import { assembleVideoSpaceCatalogue, type VideoSpaceStreamGrantInput } from './catalogue';
 import { createInventoryCompletenessTracker } from './completeness';
 import { documentedVideoSourceIds } from './documented-sources';
 
@@ -25,6 +25,9 @@ const shared: DiscoveredVideoRecord = {
   createdAt: '2026-08-01T00:00:00.000Z',
   accessScope: 'shared',
   sourceId: 'call-recording',
+  sourceSpaceKey: '@friend.w3id',
+  sourceChatId: 'chat-1',
+  accessBasis: 'history',
 };
 
 describe('assembleVideoSpaceCatalogue', () => {
@@ -47,7 +50,7 @@ describe('assembleVideoSpaceCatalogue', () => {
       records: [personal],
       completeness: tracker.snapshot(),
       viewerEName: '@owner.w3id',
-      toStreamId: (fileUri) => `stream:${fileUri}`,
+      toStreamId: (grant) => `stream:${grant.fileUri}`,
     });
     expect(snapshot.items).toHaveLength(1);
     expect(snapshot.items[0]?.title).toBe('Studio take');
@@ -69,15 +72,28 @@ describe('assembleVideoSpaceCatalogue', () => {
     expect(snapshot.items[0]?.accessScope).toBe('personal');
   });
 
-  it('keeps a shared card as metadata without minting a private stream grant', () => {
+  it('mints a viewer-bound stream grant for a shared card with its verified source context', () => {
+    const grants: VideoSpaceStreamGrantInput[] = [];
     const snapshot = assembleVideoSpaceCatalogue({
       records: [shared],
       completeness: createInventoryCompletenessTracker().snapshot(),
       viewerEName: '@owner.w3id',
-      toStreamId: () => 'must-not-be-created',
+      toStreamId: (grant) => {
+        grants.push(grant);
+        return 'shared-stream';
+      },
     });
     expect(snapshot.items[0]?.accessScope).toBe('shared');
-    expect(snapshot.items[0]?.streamIds).toEqual([]);
+    expect(snapshot.items[0]?.streamIds).toEqual(['shared-stream']);
+    expect(grants).toEqual([
+      {
+        fileUri: 'w3ds://file?id=@friend.w3id/call-1',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'chat-1',
+        accessBasis: 'history',
+      },
+    ]);
   });
 
   it('relabels stale generic ontology titles with the verified ownership scope', () => {
@@ -93,7 +109,7 @@ describe('assembleVideoSpaceCatalogue', () => {
       records: [{ ...shared, title: 'Untitled video' }],
       completeness: createInventoryCompletenessTracker().snapshot(),
       viewerEName: '@owner.w3id',
-      toStreamId: () => 'must-not-be-created',
+      toStreamId: () => 'stream',
     });
     expect(sharedSnapshot.items[0]?.title).toBe('Shared video');
   });

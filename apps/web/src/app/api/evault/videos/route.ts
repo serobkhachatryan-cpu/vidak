@@ -72,6 +72,14 @@ async function attachPreviewFields(
   user: { eName: string },
   previewService: Awaited<ReturnType<typeof loadPreviewService>>,
 ) {
+  // Shared playback grants are revalidated by the media route every time they
+  // are used. A still image is a separate source fetch, so never mint or
+  // inspect a preview URL for it here. The card remains playable and uses the
+  // neutral ready-to-watch placeholder until the viewer opens it.
+  if (item.accessScope !== 'personal') {
+    return { ...item, previewState: 'unavailable' as const };
+  }
+
   const streamId = item.streamIds[0];
   if (!streamId) {
     return { ...item, previewState: 'unavailable' as const };

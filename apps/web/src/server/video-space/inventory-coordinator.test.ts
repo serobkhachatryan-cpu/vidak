@@ -406,11 +406,13 @@ describe('inventory coordinator', () => {
         accessScope: 'shared',
         visibility: 'shared-with-me',
         sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'private-chat-123',
         accessBasis: 'membership',
       }),
     ]);
     expect(items[0]).toMatchObject({ sharedVia: 'group' });
     expect(JSON.stringify(items)).not.toContain('@friend.w3id');
+    expect(JSON.stringify(items)).not.toContain('private-chat-123');
   });
 
   it('inventories owned messenger/call videos plus authorized shared videos without duplicates', async () => {

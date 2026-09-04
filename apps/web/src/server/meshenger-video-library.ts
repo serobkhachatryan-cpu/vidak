@@ -1,4 +1,12 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  createHmac,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from 'node:crypto';
 import 'server-only';
 
 import type { AuthUser } from '@w3ds/auth';
@@ -10,6 +18,7 @@ import {
   discoverW3dsFileVideos,
   type FileRecordReferenceTarget,
   fileRecordReferenceTarget,
+  type VideoAccessBasis,
 } from './video-space/adapters';
 import { parseRetryAfter, retryDelayMs, retryWithExponentialBackoff } from './video-space/backoff';
 import { assembleVideoSpaceCatalogue } from './video-space/catalogue';
@@ -96,6 +105,7 @@ const interactivePlaybackReservationMs = 30_000;
 const maxRetainedLibraryMessages = 128;
 const maxRetainedLibraryConversations = 128;
 const maxDeferredMetadataStringLength = 512;
+const streamGrantVersion = 'v2';
 
 export type MeshengerVideoKind = 'call-recording' | 'video-message' | 'file';
 export type EVaultVideoAccessScope = VideoSpaceAccessScope;
@@ -117,6 +127,8 @@ export interface MeshengerVideo {
   sharedVia?: 'group' | 'conversation';
   /** Server-only. Stripped before any client JSON. */
   sourceSpaceKey?: string;
+  /** Server-only. Stripped before any client JSON. */
+  sourceChatId?: string;
   accessBasis?: 'personal' | 'membership' | 'history';
 }
 
@@ -192,6 +204,10 @@ interface StreamGrant {
   fileUri: string;
   /** The catalogue classification at the time this private grant was issued. */
   accessScope: EVaultVideoAccessScope;
+  /** Authorization context for a shared source; signed but never client-readable. */
+  sourceSpaceKey?: string;
+  sourceChatId?: string;
+  accessBasis?: VideoAccessBasis;
   expiresAt: number;
 }
 interface Config {
@@ -215,6 +231,7 @@ type RateLimitMode = 'fail-fast' | 'backoff';
 export type SharedSpaceProbe = {
   eName: string;
   kind: 'group' | 'direct';
+  chatId?: string;
 };
 export type SharedSpaceAccess = {
   access: 'ok' | 'denied' | 'missing' | 'retry';
@@ -262,6 +279,7 @@ export function compactMediaSourceMetadata(payload: RecordValue): RecordValue {
     'title',
     'caption',
     'content',
+    'chatId',
     'chatTitle',
     'createdAt',
     'durationSec',
@@ -579,7 +597,7 @@ export class MeshengerVideoLibrary {
       const chats = await this.readSource(
         () =>
           this.listEnvelopes(vault.ownerEName, vault.eVaultUri, chatOntology, undefined, {
-            maxPages: 1,
+            maxPages: 3,
             rateLimit: 'fail-fast',
           }),
         undefined,
@@ -587,7 +605,16 @@ export class MeshengerVideoLibrary {
       if (chats.failure === 'denied') return { access: 'denied', member: false };
       if (chats.failure === 'missing') return { access: 'missing', member: false };
       if (isRetryFailure(chats.failure)) return { access: 'retry', member: false };
-      return { access: 'ok', member: true };
+      if (!space.chatId) return { access: 'missing', member: false };
+      const chat = chats.value?.items.find((item) => {
+        const chatId = optionalString(item.parsed.id) ?? item.id;
+        return chatId === space.chatId && item.parsed.isReference !== true;
+      });
+      if (!chat) return { access: 'missing', member: false };
+      const member = asArray(chat.parsed.participantIds).some(
+        (participant) => typeof participant === 'string' && sameEName(participant, user.eName),
+      );
+      return { access: 'ok', member };
     }
     const manifests = await this.readSource(
       () =>
@@ -609,7 +636,7 @@ export class MeshengerVideoLibrary {
   }
 
   async resolveMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string> {
-    const { grant, file } = this.requirePersonalStreamGrant(user, streamId);
+    const { grant, file } = await this.requirePlayableStreamGrant(user, streamId);
     const cacheKey = `${grant.eName}\u0000${grant.fileUri}`;
     const cached = cachedMediaUrls.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) return cached.url;
@@ -689,13 +716,11 @@ export class MeshengerVideoLibrary {
     return { fileUri: grant.fileUri };
   }
 
-  /**
-   * Reissues a signed private stream after its short-lived viewer link expires.
-   * The original signature, signed-in owner, and canonical personal File URI
-   * are all checked before a replacement is issued.
-   */
-  renewPersonalStream(user: Pick<AuthUser, 'eName'>, streamId: string): string {
-    const { grant } = this.requirePersonalStreamGrant(user, streamId, { allowExpired: true });
+  /** Reissues a viewer-bound stream after rechecking its current source access. */
+  async renewPlayableStream(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string> {
+    const { grant } = await this.requirePlayableStreamGrant(user, streamId, {
+      allowExpired: true,
+    });
     return createMeshengerVideoStreamId(
       {
         ...grant,
@@ -709,18 +734,12 @@ export class MeshengerVideoLibrary {
    * Drops a cached signed source after the upstream reports an expired or denied
    * media URL. The next request resolves the File envelope again.
    */
-  invalidateMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): void {
-    const { grant } = this.requirePersonalStreamGrant(user, streamId);
+  async invalidateMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<void> {
+    const { grant } = await this.requirePlayableStreamGrant(user, streamId);
     cachedMediaUrls.delete(`${grant.eName}\u0000${grant.fileUri}`);
   }
 
-  /**
-   * A signed viewer grant is necessary but not sufficient for private media.
-   * A stale card may point at somebody else's file through a historical
-   * conversation. Until the platform exposes a direct per-file entitlement
-   * check, only files owned by the authenticated account can be proxied.
-   */
-  private requirePersonalStreamGrant(
+  private requireBoundStreamGrant(
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
     options?: { allowExpired?: boolean },
@@ -728,12 +747,7 @@ export class MeshengerVideoLibrary {
     const grant = verifyMeshengerVideoStreamId(streamId, this.config.signingSecret, options);
     const eName = requireEName(user.eName);
     const file = parseW3dsFileUri(grant.fileUri);
-    if (
-      grant.eName !== eName ||
-      grant.accessScope !== 'personal' ||
-      !file ||
-      !sameEName(file.ownerEName, eName)
-    ) {
+    if (grant.eName !== eName || !file) {
       throw new MeshengerVideoLibraryError(
         'This source cannot be played until its access is verified.',
         'authorization_denied',
@@ -741,6 +755,98 @@ export class MeshengerVideoLibrary {
       );
     }
     return { grant, file };
+  }
+
+  private async requirePlayableStreamGrant(
+    user: Pick<AuthUser, 'eName'>,
+    streamId: string,
+    options?: { allowExpired?: boolean },
+  ): Promise<{ grant: StreamGrant; file: NonNullable<ReturnType<typeof parseW3dsFileUri>> }> {
+    const bound = this.requireBoundStreamGrant(user, streamId, options);
+    const { grant, file } = bound;
+    if (grant.accessScope === 'personal') {
+      if (!sameEName(file.ownerEName, user.eName)) {
+        throw new MeshengerVideoLibraryError(
+          'This source cannot be played until its access is verified.',
+          'authorization_denied',
+          403,
+        );
+      }
+      return bound;
+    }
+
+    const sourceSpaceKey = grant.sourceSpaceKey;
+    const accessBasis = grant.accessBasis;
+    if (
+      !sourceSpaceKey ||
+      !isEName(sourceSpaceKey) ||
+      (accessBasis !== 'personal' && accessBasis !== 'membership' && accessBasis !== 'history') ||
+      (accessBasis === 'history' && !grant.sourceChatId)
+    ) {
+      throw new MeshengerVideoLibraryError(
+        'This source cannot be played until its access is verified.',
+        'authorization_denied',
+        403,
+      );
+    }
+    if (accessBasis === 'personal') {
+      if (sameEName(sourceSpaceKey, user.eName)) return bound;
+      throw new MeshengerVideoLibraryError(
+        'This source cannot be played until its access is verified.',
+        'authorization_denied',
+        403,
+      );
+    }
+    const probes: SharedSpaceProbe[] =
+      accessBasis === 'membership'
+        ? [{ eName: sourceSpaceKey, kind: 'group' }]
+        : [
+            {
+              eName: sourceSpaceKey,
+              kind: 'direct',
+              ...(grant.sourceChatId ? { chatId: grant.sourceChatId } : {}),
+            },
+            { eName: sourceSpaceKey, kind: 'group' },
+          ];
+    let retrying = false;
+    for (const source of probes) {
+      const access = await this.probeSharedSpaceAccess(user, source);
+      if (access.access === 'ok' && access.member) return bound;
+      retrying ||= access.access === 'retry';
+    }
+    if (retrying) {
+      throw new MeshengerVideoLibraryError(
+        'This shared source is temporarily unavailable. Please try again.',
+        'remote_unavailable',
+        503,
+      );
+    }
+    throw new MeshengerVideoLibraryError(
+      'This source cannot be played until its access is verified.',
+      'authorization_denied',
+      403,
+    );
+  }
+
+  /**
+   * Preview capture is optional background work. It must not dereference a
+   * shared source even when viewer playback is authorized, so only the
+   * authenticated owner's personal File is accepted here.
+   */
+  private requirePersonalStreamGrant(
+    user: Pick<AuthUser, 'eName'>,
+    streamId: string,
+    options?: { allowExpired?: boolean },
+  ): { grant: StreamGrant; file: NonNullable<ReturnType<typeof parseW3dsFileUri>> } {
+    const bound = this.requireBoundStreamGrant(user, streamId, options);
+    if (bound.grant.accessScope !== 'personal' || !sameEName(bound.file.ownerEName, user.eName)) {
+      throw new MeshengerVideoLibraryError(
+        'This source cannot be played until its access is verified.',
+        'authorization_denied',
+        403,
+      );
+    }
+    return bound;
   }
 
   private assembleLibrary(input: {
@@ -755,12 +861,15 @@ export class MeshengerVideoLibrary {
       records: input.found,
       completeness: completenessState,
       viewerEName: input.eName,
-      toStreamId: (fileUri) =>
+      toStreamId: (grantInput) =>
         createMeshengerVideoStreamId(
           {
             eName: input.eName,
-            fileUri,
-            accessScope: 'personal',
+            fileUri: grantInput.fileUri,
+            accessScope: grantInput.accessScope,
+            ...(grantInput.sourceSpaceKey ? { sourceSpaceKey: grantInput.sourceSpaceKey } : {}),
+            ...(grantInput.sourceChatId ? { sourceChatId: grantInput.sourceChatId } : {}),
+            ...(grantInput.accessBasis ? { accessBasis: grantInput.accessBasis } : {}),
             expiresAt: Date.now() + streamLifetimeMs,
           },
           this.config.signingSecret,
@@ -3353,6 +3462,10 @@ export class MeshengerVideoLibrary {
     queue: DeferredWork[],
     counts: InventorySourceCounts,
   ): Promise<void> {
+    // A deferred File lookup may resolve a foreign canonical record. Retain
+    // only the conversation id that originally authorized the reference so
+    // its eventual playback grant can be checked against that same source.
+    const sourceChatId = optionalString(item.sourceMetadata?.chatId);
     const parsedFile = parseW3dsFileUri(item.fileUri);
     const envelopeId = parsedFile?.metaEnvelopeId ?? item.envelopeId;
     const ownerHint = parsedFile?.ownerEName ?? item.owner;
@@ -3427,8 +3540,11 @@ export class MeshengerVideoLibrary {
         ...records.map((record) => ({
           ...record,
           sourceSpaceKey: item.sourceSpaceKey,
+          ...(sourceChatId ? { sourceChatId } : {}),
           accessBasis:
-            record.accessScope === 'personal' ? ('personal' as const) : ('history' as const),
+            record.accessScope === 'personal' || sameEName(item.sourceSpaceKey, viewerEName)
+              ? ('personal' as const)
+              : ('history' as const),
         })),
       );
       return;
@@ -3856,8 +3972,15 @@ export function createMeshengerVideoLibrary(
 }
 
 export function createMeshengerVideoStreamId(grant: StreamGrant, secret: string): string {
-  const encoded = Buffer.from(JSON.stringify(grant)).toString('base64url');
-  return `${encoded}.${createHmac('sha256', secret).update(encoded).digest('base64url')}`;
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', streamGrantKey(secret), iv);
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(grant), 'utf8'), cipher.final()]);
+  return [
+    streamGrantVersion,
+    iv.toString('base64url'),
+    ciphertext.toString('base64url'),
+    cipher.getAuthTag().toString('base64url'),
+  ].join('.');
 }
 
 export function verifyMeshengerVideoStreamId(
@@ -3865,27 +3988,15 @@ export function verifyMeshengerVideoStreamId(
   secret: string,
   options?: { allowExpired?: boolean },
 ): StreamGrant {
-  const [encoded, signature, ...rest] = value.split('.');
-  if (!encoded || !signature || rest.length) invalidStream();
-  const expected = createHmac('sha256', secret).update(encoded).digest('base64url');
-  const actualBuffer = Buffer.from(signature);
-  const expectedBuffer = Buffer.from(expected);
-  if (
-    actualBuffer.length !== expectedBuffer.length ||
-    !timingSafeEqual(actualBuffer, expectedBuffer)
-  )
-    invalidStream();
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
-  } catch {
-    invalidStream();
-  }
+  const parsed = decodeMeshengerVideoStreamGrant(value, secret);
   const grant = record(parsed);
   const eName = optionalString(grant?.eName);
   const fileUri = optionalString(grant?.fileUri);
   const expiresAt = number(grant?.expiresAt);
   const accessScope = optionalString(grant?.accessScope);
+  const sourceSpaceKey = optionalString(grant?.sourceSpaceKey);
+  const sourceChatId = optionalString(grant?.sourceChatId);
+  const accessBasis = optionalString(grant?.accessBasis);
   if (
     !eName ||
     !fileUri ||
@@ -3895,13 +4006,76 @@ export function verifyMeshengerVideoStreamId(
     !parseW3dsFileUri(fileUri)
   )
     invalidStream();
+  if (
+    accessScope === 'shared' &&
+    (!sourceSpaceKey ||
+      !isEName(sourceSpaceKey) ||
+      (accessBasis !== 'personal' && accessBasis !== 'membership' && accessBasis !== 'history') ||
+      (accessBasis === 'history' && !sourceChatId))
+  )
+    invalidStream();
   if (expiresAt <= Date.now() && !options?.allowExpired)
     throw new MeshengerVideoLibraryError(
       'This video link has expired. Refresh the library and try again.',
       'stream_expired',
       401,
     );
-  return { eName, fileUri, accessScope, expiresAt };
+  return {
+    eName,
+    fileUri,
+    accessScope,
+    ...(sourceSpaceKey ? { sourceSpaceKey } : {}),
+    ...(sourceChatId ? { sourceChatId } : {}),
+    ...(accessBasis ? { accessBasis: accessBasis as VideoAccessBasis } : {}),
+    expiresAt,
+  };
+}
+
+/**
+ * New stream grants are sealed with AES-GCM. The legacy signed form remains
+ * readable until outstanding personal-player links expire after deployment.
+ */
+function decodeMeshengerVideoStreamGrant(value: string, secret: string): unknown {
+  const parts = value.split('.');
+  if (parts[0] === streamGrantVersion) {
+    const [, ivValue, ciphertextValue, tagValue, ...rest] = parts;
+    if (!ivValue || !ciphertextValue || !tagValue || rest.length) invalidStream();
+    try {
+      const decipher = createDecipheriv(
+        'aes-256-gcm',
+        streamGrantKey(secret),
+        Buffer.from(ivValue, 'base64url'),
+      );
+      decipher.setAuthTag(Buffer.from(tagValue, 'base64url'));
+      return JSON.parse(
+        Buffer.concat([
+          decipher.update(Buffer.from(ciphertextValue, 'base64url')),
+          decipher.final(),
+        ]).toString('utf8'),
+      );
+    } catch {
+      invalidStream();
+    }
+  }
+  const [encoded, signature, ...rest] = parts;
+  if (!encoded || !signature || rest.length) invalidStream();
+  const expected = createHmac('sha256', secret).update(encoded).digest('base64url');
+  const actualBuffer = Buffer.from(signature);
+  const expectedBuffer = Buffer.from(expected);
+  if (
+    actualBuffer.length !== expectedBuffer.length ||
+    !timingSafeEqual(actualBuffer, expectedBuffer)
+  )
+    invalidStream();
+  try {
+    return JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8'));
+  } catch {
+    invalidStream();
+  }
+}
+
+function streamGrantKey(secret: string): Buffer {
+  return createHash('sha256').update(`vidak-stream-grant:${secret}`).digest();
 }
 
 function record(value: unknown): RecordValue | undefined {

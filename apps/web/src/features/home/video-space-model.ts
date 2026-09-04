@@ -250,7 +250,7 @@ export function libraryCardDetails(
 export function canPlayLibraryVideo(
   video: Pick<VideoSpaceLibraryItem, 'accessScope' | 'streamIds'>,
 ): boolean {
-  return video.accessScope === 'personal' && Boolean(video.streamIds?.length);
+  return Boolean(video.streamIds?.length);
 }
 
 /**

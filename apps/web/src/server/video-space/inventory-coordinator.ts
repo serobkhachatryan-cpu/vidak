@@ -77,7 +77,12 @@ interface CacheEntry {
 
 export function publicLibraryItems(items: readonly MeshengerVideo[]): MeshengerVideo[] {
   return items.map((item) => {
-    const { sourceSpaceKey: _space, accessBasis: _basis, ...publicItem } = item;
+    const {
+      sourceSpaceKey: _space,
+      sourceChatId: _chat,
+      accessBasis: _basis,
+      ...publicItem
+    } = item;
     if (item.accessScope !== 'shared') return publicItem;
     return {
       ...publicItem,
