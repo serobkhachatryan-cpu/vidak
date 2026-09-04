@@ -62,13 +62,18 @@ describe('eVault video stream route', () => {
 
     const response = await GET(
       new NextRequest('https://vidak.example/api/evault/videos/stream-1', {
-        headers: { authorization: 'Bearer access-token', range: 'bytes=0-8' },
+        headers: {
+          authorization: 'Bearer access-token',
+          range: 'bytes=0-8',
+          'x-request-id': 'playback-success-1',
+        },
       }),
       { params: Promise.resolve({ streamId: 'stream-1' }) },
     );
 
     expect(response.status).toBe(206);
     expect(response.headers.get('content-range')).toBe('bytes 0-8/9');
+    expect(response.headers.get('x-request-id')).toBe('playback-success-1');
     await expect(response.text()).resolves.toBe('recovered');
     expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
     expect(resolveMediaUrl).toHaveBeenCalledTimes(2);
@@ -171,6 +176,8 @@ describe('eVault video stream route', () => {
     );
 
     expect(response.status).toBe(500);
+    expect(response.headers.get('x-request-id')).toBe('playback-failure-1');
+    expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     expect(operationalLogs).toHaveLength(1);
     expect(operationalLogs[0]).toContain('"category":"video_playback"');
     expect(operationalLogs[0]).toContain('"code":"internal_error"');

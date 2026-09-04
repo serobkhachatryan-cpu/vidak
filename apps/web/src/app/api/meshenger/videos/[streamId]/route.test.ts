@@ -62,7 +62,11 @@ describe('Meshenger video stream route', () => {
 
     const response = await GET(
       new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
-        headers: { authorization: 'Bearer access-token', range: 'bytes=0-6' },
+        headers: {
+          authorization: 'Bearer access-token',
+          range: 'bytes=0-6',
+          'x-request-id': 'meshenger-playback-success-1',
+        },
       }),
       { params: Promise.resolve({ streamId: 'stream-1' }) },
     );
@@ -70,6 +74,7 @@ describe('Meshenger video stream route', () => {
     expect(response.status).toBe(206);
     expect(response.headers.get('content-type')).toBe('video/mp4');
     expect(response.headers.get('content-range')).toBe('bytes 0-6/7');
+    expect(response.headers.get('x-request-id')).toBe('meshenger-playback-success-1');
     await expect(response.text()).resolves.toBe('segment');
     expect(upstreamSignal?.aborted).toBe(false);
     expect(clearTimeoutSpy).toHaveBeenCalled();

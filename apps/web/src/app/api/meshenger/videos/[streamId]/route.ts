@@ -77,6 +77,7 @@ export async function GET(
     const headers = new Headers({
       'Cache-Control': 'private, no-store, max-age=0',
       'X-Content-Type-Options': 'nosniff',
+      'X-Request-Id': correlationId,
     });
     for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
       const value = upstream.headers.get(header);
@@ -85,7 +86,7 @@ export async function GET(
     return new NextResponse(upstream.body, { status: upstream.status, headers });
   } catch (error) {
     logProxyFailure(error, correlationId);
-    return errorResponse(error);
+    return errorResponse(error, correlationId);
   }
 }
 
@@ -126,7 +127,7 @@ async function fetchUpstreamMedia(mediaUrl: string, range: string | null): Promi
   }
 }
 
-function errorResponse(error: unknown): NextResponse {
+function errorResponse(error: unknown, correlationId: string): NextResponse {
   const status =
     error instanceof MeshengerVideoLibraryError || error instanceof W3dsAuthError
       ? error.status
@@ -137,5 +138,7 @@ function errorResponse(error: unknown): NextResponse {
       : { error: { code: 'internal_error', message: 'Meshenger video playback is unavailable.' } };
   const response = NextResponse.json(body, { status });
   response.headers.set('Cache-Control', 'private, no-store, max-age=0');
+  response.headers.set('X-Content-Type-Options', 'nosniff');
+  response.headers.set('X-Request-Id', correlationId);
   return response;
 }
