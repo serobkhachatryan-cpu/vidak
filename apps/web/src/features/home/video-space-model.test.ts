@@ -108,8 +108,20 @@ describe('video space home model', () => {
     expect(guide).toContain('watch video');
     expect(guide).toContain('make private');
     expect(guide).toContain('rechecks that authorization when playback starts');
+    expect(guide).toContain('their name is shown on the card');
+    expect(guide).toContain('first secure scan can take a moment');
     expect(guide).not.toContain('shared videos remain unavailable');
     expect(guide).not.toContain('messenger');
+  });
+
+  it('labels a verified direct share with the sharer’s chosen public name', () => {
+    expect(
+      libraryCardDetails({
+        ...sharedVideo,
+        sharedVia: 'conversation',
+        sharedBy: 'Ada Lovelace',
+      }),
+    ).toContain('Shared by Ada Lovelace through a W3DS conversation');
   });
 
   it('treats a generated owned preview path as asynchronous rather than ready', () => {

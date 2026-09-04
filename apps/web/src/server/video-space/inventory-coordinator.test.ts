@@ -458,6 +458,42 @@ describe('inventory coordinator', () => {
     expect(JSON.stringify(items)).not.toContain('private-chat-123');
   });
 
+  it('attributes an authorized direct share using only its chosen public name', async () => {
+    const sharedVideo = video({
+      id: 'shared-1',
+      title: 'Shared',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'private-chat-123',
+      accessBasis: 'history',
+    });
+    const resolveSharedSourceNames = vi.fn(async () => new Map([['@friend.w3id', 'Ada Lovelace']]));
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary: async (_user, options) => {
+          options.onSnapshot(library([sharedVideo]), 'done', {
+            personalPages: 0,
+            sharedSpaces: 1,
+            failed: 0,
+          });
+          return library([sharedVideo]);
+        },
+        probeSharedSpaceAccess: vi.fn().mockResolvedValue({ access: 'ok', member: true }),
+      }),
+      resolveSharedSourceNames,
+      log: () => undefined,
+    });
+
+    const snapshot = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(snapshot.items).toEqual([
+      expect.objectContaining({ sharedVia: 'conversation', sharedBy: 'Ada Lovelace' }),
+    ]);
+    expect(JSON.stringify(snapshot.items)).not.toContain('@friend.w3id');
+    expect(JSON.stringify(snapshot.items)).not.toContain('private-chat-123');
+    expect(resolveSharedSourceNames).toHaveBeenCalledWith(['@friend.w3id']);
+  });
+
   it('inventories owned messenger/call videos plus authorized shared videos without duplicates', async () => {
     const ownedCall = video({
       id: 'call-1',

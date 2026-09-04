@@ -15,13 +15,14 @@ import { useAppearancePreference } from '../features/settings/appearance-prefere
 import { headerAccountCta, headerVerifiedNameCta } from '../lib/public-display-name';
 
 const signedInNavigation = [
-  { label: 'Home', href: '/', icon: '⌂' },
-  { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
-  { label: 'Support', href: '/support', icon: '⚑' },
+  // The landing page is the signed-in library, so call it what it is instead
+  // of duplicating it with a separate "Your videos" destination.
+  { label: 'Your video space', href: '/', icon: '⌂' },
+  { label: 'Upload a video', href: '/upload', icon: '⇪' },
   { label: 'Linked channels', href: '/library', icon: '▣' },
-  { label: 'Your videos', href: '/your-videos', icon: '◌' },
-  { label: 'Upload', href: '/upload', icon: '⇪' },
+  { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
   { label: 'Settings', href: '/settings', icon: '⚙' },
+  { label: 'Support', href: '/support', icon: '⚑' },
 ];
 
 // Public browsing should never look like a broken signed-in product. Keep

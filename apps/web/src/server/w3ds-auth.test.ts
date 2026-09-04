@@ -169,6 +169,32 @@ describe('W3dsAuthService', () => {
     expect(uuidSession.user.profile.handle).toBeUndefined();
   });
 
+  it('returns only deliberately chosen public names for shared-card attribution', async () => {
+    const { service, store } = createService();
+    const named = await store.findOrCreateUser(
+      createAuthUser({
+        id: 'w3ds_named',
+        displayName: 'Ada Lovelace',
+        roles: ['creator'],
+        eName: '@ada.w3id',
+        eVaultId: 'evault-ada',
+      }),
+    );
+    const neutral = await store.findOrCreateUser(
+      createAuthUser({
+        id: 'w3ds_neutral',
+        displayName: 'Vidak member',
+        roles: ['creator'],
+        eName: '@neutral.w3id',
+        eVaultId: 'evault-neutral',
+      }),
+    );
+
+    await expect(
+      service.findChosenPublicNamesByENames([named.eName, neutral.eName, '@unknown.w3id']),
+    ).resolves.toEqual(new Map([[named.eName, 'Ada Lovelace']]));
+  });
+
   it('reuses the server-side verifier for arbitrary signed payloads without issuing a login session', async () => {
     const { service, verifier, store } = createService();
 

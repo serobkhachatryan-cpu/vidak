@@ -27,6 +27,8 @@ export interface VideoSpaceLibraryItem {
   streamIds?: string[];
   /** Safe high-level source context for a shared card. */
   sharedVia?: 'group' | 'conversation';
+  /** An explicitly chosen public Vidak name for a verified direct share. */
+  sharedBy?: string;
   previewState?: VideoSpacePreviewState;
   previewUrl?: string;
 }
@@ -67,12 +69,12 @@ export const videoSpacePanelCopy = {
 
 /** Plain-language orientation for the private W3DS library. */
 export const videoSpaceGuideCopy = {
-  title: 'How your video space works',
-  summary: 'Your private view of W3DS video',
+  title: 'Start here',
+  summary: 'Choose what you want to do',
   points: [
-    'My videos contains videos owned by your eID. Shared with me contains only videos whose owner has explicitly authorized you to view them.',
+    'My videos contains videos owned by your eID. Shared with me contains only videos whose owner has explicitly authorized you to view them. When a direct sharer has chosen a public Vidak name, their name is shown on the card.',
     'Watching never makes a video public or changes its sharing rules. A card marked Private stays private.',
-    'Vidak continues synchronizing your library automatically. Refresh checks for updates right away; it does not upload, copy, or change your original videos.',
+    'Vidak continues synchronizing your library automatically. Refresh checks for updates right away; it does not upload, copy, or change your original videos. The first secure scan can take a moment; returning to your library and opening a video reuse a warm private session.',
     'Upload starts a new Vidak draft. You choose whether to publish it when it is ready.',
     'Card actions explain your relationship to a video: Resume draft continues a Vidak upload, Watch video opens a video you can play, and Unpublish & make private returns only your published Vidak video to a private draft without deleting its media. Shared videos have Watch when the source currently authorizes you; Vidak rechecks that authorization when playback starts.',
   ],
@@ -221,9 +223,13 @@ export function shareChangeConfirmation(next: VideoSpaceVisibility): string {
 }
 
 export function librarySourceLabel(
-  video: Pick<VideoSpaceLibraryItem, 'accessScope' | 'kind' | 'visibility' | 'sharedVia'>,
+  video: Pick<
+    VideoSpaceLibraryItem,
+    'accessScope' | 'kind' | 'visibility' | 'sharedVia' | 'sharedBy'
+  >,
 ): string {
   if (video.accessScope === 'shared' || video.visibility === 'shared-with-me') {
+    if (video.sharedBy) return `Shared by ${video.sharedBy} through a W3DS conversation`;
     return video.sharedVia === 'group'
       ? 'Shared with you through a W3DS group'
       : 'Shared with you through a W3DS conversation';
@@ -236,7 +242,13 @@ export function librarySourceLabel(
 export function libraryCardDetails(
   video: Pick<
     VideoSpaceLibraryItem,
-    'durationSeconds' | 'createdAt' | 'accessScope' | 'kind' | 'visibility' | 'sharedVia'
+    | 'durationSeconds'
+    | 'createdAt'
+    | 'accessScope'
+    | 'kind'
+    | 'visibility'
+    | 'sharedVia'
+    | 'sharedBy'
   >,
 ): string {
   const values = [

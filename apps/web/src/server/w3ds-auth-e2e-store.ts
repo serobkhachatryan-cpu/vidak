@@ -89,6 +89,9 @@ export class FilePersistedE2eW3dsAuthStore implements W3dsAuthStore {
   findUserByEName(eName: string) {
     return this.withState(false, () => this.memory.findUserByEName(eName));
   }
+  findUsersByENames(eNames: readonly string[]) {
+    return this.withState(false, () => this.memory.findUsersByENames(eNames));
+  }
   findUserById(userId: string) {
     return this.withState(false, () => this.memory.findUserById(userId));
   }

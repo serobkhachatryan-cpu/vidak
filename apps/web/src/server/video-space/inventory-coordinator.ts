@@ -8,6 +8,7 @@ import {
   type SharedSpaceAccess,
   type SharedSpaceProbe,
 } from '../meshenger-video-library';
+import { getW3dsAuthService } from '../w3ds-auth';
 import type { InventoryCompleteness } from './completeness';
 import { completeInventory } from './completeness';
 import {
@@ -26,6 +27,7 @@ import { mapPool } from './map-pool';
 const cacheTtlMs = 45_000;
 const revalidateConcurrency = 4;
 const sharedAccessProbeTimeoutMs = 3_000;
+const sharedSourceNameTimeoutMs = 750;
 // Keep a durable background pass short. The next pump resumes its exact queue,
 // allowing interactive playback and deployments to preempt deep history scans.
 const backgroundInventoryMaxWaves = 2;
@@ -73,23 +75,37 @@ interface CacheEntry {
   completedAt?: number;
   sourceCounts: InventorySourceCounts;
   spaces: SharedSpaceProbe[];
+  /** Per-viewer cache of safe, explicitly chosen source display names. */
+  sharedSourceNames: Map<string, string>;
+  resolvedSharedSourceNames: Set<string>;
 }
 
-export function publicLibraryItems(items: readonly MeshengerVideo[]): MeshengerVideo[] {
+export function publicLibraryItems(
+  items: readonly MeshengerVideo[],
+  sharedSourceNames: ReadonlyMap<string, string> = new Map(),
+): MeshengerVideo[] {
   return items.map((item) => {
     const {
       sourceSpaceKey: _space,
       sourceChatId: _chat,
       accessBasis: _basis,
+      sharedBy: _untrustedSharedBy,
       ...publicItem
     } = item;
     if (item.accessScope !== 'shared') return publicItem;
+    // A name is added only after the source passed its current authorization
+    // check and only for a direct source whose owner deliberately chose a
+    // public Vidak name. Group identifiers and all raw source metadata stay
+    // server-only.
+    const sharedBy =
+      _basis === 'history' && _space ? sharedSourceNames.get(_space)?.trim() : undefined;
     return {
       ...publicItem,
       // This is deliberately source-type context, not a guessed person. The
       // source eName is private implementation metadata and must not cross the
       // API boundary.
       sharedVia: _basis === 'membership' ? 'group' : 'conversation',
+      ...(sharedBy ? { sharedBy } : {}),
     };
   });
 }
@@ -99,11 +115,15 @@ export function createInventoryCoordinator(options?: {
   now?: () => number;
   ttlMs?: number;
   revalidationTimeoutMs?: number;
+  resolveSharedSourceNames?: (eNames: readonly string[]) => Promise<ReadonlyMap<string, string>>;
   log?: (line: string) => void;
 }) {
   const now = options?.now ?? (() => Date.now());
   const ttlMs = options?.ttlMs ?? cacheTtlMs;
   const revalidationTimeoutMs = options?.revalidationTimeoutMs ?? sharedAccessProbeTimeoutMs;
+  const resolveSharedSourceNames =
+    options?.resolveSharedSourceNames ??
+    ((eNames: readonly string[]) => getW3dsAuthService().findChosenPublicNamesByENames(eNames));
   const log = options?.log ?? ((line: string) => console.info(line));
   const createScanner = options?.createScanner ?? (() => createMeshengerVideoLibrary());
   const entries = new Map<string, CacheEntry>();
@@ -139,6 +159,8 @@ export function createInventoryCoordinator(options?: {
       startedAt: now(),
       sourceCounts: emptySourceCounts(),
       spaces: previous?.spaces ?? [],
+      sharedSourceNames: previous?.sharedSourceNames ?? new Map(),
+      resolvedSharedSourceNames: previous?.resolvedSharedSourceNames ?? new Set(),
       ...(previous?.snapshot.items.length
         ? { firstResultAt: previous.firstResultAt ?? now() }
         : {}),
@@ -221,7 +243,7 @@ export function createInventoryCoordinator(options?: {
       }),
     );
     return {
-      items: publicLibraryItems(snapshot.items),
+      items: publicLibraryItems(snapshot.items, await sharedSourceNamesFor(snapshot.items, entry)),
       conversations: snapshot.conversations,
       messages: snapshot.messages,
       completeness: snapshot.completeness,
@@ -229,6 +251,41 @@ export function createInventoryCoordinator(options?: {
       scope: entry.scope,
       metrics,
     };
+  }
+
+  async function sharedSourceNamesFor(
+    items: readonly MeshengerVideo[],
+    entry: CacheEntry,
+  ): Promise<ReadonlyMap<string, string>> {
+    const eNames = [
+      ...new Set(
+        items
+          .filter(
+            (item) =>
+              item.accessScope === 'shared' &&
+              item.accessBasis === 'history' &&
+              Boolean(item.sourceSpaceKey),
+          )
+          .map((item) => item.sourceSpaceKey as string)
+          .filter((eName) => !entry.resolvedSharedSourceNames.has(eName)),
+      ),
+    ];
+    if (eNames.length === 0) return entry.sharedSourceNames;
+    try {
+      const resolved = await withTimeout(
+        resolveSharedSourceNames(eNames),
+        sharedSourceNameTimeoutMs,
+      );
+      for (const eName of eNames) {
+        entry.resolvedSharedSourceNames.add(eName);
+        const name = resolved.get(eName)?.trim();
+        if (name) entry.sharedSourceNames.set(eName, name);
+      }
+    } catch {
+      // Attribution must never delay or block a verified private library.
+      // Leave unresolved names uncached so a later response can retry.
+    }
+    return entry.sharedSourceNames;
   }
 
   async function revalidateShared(
@@ -307,6 +364,8 @@ export function createInventoryCoordinator(options?: {
           startedAt: now(),
           sourceCounts: emptySourceCounts(),
           spaces: [],
+          sharedSourceNames: new Map(),
+          resolvedSharedSourceNames: new Set(),
         };
         if (!previous) {
           entry.scanning = true;

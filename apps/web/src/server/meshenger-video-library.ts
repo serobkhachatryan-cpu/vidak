@@ -125,6 +125,8 @@ export interface MeshengerVideo {
   streamIds: string[];
   /** Safe source context for a shared card; never an eName or vault identity. */
   sharedVia?: 'group' | 'conversation';
+  /** A source owner's explicitly chosen public Vidak name, when available. */
+  sharedBy?: string;
   /** Server-only. Stripped before any client JSON. */
   sourceSpaceKey?: string;
   /** Server-only. Stripped before any client JSON. */

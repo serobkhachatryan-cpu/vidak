@@ -14,6 +14,7 @@ import {
   supportedAvatarMimeTypes,
 } from '@w3ds/types';
 import {
+  isChosenPublicDisplayName,
   isReplaceableWithVerifiedFullName,
   isValidPublicDisplayName,
   isVerifiedFullNameUpgrade,
@@ -332,6 +333,32 @@ export class W3dsAuthService {
   async getSession(accessToken: string): Promise<AuthSession> {
     const platformSession = await this.getActiveSession(accessToken, 'access');
     return toBrowserAuthSession(await this.toAuthSession(platformSession, false));
+  }
+
+  /**
+   * Resolves only deliberately chosen public names for already-known Vidak
+   * members. This is used to attribute an already-authorized shared card; it
+   * never returns eNames, eVault details, handles, or other profile fields.
+   */
+  async findChosenPublicNamesByENames(
+    eNames: readonly string[],
+  ): Promise<ReadonlyMap<string, string>> {
+    const users = await this.store.findUsersByENames(eNames);
+    const names = new Map<string, string>();
+    for (const user of users) {
+      const identity = {
+        id: user.id,
+        eName: user.eName,
+        eVaultId: user.eVaultId,
+      };
+      if (
+        isChosenPublicDisplayName(user.displayName, identity) &&
+        isValidPublicDisplayName(user.displayName, identity)
+      ) {
+        names.set(user.eName, user.displayName.trim());
+      }
+    }
+    return names;
   }
 
   /**

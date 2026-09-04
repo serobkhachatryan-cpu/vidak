@@ -259,7 +259,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         }
       >
         <div className="space-y-8">
-          <VideoSpaceGuide />
+          <VideoSpaceGuide onSelectTab={setTab} onUpload={() => router.push('/upload')} />
 
           <fieldset className="flex flex-wrap gap-2">
             <legend className="sr-only">Video space sections</legend>
@@ -335,7 +335,13 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   );
 }
 
-function VideoSpaceGuide() {
+function VideoSpaceGuide({
+  onSelectTab,
+  onUpload,
+}: {
+  onSelectTab: (tab: VideoSpaceTab) => void;
+  onUpload: () => void;
+}) {
   return (
     <aside
       className="rounded-xl border border-primary/20 bg-primary/5 p-4"
@@ -348,6 +354,20 @@ function VideoSpaceGuide() {
             — {videoSpaceGuideCopy.summary}
           </span>
         </summary>
+        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <Button size="sm" variant="secondary" onClick={() => onSelectTab('yours')}>
+            Find my videos
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => onSelectTab('shared')}>
+            Open shared videos
+          </Button>
+          <Button size="sm" variant="secondary" onClick={() => onSelectTab('explore')}>
+            Browse public videos
+          </Button>
+          <Button size="sm" onClick={onUpload}>
+            Upload a video
+          </Button>
+        </div>
         <div className="mt-3 grid gap-3 text-sm text-muted-foreground md:grid-cols-2">
           {videoSpaceGuideCopy.points.map((point) => (
             <p key={point}>{point}</p>
@@ -401,10 +421,16 @@ function PrivateLibraryPanel({
 
   if (coldLoad) {
     return (
-      <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3" role="status">
-        {Array.from({ length: 6 }, (_, index) => (
-          <VideoCardSkeleton key={index} />
-        ))}
+      <div className="space-y-3" role="status" aria-live="polite">
+        <Text size="sm" tone="muted">
+          Finding your videos securely. Vidak is checking titles and access permissions, not copying
+          your media. Your first scan can take a moment; later visits stay warm.
+        </Text>
+        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+          {Array.from({ length: 6 }, (_, index) => (
+            <VideoCardSkeleton key={index} />
+          ))}
+        </div>
       </div>
     );
   }

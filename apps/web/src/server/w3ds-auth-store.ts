@@ -90,6 +90,11 @@ export interface W3dsAuthStore {
   markOfferExpired(offerId: string): Promise<void>;
 
   findUserByEName(eName: string): Promise<AuthUser | undefined>;
+  /**
+   * Finds local platform profiles for known eNames. Callers must still decide
+   * which profile fields are safe for their own response surface.
+   */
+  findUsersByENames(eNames: readonly string[]): Promise<AuthUser[]>;
   findUserById(userId: string): Promise<AuthUser | undefined>;
   /**
    * Inserts a user when the eName is new; returns the existing row on conflict.
@@ -262,6 +267,13 @@ export class InMemoryW3dsAuthStore implements W3dsAuthStore {
   async findUserByEName(eName: string): Promise<AuthUser | undefined> {
     const user = this.usersByEName.get(eName);
     return user ? cloneUser(user) : undefined;
+  }
+
+  async findUsersByENames(eNames: readonly string[]): Promise<AuthUser[]> {
+    return [...new Set(eNames)]
+      .map((eName) => this.usersByEName.get(eName))
+      .filter((user): user is AuthUser => Boolean(user))
+      .map(cloneUser);
   }
 
   async findUserById(userId: string): Promise<AuthUser | undefined> {
@@ -606,6 +618,16 @@ export class PostgresW3dsAuthStore implements W3dsAuthStore {
       .where(eq(w3dsPlatformUsers.eName, eName))
       .limit(1);
     return row ? toAuthUser(row) : undefined;
+  }
+
+  async findUsersByENames(eNames: readonly string[]): Promise<AuthUser[]> {
+    const uniqueENames = [...new Set(eNames.map((eName) => eName.trim()).filter(Boolean))];
+    if (uniqueENames.length === 0) return [];
+    const rows = await this.db
+      .select()
+      .from(w3dsPlatformUsers)
+      .where(inArray(w3dsPlatformUsers.eName, uniqueENames));
+    return rows.map(toAuthUser);
   }
 
   async findUserById(userId: string): Promise<AuthUser | undefined> {
