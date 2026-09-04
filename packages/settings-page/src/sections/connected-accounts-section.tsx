@@ -41,7 +41,7 @@ export function ConnectedAccountsSection({
       <EmptyState
         icon="◌"
         title="No connected accounts"
-        description="Link Google, GitHub, or Apple to sign in faster."
+        description="Optional sign-in shortcuts for Vidak. They do not access eVault, import video, or change your eID."
       />
     );
   }

@@ -155,6 +155,20 @@ describe('SettingsPage', () => {
       />,
     );
     expect(loadingConnected).toContain('aria-label="Loading connected accounts"');
+
+    const emptyConnected = renderToStaticMarkup(
+      <SettingsPage
+        email="demo@vidak.video"
+        profile={profile}
+        activeSection="connected"
+        connectedAccounts={[]}
+      />,
+    );
+    expect(emptyConnected).toContain('No connected accounts');
+    expect(emptyConnected).toContain('Optional sign-in shortcuts for Vidak.');
+    expect(emptyConnected).toContain(
+      'They do not access eVault, import video, or change your eID.',
+    );
   });
 
   it('renders channel import controls without claiming provider media is hosted by Vidak', () => {

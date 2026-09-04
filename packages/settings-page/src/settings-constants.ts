@@ -46,7 +46,8 @@ export const settingsSectionDescriptions: Record<SettingsSectionId, string> = {
   privacy: 'Control what others can see about your activity.',
   appearance: 'Choose light, dark, or match your system.',
   language: 'Select the language used across the product.',
-  connected: 'Optional ways to sign in with Google, GitHub, or Apple. These do not import video.',
+  connected:
+    'Optional ways to sign in to Vidak with Google, GitHub, or Apple. They do not access eVault, import video, or change your eID.',
   imports:
     'Optional links to public YouTube or owner-authorized YouTube and Vimeo channels. Vidak does not copy their media.',
   sessions: 'Review devices that are currently signed in.',
