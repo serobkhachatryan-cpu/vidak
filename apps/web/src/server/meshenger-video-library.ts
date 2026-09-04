@@ -592,9 +592,13 @@ export class MeshengerVideoLibrary {
   async probeSharedSpaceAccess(
     user: Pick<AuthUser, 'eName'>,
     space: SharedSpaceProbe,
+    rateLimit: RateLimitMode = 'fail-fast',
   ): Promise<SharedSpaceAccess> {
     requireEName(user.eName);
-    const vaultRead = await this.readSource(() => this.resolveEVault(space.eName), undefined);
+    const vaultRead = await this.readSource(
+      () => this.resolveEVault(space.eName, rateLimit),
+      undefined,
+    );
     if (vaultRead.failure === 'denied') return { access: 'denied', member: false };
     if (vaultRead.failure === 'missing') return { access: 'missing', member: false };
     if (isRetryFailure(vaultRead.failure) || !vaultRead.value) {
@@ -606,7 +610,7 @@ export class MeshengerVideoLibrary {
         () =>
           this.listEnvelopes(vault.ownerEName, vault.eVaultUri, chatOntology, undefined, {
             maxPages: 3,
-            rateLimit: 'fail-fast',
+            rateLimit,
           }),
         undefined,
       );
@@ -628,7 +632,7 @@ export class MeshengerVideoLibrary {
       () =>
         this.listEnvelopes(vault.ownerEName, vault.eVaultUri, groupManifestOntology, undefined, {
           maxPages: 1,
-          rateLimit: 'fail-fast',
+          rateLimit,
         }),
       undefined,
     );
@@ -818,7 +822,10 @@ export class MeshengerVideoLibrary {
           ];
     let retrying = false;
     for (const source of probes) {
-      const access = await this.probeSharedSpaceAccess(user, source);
+      // Playback is interactive work. A short bounded retry turns a transient
+      // registry or eVault hiccup into a playable shared video without ever
+      // treating a denied or missing source as authorized.
+      const access = await this.probeSharedSpaceAccess(user, source, 'backoff');
       if (access.access === 'ok' && access.member) return bound;
       retrying ||= access.access === 'retry';
     }
@@ -3917,6 +3924,13 @@ export class MeshengerVideoLibrary {
           parseRetryAfter(response.headers.get('Retry-After')),
         );
       }
+      if ([408, 425, 500, 502, 503, 504].includes(response.status)) {
+        throw new MeshengerVideoLibraryError(
+          'The W3DS video source is temporarily unavailable.',
+          'remote_unavailable',
+          503,
+        );
+      }
       if (response.status === 401 || response.status === 403) {
         throw new MeshengerVideoLibraryError(
           'This video source is not available to this account.',
@@ -3946,7 +3960,8 @@ export class MeshengerVideoLibrary {
     if (rateLimit === 'fail-fast') return attempt();
     return retryWithExponentialBackoff(attempt, {
       isRetryable: (error) =>
-        error instanceof MeshengerVideoLibraryError && error.code === 'rate_limited',
+        error instanceof MeshengerVideoLibraryError &&
+        (error.code === 'rate_limited' || error.code === 'remote_unavailable'),
       maxAttempts: 4,
       baseMs: 250,
       capMs: 4_000,

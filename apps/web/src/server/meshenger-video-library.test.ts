@@ -177,6 +177,7 @@ describe('Meshenger video library', () => {
       expect(probe).toHaveBeenCalledWith(
         { eName: grant.eName },
         { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+        'backoff',
       );
     } finally {
       vi.unstubAllGlobals();
@@ -223,6 +224,45 @@ describe('Meshenger video library', () => {
       if (url.pathname === '/graphql') {
         fileReadAttempts += 1;
         if (fileReadAttempts === 1) return rateLimited('0');
+        return json({
+          data: {
+            metaEnvelope: {
+              id: 'retry-unavailable-file',
+              ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+              parsed: { publicUrl: 'https://media.example/personal-video.mp4' },
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl(
+          { eName: '@person.w3id' },
+          createMeshengerVideoStreamId(
+            { ...grant, fileUri: 'w3ds://file?id=@person.w3id/retry-unavailable-file' },
+            secret,
+          ),
+        ),
+      ).resolves.toBe('https://media.example/personal-video.mp4');
+      expect(fileReadAttempts).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('retries a transient personal File source failure before failing playback', async () => {
+    let fileReadAttempts = 0;
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.pathname === '/graphql') {
+        fileReadAttempts += 1;
+        if (fileReadAttempts === 1) return new Response('temporary failure', { status: 503 });
         return json({
           data: {
             metaEnvelope: {
