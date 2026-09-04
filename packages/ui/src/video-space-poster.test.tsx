@@ -70,7 +70,7 @@ describe('VideoSpacePoster', () => {
     expect(markup).toContain('aspect-video');
   });
 
-  it('uses a compact designed cover for true failure, not a broken image', () => {
+  it('uses a compact playable-video placeholder instead of a broken image', () => {
     const markup = renderToStaticMarkup(
       <VideoSpaceUnavailablePoster
         title="friends with hats"
@@ -79,11 +79,11 @@ describe('VideoSpacePoster', () => {
         locked
       />,
     );
-    expect(markup).toContain('Preview unavailable');
+    expect(markup).toContain('Video ready to watch');
     expect(markup).toContain('0:12');
     expect(markup).not.toContain('<img');
     expect(markup).not.toContain('<video');
-    expect(markup).toContain('Preview unavailable');
+    expect(markup).not.toContain('Preview unavailable');
   });
 
   it('labels unverified shared references without rendering or fetching their preview', () => {

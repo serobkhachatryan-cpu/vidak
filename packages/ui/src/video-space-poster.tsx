@@ -230,10 +230,10 @@ export function VideoSpaceUnavailablePoster({
     <div
       className="relative flex aspect-video w-full flex-col items-center justify-center gap-2 border border-border/60 bg-muted/70 px-4 text-center"
       role="img"
-      aria-label={`${title} Preview unavailable`}
+      aria-label={`${title} Video ready to watch`}
     >
       <VideoIcon />
-      <p className="font-sans text-[11px] text-muted-foreground">Preview unavailable</p>
+      <p className="font-sans text-[11px] text-muted-foreground">Video ready to watch</p>
       <VideoSpacePosterBadges
         {...(durationSeconds !== undefined ? { durationSeconds } : {})}
         {...(visibilityLabel ? { visibilityLabel } : {})}
