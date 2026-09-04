@@ -166,6 +166,17 @@ describe('video sharing policy', () => {
     ).rejects.toMatchObject({ code: 'not_found', status: 404 });
   });
 
+  it('reports the precise enforcement scope instead of overstating eVault propagation', async () => {
+    const { service, draft } = await createContext();
+
+    await expect(service.getOwnerPolicy('owner-token', draft.id)).resolves.toMatchObject({
+      enforcement: {
+        vidakHostedMedia: 'active',
+        eVaultRecordAcl: 'not_configured',
+      },
+    });
+  });
+
   it('revokes a copied private link immediately when the owner returns to private', async () => {
     const { service, draft } = await createContext();
     const granted = await service.updateOwnerPolicy('owner-token', draft.id, {

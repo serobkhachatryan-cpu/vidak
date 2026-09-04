@@ -53,8 +53,14 @@ export interface ManagedVideoSharingPolicy extends VideoSharingPolicy {
   shareUrl?: string;
   /** Exact eVault `_acl` payload prepared from the user-facing policy. */
   w3dsAcl: W3dsRecordAccessControl;
-  /** Whether Vidak is currently enforcing this policy for its own bytes. */
-  enforcement: 'active';
+  /**
+   * Enforcement is deliberately scoped so the UI never suggests that a
+   * Vidak setting rewrites a File owned by another W3DS application.
+   */
+  enforcement: {
+    vidakHostedMedia: 'active';
+    eVaultRecordAcl: 'not_configured';
+  };
 }
 
 export interface VideoSharingServiceOptions {
@@ -255,7 +261,10 @@ export class VideoSharingService {
         ? { shareUrl: `/watch/shared/${encodeURIComponent(policy.shareToken)}` }
         : {}),
       w3dsAcl: toW3dsRecordAccessControl(policy, ownerEName),
-      enforcement: 'active',
+      enforcement: {
+        vidakHostedMedia: 'active',
+        eVaultRecordAcl: 'not_configured',
+      },
     };
   }
 

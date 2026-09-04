@@ -221,6 +221,11 @@ export function VideoSharingSettingsPage({ videoId }: { videoId: string }) {
               recipient cannot reuse an old link to continue watching.
             </aside>
             <aside className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+              <strong className="text-foreground">Policy scope:</strong> this setting takes effect
+              immediately for media Vidak hosts. It does not rewrite access policies on existing
+              files stored by another W3DS application.
+            </aside>
+            <aside className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
               <strong className="text-foreground">W3DS groups:</strong> group-based sharing will be
               enabled once Vidak can write the same policy to eVault and verify group membership
               there. It is intentionally unavailable here instead of granting hosted media based
