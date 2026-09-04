@@ -7,9 +7,7 @@ describe('supportDiagnosticPath', () => {
   });
 
   it('redacts dynamic video and identity path segments', () => {
-    expect(supportDiagnosticPath('/watch/space/private-record-value')).toBe(
-      '/watch/space/[video]',
-    );
+    expect(supportDiagnosticPath('/watch/space/private-record-value')).toBe('/watch/space/[video]');
     expect(supportDiagnosticPath('/watch/imported/source-video-value')).toBe(
       '/watch/imported/[video]',
     );

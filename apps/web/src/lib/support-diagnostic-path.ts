@@ -28,11 +28,7 @@ const dynamicDiagnosticPaths: Array<readonly [RegExp, string]> = [
  * channel, user, or private-library record identifier.
  */
 export function supportDiagnosticPath(pathname: unknown): string {
-  if (
-    typeof pathname !== 'string' ||
-    !pathname.startsWith('/') ||
-    /[?#\\\r\n]/.test(pathname)
-  ) {
+  if (typeof pathname !== 'string' || !pathname.startsWith('/') || /[?#\\\r\n]/.test(pathname)) {
     return '/other';
   }
   if (fixedDiagnosticPaths.has(pathname)) return pathname;

@@ -84,9 +84,13 @@ export interface WatchPageProps {
     | Pick<Channel, 'name' | 'handle' | 'avatarUrl' | 'subscriberCount' | 'id'>;
   /** Same-origin public or owner media content path for playable bytes. */
   mediaSrc?: string;
+  mediaState?: 'loading' | 'ready' | 'error';
   relatedVideos?: readonly Video[];
   relatedChannels?: Readonly<Record<string, Pick<Channel, 'name' | 'handle' | 'avatarUrl' | 'id'>>>;
   onMeaningfulPlayback?: (currentTime: number, duration: number) => void;
+  onRetryMedia?: () => void;
+  onBrowseVideos?: () => void;
+  onPlaybackHelp?: () => void;
   state?: WatchPageState;
   errorTitle?: ReactNode;
   errorDescription?: ReactNode;
@@ -117,7 +121,14 @@ export interface WatchPageProps {
 export interface WatchPageDataProps
   extends Omit<
     WatchPageProps,
-    'channel' | 'relatedChannels' | 'relatedVideos' | 'state' | 'video' | 'mediaSrc'
+    | 'channel'
+    | 'relatedChannels'
+    | 'relatedVideos'
+    | 'state'
+    | 'video'
+    | 'mediaSrc'
+    | 'mediaState'
+    | 'onRetryMedia'
   > {
   client: VideoApiClient;
   videoId: VideoId;
@@ -345,13 +356,21 @@ function VideoPlaybackSpeedMenu({
 function VideoPlayer({
   title,
   mediaSrc,
+  mediaState,
   mediaRenditions,
   onMeaningfulPlayback,
+  onRetryMedia,
+  onBrowseVideos,
+  onPlaybackHelp,
 }: {
   title: string;
   mediaSrc?: string;
+  mediaState?: 'loading' | 'ready' | 'error';
   mediaRenditions?: readonly VideoMediaRendition[];
   onMeaningfulPlayback?: (currentTime: number, duration: number) => void;
+  onRetryMedia?: () => void;
+  onBrowseVideos?: () => void;
+  onPlaybackHelp?: () => void;
 }) {
   const qualityOptions = useMemo(
     () => buildQualityOptions(mediaSrc, mediaRenditions),
@@ -362,6 +381,8 @@ function VideoPlayer({
   const [selectedQualityId, setSelectedQualityId] = useState('auto');
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [measuredQualityHeights, setMeasuredQualityHeights] = useState<Record<string, number>>({});
+  const [failedPlaybackSource, setFailedPlaybackSource] = useState<string | undefined>();
+  const [playbackAttempt, setPlaybackAttempt] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const qualityOptionsForMenu = useMemo(
     () =>
@@ -387,12 +408,71 @@ function VideoPlayer({
       : (qualityOptions.find((rendition) => rendition.id === selectedQualityId) ??
         automaticQuality);
   const selectedMediaSrc = selectedQuality?.mediaContentUrl ?? mediaSrc;
+  const playbackError = Boolean(failedPlaybackSource) && failedPlaybackSource === selectedMediaSrc;
+  const playbackSrc = selectedMediaSrc
+    ? withPlaybackAttempt(selectedMediaSrc, playbackAttempt)
+    : undefined;
   const changePlaybackSpeed = (speed: number) => {
     setPlaybackSpeed(speed);
     if (videoRef.current) videoRef.current.playbackRate = speed;
   };
 
-  if (selectedMediaSrc) {
+  const retryPlayback = () => {
+    setFailedPlaybackSource(undefined);
+    setPlaybackAttempt((attempt) => attempt + 1);
+    onRetryMedia?.();
+  };
+
+  if (mediaState === 'loading') {
+    return (
+      <PlayerMessage
+        title={title}
+        testId="public-video-player-loading"
+        heading="Preparing video…"
+        description="Vidak is preparing the public playback source."
+      />
+    );
+  }
+
+  if (mediaState === 'error') {
+    return (
+      <PlayerMessage
+        title={title}
+        testId="public-video-player-error"
+        heading="Could not prepare this video"
+        description="The public playback source could not be refreshed. Try again, or get help if the problem continues."
+        actions={
+          <PlaybackRecoveryActions
+            retryLabel="Retry video"
+            onRetry={onRetryMedia}
+            onBrowseVideos={onBrowseVideos}
+            onPlaybackHelp={onPlaybackHelp}
+          />
+        }
+      />
+    );
+  }
+
+  if (playbackError) {
+    return (
+      <PlayerMessage
+        title={title}
+        testId="public-video-player-error"
+        heading="Could not play this video"
+        description="The public playback source did not respond. Retry playback once, or get help if the problem continues."
+        actions={
+          <PlaybackRecoveryActions
+            retryLabel="Retry playback"
+            onRetry={retryPlayback}
+            onBrowseVideos={onBrowseVideos}
+            onPlaybackHelp={onPlaybackHelp}
+          />
+        }
+      />
+    );
+  }
+
+  if (playbackSrc) {
     return (
       <section
         aria-label={`Video player for ${title}`}
@@ -400,13 +480,13 @@ function VideoPlayer({
       >
         <div className="absolute inset-0 overflow-hidden rounded-xl">
           <video
-            key={selectedMediaSrc}
+            key={playbackSrc}
             ref={videoRef}
             className="h-full w-full"
             controls
             playsInline
             preload="metadata"
-            src={selectedMediaSrc}
+            src={playbackSrc}
             onLoadedMetadata={(event) => {
               event.currentTarget.playbackRate = playbackSpeed;
               const height = event.currentTarget.videoHeight;
@@ -423,6 +503,7 @@ function VideoPlayer({
             onEnded={(event) => {
               onMeaningfulPlayback?.(event.currentTarget.currentTime, event.currentTarget.duration);
             }}
+            onError={() => setFailedPlaybackSource(selectedMediaSrc)}
             data-testid="public-video-player"
           >
             <track kind="captions" />
@@ -446,10 +527,75 @@ function VideoPlayer({
   }
 
   return (
+    <PlayerMessage
+      title={title}
+      testId="public-video-player-unavailable"
+      heading="This video has no playable media"
+      description="Vidak has no public playback source for this video."
+      actions={
+        <PlaybackRecoveryActions onBrowseVideos={onBrowseVideos} onPlaybackHelp={onPlaybackHelp} />
+      }
+    />
+  );
+}
+
+function withPlaybackAttempt(source: string, attempt: number): string {
+  const [path, fragment] = source.split('#', 2);
+  const separator = path?.includes('?') ? '&' : '?';
+  return `${path ?? source}${separator}attempt=${attempt}${fragment ? `#${fragment}` : ''}`;
+}
+
+function PlaybackRecoveryActions({
+  retryLabel,
+  onRetry,
+  onBrowseVideos,
+  onPlaybackHelp,
+}: {
+  retryLabel?: string | undefined;
+  onRetry?: (() => void) | undefined;
+  onBrowseVideos?: (() => void) | undefined;
+  onPlaybackHelp?: (() => void) | undefined;
+}) {
+  if (!onRetry && !onBrowseVideos && !onPlaybackHelp) return null;
+  return (
+    <div className="flex flex-wrap justify-center gap-2">
+      {onRetry ? (
+        <Button variant="secondary" onClick={onRetry}>
+          {retryLabel ?? 'Try again'}
+        </Button>
+      ) : null}
+      {onBrowseVideos ? (
+        <Button variant="ghost" onClick={onBrowseVideos}>
+          Browse public videos
+        </Button>
+      ) : null}
+      {onPlaybackHelp ? (
+        <Button variant="ghost" onClick={onPlaybackHelp}>
+          Get help with playback
+        </Button>
+      ) : null}
+    </div>
+  );
+}
+
+function PlayerMessage({
+  title,
+  testId,
+  heading,
+  description,
+  actions,
+}: {
+  title: string;
+  testId: string;
+  heading: string;
+  description: string;
+  actions?: ReactNode;
+}) {
+  return (
     <section
       aria-label={`Video player for ${title}`}
       className="relative aspect-video overflow-hidden rounded-xl bg-black text-white shadow-sm"
-      data-testid="public-video-player-unavailable"
+      data-testid={testId}
     >
       <div
         className="absolute inset-0 bg-gradient-to-br from-primary/40 via-black/70 to-black"
@@ -462,7 +608,11 @@ function VideoPlayer({
         >
           ▶
         </span>
-        <p className="font-sans text-sm text-white/80">This video has no playable media.</p>
+        <div className="space-y-1">
+          <p className="font-sans font-semibold text-white">{heading}</p>
+          <p className="font-sans text-sm text-white/80">{description}</p>
+        </div>
+        {actions}
       </div>
     </section>
   );
@@ -538,9 +688,13 @@ function WatchContent({
   video,
   channel,
   mediaSrc,
+  mediaState,
   relatedVideos = [],
   relatedChannels,
   onMeaningfulPlayback,
+  onRetryMedia,
+  onBrowseVideos,
+  onPlaybackHelp,
   actions,
   subscribed = false,
   comments = [],
@@ -605,8 +759,12 @@ function WatchContent({
         <VideoPlayer
           title={video.title}
           {...(mediaSrc !== undefined ? { mediaSrc } : {})}
+          {...(mediaState ? { mediaState } : {})}
           {...(video.mediaRenditions ? { mediaRenditions: video.mediaRenditions } : {})}
           {...(onMeaningfulPlayback ? { onMeaningfulPlayback } : {})}
+          {...(onRetryMedia ? { onRetryMedia } : {})}
+          {...(onBrowseVideos ? { onBrowseVideos } : {})}
+          {...(onPlaybackHelp ? { onPlaybackHelp } : {})}
         />
         <div>
           <Heading as="h1" size="xl">
@@ -628,43 +786,53 @@ function WatchContent({
           ) : (
             <div className="flex min-w-0 items-center gap-3">{channelIdentity}</div>
           )}
-          <Button
-            variant={subscribed ? 'secondary' : 'primary'}
-            onClick={actions?.onSubscribe}
-            aria-pressed={subscribed}
-          >
-            {subscribed ? 'Subscribed' : 'Subscribe'}
-          </Button>
-        </div>
-
-        <fieldset className="flex flex-wrap gap-2">
-          <legend className="sr-only">Video actions</legend>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={actions?.onLike}
-            aria-label={`Like (${compactNumber.format(video.likeCount)})`}
-          >
-            <span aria-hidden="true">👍</span> {compactNumber.format(video.likeCount)}
-          </Button>
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={actions?.onDislike}
-            aria-label="Dislike video"
-          >
-            <span aria-hidden="true">👎</span>
-            <span className="sr-only">Dislike</span>
-          </Button>
-          <Button variant="secondary" size="sm" onClick={actions?.onShare}>
-            <span aria-hidden="true">↗</span> Share
-          </Button>
-          {actions?.onSave ? (
-            <Button variant="secondary" size="sm" onClick={actions.onSave}>
-              <span aria-hidden="true">＋</span> Save
+          {actions?.onSubscribe ? (
+            <Button
+              variant={subscribed ? 'secondary' : 'primary'}
+              onClick={actions.onSubscribe}
+              aria-pressed={subscribed}
+            >
+              {subscribed ? 'Subscribed' : 'Subscribe'}
             </Button>
           ) : null}
-        </fieldset>
+        </div>
+
+        {actions?.onLike || actions?.onDislike || actions?.onShare || actions?.onSave ? (
+          <fieldset className="flex flex-wrap gap-2">
+            <legend className="sr-only">Video actions</legend>
+            {actions.onLike ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={actions.onLike}
+                aria-label={`Like (${compactNumber.format(video.likeCount)})`}
+              >
+                <span aria-hidden="true">👍</span> {compactNumber.format(video.likeCount)}
+              </Button>
+            ) : null}
+            {actions.onDislike ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={actions.onDislike}
+                aria-label="Dislike video"
+              >
+                <span aria-hidden="true">👎</span>
+                <span className="sr-only">Dislike</span>
+              </Button>
+            ) : null}
+            {actions.onShare ? (
+              <Button variant="secondary" size="sm" onClick={actions.onShare}>
+                <span aria-hidden="true">↗</span> Share
+              </Button>
+            ) : null}
+            {actions.onSave ? (
+              <Button variant="secondary" size="sm" onClick={actions.onSave}>
+                <span aria-hidden="true">＋</span> Save
+              </Button>
+            ) : null}
+          </fieldset>
+        ) : null}
 
         <section aria-label="Video description" className="rounded-lg bg-surface-raised p-4">
           <Text size="sm" className="font-semibold">
@@ -710,9 +878,13 @@ export function WatchPage({
   video,
   channel,
   mediaSrc,
+  mediaState,
   relatedVideos,
   relatedChannels,
   onMeaningfulPlayback,
+  onRetryMedia,
+  onBrowseVideos,
+  onPlaybackHelp,
   state = video ? 'ready' : 'empty',
   errorTitle = 'Could not load this video',
   errorDescription = 'Please check your connection and try again.',
@@ -741,22 +913,38 @@ export function WatchPage({
       <ErrorState
         title={errorTitle}
         description={errorDescription}
-        {...(onRetry ? { retry: onRetry } : {})}
+        action={
+          <PlaybackRecoveryActions
+            onRetry={onRetry}
+            onBrowseVideos={onBrowseVideos}
+            onPlaybackHelp={onPlaybackHelp}
+          />
+        }
       />
     ) : state === 'empty' || !video ? (
       <EmptyState
         icon="◌"
         title="Video unavailable"
         description="This video is unpublished, private, or could not be found."
+        action={
+          <PlaybackRecoveryActions
+            onBrowseVideos={onBrowseVideos}
+            onPlaybackHelp={onPlaybackHelp}
+          />
+        }
       />
     ) : (
       <WatchContent
         video={video}
         {...(channel ? { channel } : {})}
         {...(mediaSrc !== undefined ? { mediaSrc } : {})}
+        {...(mediaState ? { mediaState } : {})}
         {...(relatedVideos ? { relatedVideos } : {})}
         {...(relatedChannels ? { relatedChannels } : {})}
         {...(onMeaningfulPlayback ? { onMeaningfulPlayback } : {})}
+        {...(onRetryMedia ? { onRetryMedia } : {})}
+        {...(onBrowseVideos ? { onBrowseVideos } : {})}
+        {...(onPlaybackHelp ? { onPlaybackHelp } : {})}
         {...(actions ? { actions } : {})}
         {...(subscribed === undefined ? {} : { subscribed })}
         {...(comments ? { comments } : {})}
@@ -954,6 +1142,10 @@ export function WatchPageData({ client, videoId, ...props }: WatchPageDataProps)
       }
       state={videoQueryPending ? 'loading' : videoQueryError ? 'error' : video ? 'ready' : 'empty'}
       {...(videoQueryError ? { onRetry: () => void refetchVideo() } : {})}
+      {...(video
+        ? { mediaState: mediaQuery.isPending ? 'loading' : mediaQuery.isError ? 'error' : 'ready' }
+        : {})}
+      {...(mediaQuery.isError ? { onRetryMedia: () => void mediaQuery.refetch() } : {})}
     />
   );
 }

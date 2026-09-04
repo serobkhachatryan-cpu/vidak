@@ -65,8 +65,8 @@ describe('WatchPage', () => {
     expect(markup).toContain('Building a practical design system');
     expect(markup).toContain('Vidak Studio');
     expect(markup).not.toContain('Unknown channel');
-    expect(markup).toContain('Subscribe');
-    expect(markup).toContain('<legend class="sr-only">Video actions</legend>');
+    expect(markup).not.toContain('Subscribe');
+    expect(markup).not.toContain('<legend class="sr-only">Video actions</legend>');
     expect(markup).toContain('aria-label="Video tags"');
     expect(markup).toContain('Up next');
     expect(markup).toContain('A related video');
@@ -87,6 +87,29 @@ describe('WatchPage', () => {
     expect(markup).not.toContain('＋');
   });
 
+  it('renders video actions only when the product wires a working handler', () => {
+    const markup = renderToStaticMarkup(
+      <WatchPage
+        video={video}
+        channel={channel}
+        actions={{
+          onSubscribe: () => undefined,
+          onLike: () => undefined,
+          onDislike: () => undefined,
+          onShare: () => undefined,
+          onSave: () => undefined,
+        }}
+      />,
+    );
+
+    expect(markup).toContain('Subscribe');
+    expect(markup).toContain('<legend class="sr-only">Video actions</legend>');
+    expect(markup).toContain('Like (8.4K)');
+    expect(markup).toContain('Dislike video');
+    expect(markup).toContain('Share');
+    expect(markup).toContain('Save');
+  });
+
   it('renders loading, empty, and error states with accessible labels', () => {
     expect(renderToStaticMarkup(<WatchPage state="loading" />)).toContain(
       'aria-label="Loading video"',
@@ -97,6 +120,35 @@ describe('WatchPage', () => {
     expect(renderToStaticMarkup(<WatchPage state="error" onRetry={() => undefined} />)).toContain(
       'Could not load this video',
     );
+  });
+
+  it('gives every public playback failure a recovery path', () => {
+    const loading = renderToStaticMarkup(<WatchPage video={video} mediaState="loading" />);
+    expect(loading).toContain('public-video-player-loading');
+    expect(loading).toContain('Preparing video');
+    expect(loading).not.toContain('no playable media');
+
+    const sourceError = renderToStaticMarkup(
+      <WatchPage
+        video={video}
+        mediaState="error"
+        onRetryMedia={() => undefined}
+        onBrowseVideos={() => undefined}
+        onPlaybackHelp={() => undefined}
+      />,
+    );
+    expect(sourceError).toContain('public-video-player-error');
+    expect(sourceError).toContain('Could not prepare this video');
+    expect(sourceError).toContain('Retry video');
+    expect(sourceError).toContain('Browse public videos');
+    expect(sourceError).toContain('Get help with playback');
+
+    const unavailable = renderToStaticMarkup(
+      <WatchPage video={video} onBrowseVideos={() => undefined} onPlaybackHelp={() => undefined} />,
+    );
+    expect(unavailable).toContain('This video has no playable media');
+    expect(unavailable).toContain('Browse public videos');
+    expect(unavailable).toContain('Get help with playback');
   });
 
   it('streams public media through the public media content path when provided', () => {
@@ -185,14 +237,20 @@ describe('WatchPage', () => {
       />,
     );
     expect(markup).toContain('data-testid="public-video-player-unavailable"');
-    expect(markup).toContain('This video has no playable media.');
+    expect(markup).toContain('This video has no playable media');
     expect(markup).not.toContain('data-testid="public-video-player"');
     expect(markup).not.toContain('<video');
   });
 
   it('supports dark mode and subscribed actions', () => {
     const markup = renderToStaticMarkup(
-      <WatchPage video={video} channel={channel} theme="dark" subscribed />,
+      <WatchPage
+        video={video}
+        channel={channel}
+        theme="dark"
+        subscribed
+        actions={{ onSubscribe: () => undefined }}
+      />,
     );
 
     expect(markup).toContain('data-theme="dark"');
