@@ -13,6 +13,7 @@ import {
   videoSpaceVisibilityLabels,
 } from '../home/video-space-model';
 import { elapsedRecordingDuration, totalRecordingDuration } from '../meshenger/segmented-playback';
+import { WatchRecoveryActions } from './watch-recovery-actions';
 
 export function LibraryWatchPage({ itemId }: { itemId: string }) {
   const router = useRouter();
@@ -22,6 +23,15 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
   const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'error'>(
     cachedItem ? 'ready' : 'loading',
   );
+  const [refreshVersion, setRefreshVersion] = useState(0);
+
+  const returnToVideoSpace = () => router.push('/');
+  const reportPlaybackProblem = () => router.push('/support');
+  const retryOpeningVideo = () => {
+    setItem(undefined);
+    setStatus('loading');
+    setRefreshVersion((version) => version + 1);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -55,7 +65,7 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
     return () => {
       cancelled = true;
     };
-  }, [itemId, user?.id]);
+  }, [itemId, refreshVersion, user?.id]);
 
   return (
     <ApplicationShell>
@@ -64,7 +74,7 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
         description="Playback stays on this page. Grid cards only show a still preview."
         containerSize="lg"
         actions={
-          <Button variant="secondary" onClick={() => router.push('/')}>
+          <Button variant="secondary" onClick={returnToVideoSpace}>
             Back to your video space
           </Button>
         }
@@ -77,36 +87,65 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
         {status === 'error' ? (
           <ErrorState
             title="Could not open this video"
-            description="Refresh your video space and try again."
-            retry={() => router.push('/')}
-            retryLabel="Back to your video space"
+            description="Vidak could not refresh this video from your private space. Try again, or report the problem if it continues."
+            action={
+              <WatchRecoveryActions
+                primaryLabel="Try again"
+                onPrimary={retryOpeningVideo}
+                secondaryLabel="Back to your video space"
+                onSecondary={returnToVideoSpace}
+                onReportProblem={reportPlaybackProblem}
+              />
+            }
           />
         ) : null}
         {status === 'missing' ? (
           <ErrorState
             title="This video is not available"
             description="It may have been removed or is no longer authorized for this account."
-            retry={() => router.push('/')}
-            retryLabel="Back to your video space"
+            action={
+              <WatchRecoveryActions
+                primaryLabel="Back to your video space"
+                onPrimary={returnToVideoSpace}
+                onReportProblem={reportPlaybackProblem}
+              />
+            }
           />
         ) : null}
         {status === 'ready' && item && !canPlayLibraryVideo(item) ? (
           <ErrorState
             title="Shared playback is paused"
             description="Vidak has listed this video as shared with you, but it will not play it until source permission can be verified for every request."
-            retry={() => router.push('/')}
-            retryLabel="Back to your video space"
+            action={
+              <WatchRecoveryActions
+                primaryLabel="Back to your video space"
+                onPrimary={returnToVideoSpace}
+                onReportProblem={reportPlaybackProblem}
+              />
+            }
           />
         ) : null}
         {status === 'ready' && item && canPlayLibraryVideo(item) ? (
-          <LibraryWatchPlayer video={item} />
+          <LibraryWatchPlayer
+            video={item}
+            onReturnToVideoSpace={returnToVideoSpace}
+            onReportPlaybackProblem={reportPlaybackProblem}
+          />
         ) : null}
       </Page>
     </ApplicationShell>
   );
 }
 
-function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
+function LibraryWatchPlayer({
+  video,
+  onReturnToVideoSpace,
+  onReportPlaybackProblem,
+}: {
+  video: VideoSpaceLibraryItem;
+  onReturnToVideoSpace: () => void;
+  onReportPlaybackProblem: () => void;
+}) {
   const [segmentIndex, setSegmentIndex] = useState(0);
   const [currentSegmentSeconds, setCurrentSegmentSeconds] = useState(0);
   const [segmentDurations, setSegmentDurations] = useState<Array<number | undefined>>([]);
@@ -141,7 +180,14 @@ function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
     return (
       <ErrorState
         title="This recording has no playable file"
-        description="Refresh your video space to renew the private playback link."
+        description="Vidak could not find a playable private file for this recording."
+        action={
+          <WatchRecoveryActions
+            primaryLabel="Back to your video space"
+            onPrimary={onReturnToVideoSpace}
+            onReportProblem={onReportPlaybackProblem}
+          />
+        }
       />
     );
   }
@@ -154,13 +200,20 @@ function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
       {playbackError ? (
         <ErrorState
           title="Video source is unavailable"
-          description="The source link may have expired. Retry to refresh it once."
-          retry={() => {
-            setPlaybackError(false);
-            setPlayerLoading(true);
-            setPlaybackAttempt((attempt) => attempt + 1);
-          }}
-          retryLabel="Retry playback"
+          description="The source link may have expired. Retry playback once, or report the problem if it continues."
+          action={
+            <WatchRecoveryActions
+              primaryLabel="Retry playback"
+              onPrimary={() => {
+                setPlaybackError(false);
+                setPlayerLoading(true);
+                setPlaybackAttempt((attempt) => attempt + 1);
+              }}
+              secondaryLabel="Back to your video space"
+              onSecondary={onReturnToVideoSpace}
+              onReportProblem={onReportPlaybackProblem}
+            />
+          }
         />
       ) : (
         <div className="relative">
