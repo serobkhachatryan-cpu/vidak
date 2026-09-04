@@ -29,5 +29,11 @@ describe('libraryPollingDelayMs', () => {
         completeness: { ...completeInventory, complete: false, retryNeeded: true },
       }),
     ).toBeUndefined();
+    expect(
+      libraryPollingDelayMs({
+        discovery: 'partial',
+        completeness: { ...completeInventory, complete: false, retrying: 1, deferred: 1 },
+      }),
+    ).toBeUndefined();
   });
 });

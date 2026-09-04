@@ -614,7 +614,7 @@ describe('inventory coordinator', () => {
     expect(scanLibrary).toHaveBeenCalledTimes(1);
   });
 
-  it('resumes an incomplete inventory instead of serving it as a TTL cache hit', async () => {
+  it('keeps an incomplete inventory warm until the user explicitly refreshes it', async () => {
     const first = video({ id: 'shared-1', title: 'First clip', accessScope: 'shared' });
     const second = video({ id: 'shared-2', title: 'Later clip', accessScope: 'shared' });
     const incomplete = {
@@ -668,9 +668,17 @@ describe('inventory coordinator', () => {
       { eName: '@person.w3id' },
       { scope: 'shared' },
     );
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+    expect(secondSnap.discovery).toBe('partial');
+    expect(secondSnap.items.map((item) => item.title)).toEqual(['First clip']);
+
+    const refreshed = await coordinator.getSnapshot(
+      { eName: '@person.w3id' },
+      { scope: 'shared', refresh: true },
+    );
     expect(scanLibrary).toHaveBeenCalledTimes(2);
-    expect(secondSnap.discovery).toBe('complete');
-    expect(secondSnap.items.map((item) => item.title)).toEqual(
+    expect(refreshed.discovery).toBe('complete');
+    expect(refreshed.items.map((item) => item.title)).toEqual(
       expect.arrayContaining(['First clip', 'Later clip']),
     );
   });
@@ -720,7 +728,7 @@ describe('inventory coordinator', () => {
       log: () => undefined,
     });
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
-    expect(first.discovery).toBe('refreshing');
+    expect(first.discovery).toBe('partial');
     expect(first.items).toEqual([]);
     expect(
       scanLibrary.mock.calls.every((call) => (call[1] as { drain?: boolean }).drain !== true),
@@ -733,7 +741,7 @@ describe('inventory coordinator', () => {
     await coordinator.pumpRunning();
     const afterPump = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
     expect(afterPump.items.map((item) => item.title)).toEqual(['Later clip']);
-    expect(afterPump.discovery).toBe('refreshing');
+    expect(afterPump.discovery).toBe('partial');
     expect(
       scanLibrary.mock.calls.some((call) => (call[1] as { drain?: boolean }).drain === true),
     ).toBe(true);

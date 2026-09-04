@@ -206,10 +206,6 @@ describe('Meshenger video library', () => {
 
   it('falls back to the viewer’s current Chat grant when a source mirror omits the viewer', async () => {
     const library = configuredLibrary();
-    vi.spyOn(library, 'probeSharedSpaceAccess').mockResolvedValue({
-      access: 'denied',
-      member: false,
-    });
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: URL, init?: RequestInit) => {
@@ -241,6 +237,30 @@ describe('Meshenger video library', () => {
                           canonicalChatId: 'chat-1',
                           type: 'direct',
                         },
+                        envelopes: [],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            });
+          }
+        }
+        if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            variables?: { ontologyId?: string };
+          };
+          if (body.variables?.ontologyId === documentedAuthorizationOntologies.chat) {
+            return json({
+              data: {
+                metaEnvelopes: {
+                  edges: [
+                    {
+                      node: {
+                        id: 'chat-1',
+                        ontology: documentedAuthorizationOntologies.chat,
+                        parsed: { id: 'chat-1', participantIds: [] },
                         envelopes: [],
                       },
                     },

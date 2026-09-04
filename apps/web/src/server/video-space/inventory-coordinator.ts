@@ -197,10 +197,13 @@ export function createInventoryCoordinator(options?: {
         entry.snapshot = mergeLibraries(entry.snapshot, library);
         entry.spaces = spacesFromItems(entry.snapshot.items, scope);
         entry.resolveFirst();
-        if (library.completeness.complete) {
-          entry.scanning = false;
-          entry.completedAt = now();
-        }
+        // A bounded foreground pass can return a retryable partial snapshot.
+        // It is no longer actively scanning once this call settles: mark it as
+        // terminal for the cache/UI, retain the cards, and let an explicit
+        // Refresh resume the durable job. Leaving this true makes every client
+        // poll start another expensive private scan indefinitely.
+        entry.scanning = false;
+        entry.completedAt = now();
       })
       .catch(() => {
         entry.scanning = false;
@@ -426,6 +429,11 @@ export function createInventoryCoordinator(options?: {
             },
           },
         );
+        // This pump wave is bounded too. A persisted job may remain for a
+        // later explicit refresh, but the finished wave must not advertise an
+        // active scan and cause the browser to hammer the private library.
+        entry.scanning = false;
+        entry.completedAt = now();
       }
       pumpFailureReported = false;
     } catch {
@@ -474,16 +482,10 @@ export function createInventoryCoordinator(options?: {
       }
 
       if (entry && !entry.scanning && entry.completedAt && now() - entry.completedAt < ttlMs) {
-        const discovery = inventoryDiscovery({
-          scanning: false,
-          completeness: entry.snapshot.completeness,
-        });
-        // A soft shared-source probe failure is a partial result, not a reason
-        // to restart a full private inventory scan for every client poll.
-        // Revalidation still happens inside serve; explicit Refresh bypasses
-        // this TTL and starts a new discovery pass immediately.
-        if (discovery === 'complete' || entry.checkingSharedItemIds.size > 0)
-          return serve(user, entry, requestStarted, 'hit');
+        // A soft partial snapshot is still useful. Keep it warm for the TTL;
+        // users can explicitly Refresh to resume its persisted job instead of
+        // each browser poll restarting private discovery work.
+        return serve(user, entry, requestStarted, 'hit');
       }
 
       entry = startScan(user, input.scope, entry);

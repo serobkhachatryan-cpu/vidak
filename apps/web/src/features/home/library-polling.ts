@@ -16,7 +16,7 @@ export function libraryPollingDelayMs(input: {
   const retrying = input.completeness?.retrying ?? 0;
   const deferred = input.completeness?.deferred ?? 0;
   const rateLimited = input.completeness?.retryRateLimited ?? 0;
-  const hasBackgroundWork = input.discovery === 'refreshing' || retrying > 0 || deferred > 0;
+  const hasBackgroundWork = input.discovery === 'refreshing';
 
   if (!hasBackgroundWork) return undefined;
   if (rateLimited > 0) return rateLimitedPollingDelayMs;

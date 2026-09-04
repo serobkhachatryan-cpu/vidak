@@ -656,6 +656,70 @@ export class MeshengerVideoLibrary {
         member: sameEName(target.ownerEName, space.eName) && target.metaEnvelopeId === space.fileId,
       };
     }
+    if (space.kind === 'direct') {
+      if (!space.chatId) return { access: 'missing', member: false };
+      const vaultRead = await this.readSource(
+        () => this.resolveEVault(space.eName, rateLimit),
+        undefined,
+      );
+      let sourceAccess: SharedSpaceAccess;
+      if (vaultRead.failure === 'denied') sourceAccess = { access: 'denied', member: false };
+      else if (vaultRead.failure === 'missing') sourceAccess = { access: 'missing', member: false };
+      else if (isRetryFailure(vaultRead.failure) || !vaultRead.value) {
+        sourceAccess = { access: 'retry', member: false };
+      } else {
+        const sourceVault = vaultRead.value;
+        const chats = await this.readSource(
+          () =>
+            this.listEnvelopes(
+              sourceVault.ownerEName,
+              sourceVault.eVaultUri,
+              chatOntology,
+              undefined,
+              {
+                maxPages: 3,
+                rateLimit,
+              },
+            ),
+          undefined,
+        );
+        if (chats.failure === 'denied') sourceAccess = { access: 'denied', member: false };
+        else if (chats.failure === 'missing') sourceAccess = { access: 'missing', member: false };
+        else if (isRetryFailure(chats.failure)) sourceAccess = { access: 'retry', member: false };
+        else {
+          const chat = chats.value?.items.find((item) => {
+            const chatId = optionalString(item.parsed.id) ?? item.id;
+            return chatId === space.chatId && item.parsed.isReference !== true;
+          });
+          const member =
+            chat !== undefined &&
+            asArray(chat.parsed.participantIds).some(
+              (participant) =>
+                typeof participant === 'string' && sameEName(participant, user.eName),
+            );
+          sourceAccess = chat ? { access: 'ok', member } : { access: 'missing', member: false };
+        }
+      }
+      if (sourceAccess.access === 'ok' && sourceAccess.member) return sourceAccess;
+
+      // The viewer's Chat grant is the durable authority for historical direct
+      // shares. A source-side mirror can legitimately omit the viewer, so it
+      // must never by itself remove an otherwise authorized card or block its
+      // player.
+      const viewerAccess = await this.probeViewerChatGrantAccess(
+        user,
+        { eName: space.eName, chatId: space.chatId },
+        rateLimit,
+      );
+      if (viewerAccess.access === 'ok' && viewerAccess.member) return viewerAccess;
+      if (sourceAccess.access === 'retry' || viewerAccess.access === 'retry') {
+        return { access: 'retry', member: false };
+      }
+      if (sourceAccess.access === 'denied' || viewerAccess.access === 'denied') {
+        return { access: 'denied', member: false };
+      }
+      return { access: 'missing', member: false };
+    }
     const vaultRead = await this.readSource(
       () => this.resolveEVault(space.eName, rateLimit),
       undefined,
@@ -666,29 +730,6 @@ export class MeshengerVideoLibrary {
       return { access: 'retry', member: false };
     }
     const vault = vaultRead.value;
-    if (space.kind === 'direct') {
-      const chats = await this.readSource(
-        () =>
-          this.listEnvelopes(vault.ownerEName, vault.eVaultUri, chatOntology, undefined, {
-            maxPages: 3,
-            rateLimit,
-          }),
-        undefined,
-      );
-      if (chats.failure === 'denied') return { access: 'denied', member: false };
-      if (chats.failure === 'missing') return { access: 'missing', member: false };
-      if (isRetryFailure(chats.failure)) return { access: 'retry', member: false };
-      if (!space.chatId) return { access: 'missing', member: false };
-      const chat = chats.value?.items.find((item) => {
-        const chatId = optionalString(item.parsed.id) ?? item.id;
-        return chatId === space.chatId && item.parsed.isReference !== true;
-      });
-      if (!chat) return { access: 'missing', member: false };
-      const member = asArray(chat.parsed.participantIds).some(
-        (participant) => typeof participant === 'string' && sameEName(participant, user.eName),
-      );
-      return { access: 'ok', member };
-    }
     const manifests = await this.readSource(
       () =>
         this.listEnvelopes(vault.ownerEName, vault.eVaultUri, groupManifestOntology, undefined, {
@@ -955,15 +996,6 @@ export class MeshengerVideoLibrary {
       // registry or eVault hiccup into a playable shared video without ever
       // treating a denied or missing source as authorized.
       const access = await this.probeSharedSpaceAccess(user, source, 'backoff');
-      if (access.access === 'ok' && access.member) return bound;
-      retrying ||= access.access === 'retry';
-    }
-    if (accessBasis === 'history' && grant.sourceChatId) {
-      const access = await this.probeViewerChatGrantAccess(
-        user,
-        { eName: sourceSpaceKey, chatId: grant.sourceChatId },
-        'backoff',
-      );
       if (access.access === 'ok' && access.member) return bound;
       retrying ||= access.access === 'retry';
     }
