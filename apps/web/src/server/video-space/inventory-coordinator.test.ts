@@ -244,7 +244,7 @@ describe('inventory coordinator', () => {
     expect(first.items.map((item) => item.title)).toEqual(['Personal clip', 'Shared clip']);
     expect(first.items.find((item) => item.id === 'shared-1')).toMatchObject({
       sourceAccess: 'checking',
-      streamIds: [],
+      streamIds: ['opaque-stream'],
     });
     expect(first.discovery).toBe('refreshing');
 

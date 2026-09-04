@@ -257,7 +257,12 @@ export function createInventoryCoordinator(options?: {
         await sharedSourceNamesFor(snapshot.items, entry),
       ).map((item) =>
         entry.checkingSharedItemIds.has(item.id)
-          ? { ...item, sourceAccess: 'checking' as const, streamIds: [] }
+          ? // A transient source probe must never turn an already-discovered,
+            // viewer-bound share into a dead card. The media route repeats the
+            // authorization check when Watch is opened (and for every media
+            // request), which is the enforcement point. Keep the opaque grant
+            // so a retryable catalogue check cannot remove the only action.
+            { ...item, sourceAccess: 'checking' as const }
           : item,
       ),
       conversations: snapshot.conversations,

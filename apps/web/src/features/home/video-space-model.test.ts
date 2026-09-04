@@ -1,6 +1,7 @@
 import type { Video } from '@w3ds/types';
 import { describe, expect, it } from 'vitest';
 import {
+  canPlayLibraryVideo,
   evaultItemsForTab,
   isVideoSpaceEmpty,
   libraryCardDetails,
@@ -122,6 +123,15 @@ describe('video space home model', () => {
         sharedBy: 'Ada Lovelace',
       }),
     ).toContain('Shared by Ada Lovelace through a W3DS conversation');
+  });
+
+  it('keeps a retrying shared card watchable when it retains its viewer-bound grant', () => {
+    const retryingShare: VideoSpaceLibraryItem = {
+      ...sharedVideo,
+      sourceAccess: 'checking',
+      streamIds: ['opaque-viewer-bound-grant'],
+    };
+    expect(canPlayLibraryVideo(retryingShare)).toBe(true);
   });
 
   it('treats a generated owned preview path as asynchronous rather than ready', () => {
