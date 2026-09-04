@@ -25,6 +25,7 @@
     "db:generate": "pnpm --filter @w3ds/web db:generate",
     "db:migrate": "pnpm --filter @w3ds/web db:migrate",
     "verify:release": "node scripts/verify-release.mjs",
+    "smoke:production": "node scripts/verify-production.mjs",
     "clean": "turbo run clean && rm -rf node_modules"
   },
   "devDependencies": {

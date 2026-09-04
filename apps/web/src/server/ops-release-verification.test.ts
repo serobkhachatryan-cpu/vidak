@@ -8,7 +8,7 @@ const scriptPath = resolve(repoRoot, 'scripts/verify-release.mjs');
 const packageJsonPath = resolve(repoRoot, 'package.json');
 
 describe('verify:release script', () => {
-  it('covers lint, typecheck, tests, build, Storybook, and migration validation', () => {
+  it('covers lint, typecheck, tests, build, Storybook, migrations, and authenticated e2e', () => {
     const source = readFileSync(scriptPath, 'utf8');
 
     for (const name of [
@@ -18,6 +18,7 @@ describe('verify:release script', () => {
       'build',
       'storybook:build',
       'migration validation',
+      'authenticated end-to-end tests',
     ]) {
       expect(source).toContain(`name: '${name}'`);
     }
@@ -27,7 +28,7 @@ describe('verify:release script', () => {
     expect(source).not.toMatch(/W3DS_REGISTRY_BASE_URL\s*=/);
     expect(source).not.toMatch(/curl .*registry/i);
 
-    // Step order: lint → typecheck → test → build → storybook → migrations
+    // Step order: lint → typecheck → test → build → storybook → migrations → e2e
     const positions = [
       "name: 'lint'",
       "name: 'typecheck'",
@@ -35,6 +36,7 @@ describe('verify:release script', () => {
       "name: 'build'",
       "name: 'storybook:build'",
       "name: 'migration validation'",
+      "name: 'authenticated end-to-end tests'",
     ].map((needle) => source.indexOf(needle));
     expect(positions.every((index) => index >= 0)).toBe(true);
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);

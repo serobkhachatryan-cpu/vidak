@@ -43,6 +43,11 @@ export const RELEASE_VERIFICATION_STEPS = [
     command: 'pnpm',
     args: ['exec', 'vitest', 'run', 'apps/web/src/server/db/migrations.test.ts'],
   },
+  {
+    name: 'authenticated end-to-end tests',
+    command: 'pnpm',
+    args: ['test:e2e'],
+  },
 ];
 
 function runStep(step) {
