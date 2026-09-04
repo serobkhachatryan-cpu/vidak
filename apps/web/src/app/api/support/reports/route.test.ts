@@ -117,6 +117,34 @@ describe('support report API', () => {
     expect(taskRows).toHaveLength(0);
   });
 
+  it('redacts private watch identifiers from persisted diagnostics', async () => {
+    harness = await createIntegrationHarness();
+    const accessToken = await harness.loginAs(reporter);
+    const service = new SupportReportService({
+      db: harness.db,
+      resolveUser: async (token) =>
+        (await requireHarness(harness).authService.getSession(token)).user,
+    });
+    vi.spyOn(supportReportModule, 'getSupportReportService').mockReturnValue(service);
+
+    const response = await POST(
+      new NextRequest(`${appOrigin}/api/support/reports`, {
+        method: 'POST',
+        body: JSON.stringify({
+          description: 'The private recording could not start playback.',
+          includeTechnicalDetails: true,
+          technicalDiagnostics: { path: '/watch/space/private-record-identifier' },
+        }),
+        headers: { 'Content-Type': 'application/json', ...harness.bearerHeaders(accessToken) },
+      }),
+    );
+
+    expect(response.status).toBe(201);
+    const reportRows = await harness.db.select().from(supportReports);
+    expect(reportRows).toHaveLength(1);
+    expect(reportRows[0]?.technicalDiagnostics).toEqual({ path: '/watch/space/[video]' });
+  });
+
   it('requires a trusted origin for a cookie-authenticated report submission', async () => {
     harness = await createIntegrationHarness();
     const accessToken = await harness.loginAs(reporter);

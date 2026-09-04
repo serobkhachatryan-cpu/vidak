@@ -3,6 +3,7 @@
 import { Button, Card, Checkbox, Page, Textarea } from '@w3ds/ui';
 import { type FormEvent, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
+import { supportDiagnosticPath } from '../../lib/support-diagnostic-path';
 import { useAuthentication } from '../auth/auth-provider';
 
 type SubmitState =
@@ -153,17 +154,18 @@ function SignedInSupportPage() {
                   label="Include limited technical details"
                 />
                 <p className="pl-6 text-sm text-muted-foreground">
-                  This adds the Vidak version, current page, browser, language, time zone, and
-                  viewport. It never includes message text, videos, calls, eVault records, cookies,
-                  or authentication tokens.
+                  This adds the Vidak version, page type (without URL identifiers), browser,
+                  language, time zone, and viewport. It never includes message text, videos, calls,
+                  eVault records, cookies, or authentication tokens.
                 </p>
                 <details className="pl-6 text-sm text-muted-foreground">
                   <summary className="cursor-pointer font-medium text-foreground">
                     See the exact technical fields
                   </summary>
                   <p className="mt-2">
-                    App version, page path, browser user agent, language, time zone, and viewport
-                    dimensions. No query parameters, console logs, or network payloads are sent.
+                    App version, page type with any video, channel, user, or private-record ID
+                    removed, browser user agent, language, time zone, and viewport dimensions. No
+                    query parameters, console logs, or network payloads are sent.
                   </p>
                 </details>
               </div>
@@ -235,7 +237,7 @@ function collectTechnicalDetails() {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return {
     appVersion: process.env.NEXT_PUBLIC_APP_VERSION ?? 'web',
-    path: window.location.pathname,
+    path: supportDiagnosticPath(window.location.pathname),
     userAgent: window.navigator.userAgent,
     language: window.navigator.language,
     ...(timezone ? { timezone } : {}),

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AuthUser } from '@w3ds/auth';
 import { and, desc, eq } from 'drizzle-orm';
+import { supportDiagnosticPath } from '../lib/support-diagnostic-path';
 import { getW3dsDatabase, type W3dsDatabase } from './db/client';
 import { type SupportTaskStatus, supportReports, supportTasks } from './db/schema';
 import { getW3dsAuthService, W3dsAuthError } from './w3ds-auth';
@@ -198,7 +199,7 @@ function normalizeTechnicalDiagnostics(
   if (appVersion) diagnostics.appVersion = appVersion;
 
   const path = boundedText(record.path, 240);
-  if (path?.startsWith('/') && !/[?#\\\r\n]/.test(path)) diagnostics.path = path;
+  if (path) diagnostics.path = supportDiagnosticPath(path);
 
   const userAgent = boundedText(record.userAgent, 600);
   if (userAgent) diagnostics.userAgent = userAgent;
