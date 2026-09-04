@@ -107,6 +107,8 @@ describe('video space home model', () => {
     expect(guide).toContain('resume draft');
     expect(guide).toContain('watch video');
     expect(guide).toContain('make private');
+    expect(guide).toContain('rechecks that authorization when playback starts');
+    expect(guide).not.toContain('shared videos remain unavailable');
     expect(guide).not.toContain('messenger');
   });
 
