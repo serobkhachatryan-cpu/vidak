@@ -2,6 +2,7 @@
 
 import { isRenderableThumbnailUrl } from '@w3ds/types';
 import { useEffect, useRef, useState } from 'react';
+import { fetchPreviewWithTimeout } from './preview-fetch';
 import { enqueuePreviewLoad } from './preview-load-queue';
 import { Badge } from './primitives';
 
@@ -79,9 +80,12 @@ export function VideoSpacePoster({
     if (state !== 'processing' || !posterUrl || !isRenderableThumbnailUrl(posterUrl)) return;
 
     let cancelled = false;
+    let activeRequest: AbortController | undefined;
     const poll = async () => {
+      const request = new AbortController();
+      activeRequest = request;
       try {
-        const response = await fetch(posterUrl, { cache: 'no-store' });
+        const response = await fetchPreviewWithTimeout(posterUrl, { signal: request.signal });
         if (cancelled) return;
         const type = response.headers.get('content-type') ?? '';
         if (response.ok && type.startsWith('image/')) {
@@ -113,14 +117,18 @@ export function VideoSpacePoster({
         }
         setFailed(true);
       } catch {
+        if (cancelled) return;
         window.setTimeout(() => {
           if (!cancelled) void enqueuePreviewLoad(poll);
         }, 5000);
+      } finally {
+        if (activeRequest === request) activeRequest = undefined;
       }
     };
     const cancelQueue = enqueuePreviewLoad(poll);
     return () => {
       cancelled = true;
+      activeRequest?.abort();
       cancelQueue();
     };
   }, [fallbackPosterUrl, posterUrl, state, visible]);
