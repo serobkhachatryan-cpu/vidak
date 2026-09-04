@@ -306,8 +306,12 @@ export function discoverFileRecordVideos(
         : {}),
       accessScope,
       sourceId: 'file-record',
-      sourceSpaceKey: vaultOwnerEName,
-      accessBasis: reference ? 'personal' : accessScope === 'personal' ? 'personal' : 'membership',
+      // A local File reference is only a pointer; the canonical owner is the
+      // authority that must still authorize a shared playback grant. Treating
+      // the viewer's vault as a personal source let a foreign reference skip
+      // revalidation and then disappear from the shared inventory.
+      sourceSpaceKey: reference?.ownerEName ?? vaultOwnerEName,
+      accessBasis: accessScope === 'personal' ? 'personal' : 'membership',
     });
     // The canonical lookup below must still be able to add the richer target
     // record, so only non-reference File rows reserve their URI here.

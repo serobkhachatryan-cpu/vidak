@@ -166,6 +166,38 @@ describe('inventory coordinator', () => {
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
   });
 
+  it('keeps a canonical shared File reference only while the source membership verifies', async () => {
+    const sharedReference = video({
+      id: 'shared-file-reference',
+      title: 'Shared video',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@canonical-owner.w3id',
+      accessBasis: 'membership',
+    });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([sharedReference]), 'done', {
+        personalPages: 1,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([sharedReference]);
+    });
+    const probeSharedSpaceAccess = vi.fn().mockResolvedValue({ access: 'ok', member: true });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
+      log: () => undefined,
+    });
+
+    const snapshot = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+
+    expect(snapshot.items.map((item) => item.title)).toEqual(['Shared video']);
+    expect(probeSharedSpaceAccess).toHaveBeenCalledWith(
+      { eName: '@person.w3id' },
+      { eName: '@canonical-owner.w3id', kind: 'group' },
+    );
+  });
+
   it('fails closed for an unverified shared source without hiding cached personal videos', async () => {
     const ownedVideo = video({ id: 'own-1', title: 'Personal clip' });
     const sharedVideo = video({

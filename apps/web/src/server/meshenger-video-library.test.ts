@@ -3453,6 +3453,8 @@ describe('Meshenger video library', () => {
       expect(card).toBeDefined();
       expect(card?.title).not.toBe('Untitled video');
       expect(card?.accessScope).toBe('shared');
+      expect(card?.sourceSpaceKey).toBe('@friend.w3id');
+      expect(card?.accessBasis).toBe('membership');
       expect(card?.streamIds).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();

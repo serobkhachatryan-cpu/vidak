@@ -3553,15 +3553,19 @@ export class MeshengerVideoLibrary {
         completeness.recordUnresolved('resolver_unavailable');
         return;
       }
+      const canonicalOwnerEName = vaultRead.value.vault.ownerEName;
       found.push(
         ...records.map((record) => ({
           ...record,
-          sourceSpaceKey: item.sourceSpaceKey,
+          // The dereferenced envelope, rather than the viewer's local
+          // reference, is the source whose current authorization governs a
+          // foreign File. Keep a personal canonical file personal, but make
+          // every foreign canonical file revalidate against its own space.
+          sourceSpaceKey:
+            record.accessScope === 'personal' ? item.sourceSpaceKey : canonicalOwnerEName,
           ...(sourceChatId ? { sourceChatId } : {}),
           accessBasis:
-            record.accessScope === 'personal' || sameEName(item.sourceSpaceKey, viewerEName)
-              ? ('personal' as const)
-              : ('history' as const),
+            record.accessScope === 'personal' ? ('personal' as const) : ('membership' as const),
         })),
       );
       return;
