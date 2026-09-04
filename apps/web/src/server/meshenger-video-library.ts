@@ -708,6 +708,45 @@ export class MeshengerVideoLibrary {
     return { access: 'ok', member };
   }
 
+  /**
+   * Direct/shared history is first discovered from a Chat record in the
+   * viewer's own vault. Some older source vaults retain a call but no longer
+   * expose the viewer in their mirrored participant list, so that mirror is
+   * not a reliable negative authorization signal. Recheck the viewer's
+   * current Chat grant as the durable fallback before denying playback.
+   */
+  private async probeViewerChatGrantAccess(
+    user: Pick<AuthUser, 'eName'>,
+    source: { eName: string; chatId: string },
+    rateLimit: RateLimitMode,
+  ): Promise<SharedSpaceAccess> {
+    const viewerVaultRead = await this.readSource(
+      () => this.resolveEVault(user.eName, rateLimit),
+      undefined,
+    );
+    if (viewerVaultRead.failure === 'denied') return { access: 'denied', member: false };
+    if (viewerVaultRead.failure === 'missing') return { access: 'missing', member: false };
+    if (isRetryFailure(viewerVaultRead.failure) || !viewerVaultRead.value) {
+      return { access: 'retry', member: false };
+    }
+    const viewerVault = viewerVaultRead.value;
+    const chatsRead = await this.readSource(
+      () =>
+        this.listEnvelopes(viewerVault.ownerEName, viewerVault.eVaultUri, chatOntology, undefined, {
+          maxPages: 3,
+          rateLimit,
+        }),
+      { items: [] as Envelope[], complete: false },
+    );
+    if (chatsRead.failure === 'denied') return { access: 'denied', member: false };
+    if (chatsRead.failure === 'missing') return { access: 'missing', member: false };
+    if (isRetryFailure(chatsRead.failure)) return { access: 'retry', member: false };
+    const authorized = chatGrantsFromEnvelopes(chatsRead.value.items, user.eName).some(
+      (grant) => sameEName(grant.groupEName, source.eName) && grant.chatId === source.chatId,
+    );
+    return { access: authorized ? 'ok' : 'missing', member: authorized };
+  }
+
   async resolveMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string> {
     const { grant, file } = await this.requirePlayableStreamGrant(user, streamId);
     const cacheKey = `${grant.eName}\u0000${grant.fileUri}`;
@@ -916,6 +955,15 @@ export class MeshengerVideoLibrary {
       // registry or eVault hiccup into a playable shared video without ever
       // treating a denied or missing source as authorized.
       const access = await this.probeSharedSpaceAccess(user, source, 'backoff');
+      if (access.access === 'ok' && access.member) return bound;
+      retrying ||= access.access === 'retry';
+    }
+    if (accessBasis === 'history' && grant.sourceChatId) {
+      const access = await this.probeViewerChatGrantAccess(
+        user,
+        { eName: sourceSpaceKey, chatId: grant.sourceChatId },
+        'backoff',
+      );
       if (access.access === 'ok' && access.member) return bound;
       retrying ||= access.access === 'retry';
     }

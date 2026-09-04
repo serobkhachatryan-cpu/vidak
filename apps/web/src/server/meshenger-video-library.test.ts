@@ -11,6 +11,7 @@ import {
 } from './meshenger-video-library';
 import { VIDEO_SPACE_CATALOGUE_VERSION } from './video-space/catalogue-version';
 import { emptyInventoryCoverage, emptyInventoryMediaCounts } from './video-space/completeness';
+import { documentedAuthorizationOntologies } from './video-space/documented-sources';
 import { createMemoryInventoryJobStore } from './video-space/job-store';
 import { titleFromFilename } from './video-space/titles';
 
@@ -203,6 +204,83 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('falls back to the viewer’s current Chat grant when a source mirror omits the viewer', async () => {
+    const library = configuredLibrary();
+    vi.spyOn(library, 'probeSharedSpaceAccess').mockResolvedValue({
+      access: 'denied',
+      member: false,
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/resolve') {
+          const requested = url.searchParams.get('w3id');
+          return json(
+            requested === '@person.w3id'
+              ? { ename: '@person.w3id', uri: 'https://person-vault.example' }
+              : { ename: '@friend.w3id', uri: 'https://friend-vault.example' },
+          );
+        }
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            variables?: { ontologyId?: string };
+          };
+          if (body.variables?.ontologyId === documentedAuthorizationOntologies.chat) {
+            return json({
+              data: {
+                metaEnvelopes: {
+                  edges: [
+                    {
+                      node: {
+                        id: 'viewer-chat-reference',
+                        ontology: documentedAuthorizationOntologies.chat,
+                        parsed: {
+                          isReference: true,
+                          canonicalOwnerEName: '@friend.w3id',
+                          canonicalChatId: 'chat-1',
+                          type: 'direct',
+                        },
+                        envelopes: [],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            });
+          }
+        }
+        if (url.hostname === 'friend-vault.example' && url.pathname === '/files/shared-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/shared-video.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/shared-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'chat-1',
+        accessBasis: 'history',
+      },
+      secret,
+    );
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/shared-video.mp4',
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('opens a shared File reference after checking the viewer-owned reference proof', async () => {
     const library = configuredLibrary();
     const probe = vi
@@ -321,8 +399,7 @@ describe('Meshenger video library', () => {
         fileUri: 'w3ds://file?id=@friend.w3id/shared-file',
         accessScope: 'shared',
         sourceSpaceKey: '@friend.w3id',
-        sourceChatId: 'chat-1',
-        accessBasis: 'history',
+        accessBasis: 'membership',
       },
       secret,
     );
