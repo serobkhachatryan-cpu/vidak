@@ -73,8 +73,11 @@ function PublicSupportPage() {
 
 function SignedInSupportPage() {
   const [description, setDescription] = useState('');
-  const [includeTechnicalDetails, setIncludeTechnicalDetails] = useState(true);
-  const [allowAutomatedAnalysis, setAllowAutomatedAnalysis] = useState(true);
+  // Both disclosures are optional. A report should carry only the user's
+  // description unless they actively choose to share diagnostics or queue
+  // automated analysis.
+  const [includeTechnicalDetails, setIncludeTechnicalDetails] = useState(false);
+  const [allowAutomatedAnalysis, setAllowAutomatedAnalysis] = useState(false);
   const [submitState, setSubmitState] = useState<SubmitState>({ status: 'idle' });
 
   const submit = async (event: FormEvent<HTMLFormElement>) => {

@@ -83,7 +83,7 @@ describe('support report API', () => {
     expect(rows[0]?.task.status).toBe('queued');
   });
 
-  it('stores no diagnostics and creates no automatic task without consent', async () => {
+  it('stores no diagnostics and creates no automatic task when consent is omitted', async () => {
     harness = await createIntegrationHarness();
     const accessToken = await harness.loginAs(reporter);
     const service = new SupportReportService({
@@ -98,8 +98,6 @@ describe('support report API', () => {
         method: 'POST',
         body: JSON.stringify({
           description: 'I cannot find the video that was shared with me yesterday.',
-          includeTechnicalDetails: false,
-          allowAutomatedAnalysis: false,
           technicalDiagnostics: { userAgent: 'must not persist' },
         }),
         headers: { 'Content-Type': 'application/json', ...harness.bearerHeaders(accessToken) },
