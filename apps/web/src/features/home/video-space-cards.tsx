@@ -68,10 +68,10 @@ export function OwnedVideoCard({
                   size="sm"
                   variant="secondary"
                   isLoading={isPending}
-                  loadingText="Updating visibility"
+                  loadingText="Making private"
                   onClick={() => onChangeVisibility(video, 'private')}
                 >
-                  Make private
+                  Unpublish &amp; make private
                 </Button>
               ) : null}
             </>

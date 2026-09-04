@@ -299,8 +299,10 @@ describe('video space home model', () => {
     ).toBeUndefined();
   });
 
-  it('confirms that a share action changes only that video', () => {
-    expect(shareChangeConfirmation('private')).toMatch(/only this video/i);
+  it('explains that making a published video private returns it to a draft without deleting media', () => {
+    expect(shareChangeConfirmation('private')).toMatch(/remove.*public.*unlisted/i);
+    expect(shareChangeConfirmation('private')).toMatch(/private draft/i);
+    expect(shareChangeConfirmation('private')).toMatch(/media stays/i);
     expect(shareChangeConfirmation('public')).toMatch(/Public/);
   });
 
