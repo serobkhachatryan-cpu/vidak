@@ -20,7 +20,6 @@ const signedInNavigation = [
   { label: 'Your video space', href: '/', icon: '⌂' },
   { label: 'Upload a video', href: '/upload', icon: '⇪' },
   { label: 'Linked channels', href: '/library', icon: '▣' },
-  { label: 'Subscriptions', href: '/subscriptions', icon: '◉' },
   { label: 'Settings', href: '/settings', icon: '⚙' },
   { label: 'Support', href: '/support', icon: '⚑' },
 ];
