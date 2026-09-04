@@ -4,6 +4,8 @@ import { Button, ErrorState, Page, Spinner, Text } from '@w3ds/ui';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
+import { useCurrentUser } from '../auth/auth-provider';
+import { videoSpaceLibraryMemory } from '../home/video-space-library-memory';
 import {
   canPlayLibraryVideo,
   formatSpaceDuration,
@@ -14,33 +16,47 @@ import { elapsedRecordingDuration, totalRecordingDuration } from '../meshenger/s
 
 export function LibraryWatchPage({ itemId }: { itemId: string }) {
   const router = useRouter();
-  const [item, setItem] = useState<VideoSpaceLibraryItem | undefined>();
-  const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'error'>('loading');
+  const user = useCurrentUser();
+  const cachedItem = user ? videoSpaceLibraryMemory.get(user.id, itemId) : undefined;
+  const [item, setItem] = useState<VideoSpaceLibraryItem | undefined>(cachedItem);
+  const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'error'>(
+    cachedItem ? 'ready' : 'loading',
+  );
 
   useEffect(() => {
     let cancelled = false;
+    const cached = user ? videoSpaceLibraryMemory.get(user.id, itemId) : undefined;
+    if (cached) {
+      setItem(cached);
+      setStatus('ready');
+    } else {
+      setItem(undefined);
+      setStatus('loading');
+    }
     void (async () => {
       try {
         const response = await fetch('/api/evault/videos?scope=all', { cache: 'no-store' });
         const body = (await response.json()) as { items?: VideoSpaceLibraryItem[] };
         if (!response.ok || !Array.isArray(body.items)) throw new Error();
         if (cancelled) return;
+        if (user?.id) videoSpaceLibraryMemory.set(user.id, body.items);
         const found = body.items.find((candidate) => candidate.id === itemId);
         if (found) {
           setItem(found);
           setStatus('ready');
           return;
         }
+        if (cached) return;
         setItem(undefined);
         setStatus('missing');
       } catch {
-        if (!cancelled) setStatus('error');
+        if (!cancelled && !cached) setStatus('error');
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [itemId]);
+  }, [itemId, user?.id]);
 
   return (
     <ApplicationShell>

@@ -12,6 +12,7 @@ import { createLatestRequestTracker, shouldStartRequest } from './latest-request
 import { libraryPollingDelayMs } from './library-polling';
 import { PublicExplorePanel } from './public-explore-panel';
 import { LibraryVideoCard, OwnedVideoCard } from './video-space-cards';
+import { videoSpaceLibraryMemory } from './video-space-library-memory';
 import {
   evaultItemsForTab,
   type InventoryCompleteness,
@@ -187,6 +188,11 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
     }
     void load(false);
   }, [load, user?.id]);
+
+  useEffect(() => {
+    if (!user?.id || library.status !== 'ready') return;
+    videoSpaceLibraryMemory.set(user.id, library.items);
+  }, [library.items, library.status, user?.id]);
 
   useEffect(() => {
     // The independent Vidak-owned-video request is an enhancement to this
