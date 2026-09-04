@@ -444,7 +444,7 @@ describe('P1C sandbox client guards', () => {
 
   it('fails closed for an unknown eName with no mapping and no remote success', async () => {
     enableSandboxCompatForTest();
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/resolve')) {
         return new Response('not found', { status: 404 });
@@ -574,6 +574,57 @@ describe('P1C sandbox client guards', () => {
     expect(graphqlRequests[0]?.headers['X-ENAME']).toBe('@p1c-local.w3id');
     expect(graphqlRequests[0]?.headers.Authorization).toBe('Bearer <redacted>');
     expect(JSON.stringify(client.requests)).not.toMatch(/unit-test-sandbox-token/);
+  });
+
+  it('carries the authoritative _acl alongside the legacy required acl field', async () => {
+    enableSandboxCompatForTest();
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, _init?: RequestInit) => {
+      if (String(input).includes('/resolve')) {
+        return new Response(JSON.stringify({ uri: 'http://127.0.0.1:4000/' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(
+        JSON.stringify({
+          data: {
+            createMetaEnvelope: {
+              metaEnvelope: {
+                id: 'me_sandbox_acl_1',
+                ontology: 'schema-channel-configured',
+                parsed: {},
+              },
+              errors: [],
+            },
+          },
+        }),
+        { status: 200, headers: { 'Content-Type': 'application/json' } },
+      );
+    });
+    const client = new W3dsOfficialSandboxEVaultClient({
+      registryBaseUrl: 'http://127.0.0.1:4321',
+      fetch: fetchMock as typeof fetch,
+    });
+    const policy = {
+      v: 1 as const,
+      grants: [{ ename: '@p1c-local.w3id', perms: 15 }],
+      denials: { enames: [], conditions: [] as [] },
+      default_perms: 0,
+      require: [] as Array<[]>,
+    };
+
+    await client.createMetaEnvelope({
+      ownerEName: '@p1c-local.w3id',
+      schemaId: 'schema-channel-configured',
+      payload: { name: 'P1C Channel' },
+      acl: policy,
+    });
+
+    const graphqlCall = fetchMock.mock.calls.find((call) => String(call[0]).includes('/graphql'));
+    const body = JSON.parse(String(graphqlCall?.[1]?.body ?? '{}')) as {
+      variables?: { input?: Record<string, unknown> };
+    };
+    expect(body.variables?.input).toMatchObject({ acl: ['*'], _acl: policy });
   });
 
   it('fails closed on update when the sandbox platform token is missing', async () => {

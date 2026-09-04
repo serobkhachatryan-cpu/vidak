@@ -54,6 +54,12 @@ const READ_META_ENVELOPE = `query ReadSandboxMetaEnvelope($id: ID!) {
     id
     ontology
     parsed
+    _acl {
+      v
+      grants { ename perms }
+      denials { enames }
+      default_perms
+    }
   }
 }`;
 
@@ -211,7 +217,10 @@ export class W3dsOfficialSandboxEVaultClient implements W3dsOfficialEVaultClient
       input: {
         ontology,
         payload: input.payload,
+        // The legacy field remains required by the current input schema. The
+        // explicit `_acl` below is authoritative when present.
         acl: ['*'],
+        ...(input.acl ? { _acl: input.acl } : {}),
       },
     });
     const created = fieldRecord(result, 'createMetaEnvelope');
@@ -232,6 +241,7 @@ export class W3dsOfficialSandboxEVaultClient implements W3dsOfficialEVaultClient
         ontology,
         payload: input.payload,
         acl: ['*'],
+        ...(input.acl ? { _acl: input.acl } : {}),
       },
     });
     const updated = fieldRecord(result, 'updateMetaEnvelope');

@@ -17,6 +17,7 @@ import {
   type W3dsOntologyAdapterConfig,
   type W3dsOntologyMode,
 } from './server-config';
+import type { W3dsRecordAccessControl } from './video-sharing-policy';
 import {
   W3dsAdapterMappingService as AdapterMappingService,
   createPostgresW3dsAdapterMappingStore,
@@ -68,6 +69,11 @@ export interface W3dsOfficialHandleChangeInput {
   data: Record<string, unknown>;
   tableName: string;
   participants?: readonly string[];
+  /**
+   * Optional explicit record policy. The official adapter forwards this
+   * unchanged to the eVault client; it never derives access from table data.
+   */
+  accessControl?: W3dsRecordAccessControl;
 }
 
 export interface W3dsOfficialHandleChangeResult {
@@ -289,6 +295,7 @@ export class W3dsOfficialWeb3Adapter {
           ownerEName: mapped.ownerEName,
           schemaId: mapping.schemaId,
           payload: mapped.payload,
+          ...(input.accessControl ? { acl: input.accessControl } : {}),
         });
         await this.assertOfficialMapping(updated.id, mapping.schemaId);
         await this.outboxStore.markOutboxAttempt({
@@ -316,6 +323,7 @@ export class W3dsOfficialWeb3Adapter {
         ownerEName: mapped.ownerEName,
         schemaId: mapping.schemaId,
         payload: mapped.payload,
+        ...(input.accessControl ? { acl: input.accessControl } : {}),
       });
       await this.assertOfficialMapping(created.id, mapping.schemaId);
       if (created.id === localIdRaw) {

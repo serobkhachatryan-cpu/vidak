@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
 
 import { DOCUMENTED_W3DS_ONTOLOGY_BASE_URL, type W3dsOntologyAdapterConfig } from './server-config';
+import { W3DS_ACL_FULL } from './video-sharing-policy';
 import { InMemoryW3dsAdapterMappingStore, W3dsAdapterMappingService } from './w3ds-adapter-mapping';
 import {
   bundledOfficialMappingRuleSources,
@@ -130,6 +131,33 @@ describe('official handleChange outbox seam', () => {
     expect(first.interoperablePublicW3ds).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(resolveW3dsOfficialEVaultClient().status).toBe('unavailable');
+  });
+
+  it('forwards an explicit record policy unchanged to the eVault client', async () => {
+    const fake = new FakeW3dsOfficialEVaultClient();
+    const { adapter } = createInMemoryOfficialWeb3Adapter({
+      ontologyMode: 'metastate_official',
+      ontologyAdapter: officialAdapter,
+      officialClient: fake,
+    });
+    const accessControl = {
+      v: 1 as const,
+      grants: [{ ename: '@creator.w3id', perms: W3DS_ACL_FULL }],
+      denials: { enames: [], conditions: [] as [] },
+      default_perms: 0,
+      require: [] as Array<[]>,
+    };
+
+    await expect(
+      adapter.handleChange({
+        data: channelData,
+        tableName: 'creator_channels',
+        accessControl,
+      }),
+    ).resolves.toMatchObject({ outcome: 'synced' });
+
+    const create = fake.calls.find((call) => call.method === 'createMetaEnvelope');
+    expect((create?.input as { acl?: unknown } | undefined)?.acl).toEqual(accessControl);
   });
 
   it('fails closed on rejected official configuration and never reports remote success', async () => {

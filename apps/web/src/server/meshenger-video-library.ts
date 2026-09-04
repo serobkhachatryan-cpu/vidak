@@ -802,9 +802,14 @@ export class MeshengerVideoLibrary {
     // normally contention with catalogue work, not evidence that the File
     // disappeared, so use the bounded server-side retry policy here.
     const vault = await this.resolveEVault(file.ownerEName, 'backoff');
-    const dereferenced = await this.tryDereferenceFileMediaUrl(vault, file.metaEnvelopeId);
+    const dereferenced = await this.tryDereferenceFileMediaUrl(
+      vault,
+      file.metaEnvelopeId,
+      user.eName,
+    );
     const mediaUrl =
-      dereferenced ?? (await this.resolveMediaUrlFromEnvelope(vault, file.metaEnvelopeId));
+      dereferenced ??
+      (await this.resolveMediaUrlFromEnvelope(vault, file.metaEnvelopeId, user.eName));
     cacheMediaUrl(cacheKey, mediaUrl, grant.expiresAt);
     return mediaUrl;
   }
@@ -818,6 +823,7 @@ export class MeshengerVideoLibrary {
   private async tryDereferenceFileMediaUrl(
     vault: ResolvedVault,
     metaEnvelopeId: string,
+    actingEName: string,
   ): Promise<string | undefined> {
     let response: Response;
     try {
@@ -825,7 +831,13 @@ export class MeshengerVideoLibrary {
         new URL(`/files/${encodeURIComponent(metaEnvelopeId)}`, vault.eVaultUri),
         {
           method: 'GET',
-          headers: { 'X-ENAME': vault.ownerEName },
+          headers: {
+            'X-ENAME': vault.ownerEName,
+            // This is sent only for a viewer-initiated playback request. It
+            // lets eVault evaluate a direct user grant rather than Vidak's
+            // platform identity.
+            'X-ON-BEHALF-OF': normalizeEName(actingEName),
+          },
           cache: 'no-store',
           redirect: 'manual',
           signal: AbortSignal.timeout(Math.min(requestTimeoutMs, directFileDereferenceTimeoutMs)),
@@ -842,12 +854,14 @@ export class MeshengerVideoLibrary {
   private async resolveMediaUrlFromEnvelope(
     vault: ResolvedVault,
     metaEnvelopeId: string,
+    actingEName: string,
   ): Promise<string> {
     const envelope = await this.readEnvelope(
       vault.ownerEName,
       vault.eVaultUri,
       metaEnvelopeId,
       'backoff',
+      actingEName,
     );
     const url = optionalString(envelope.parsed.publicUrl) ?? optionalString(envelope.parsed.url);
     if (!url) {
@@ -3981,8 +3995,9 @@ export class MeshengerVideoLibrary {
     eVaultUri: string,
     id: string,
     rateLimit: RateLimitMode = 'fail-fast',
+    actingEName?: string,
   ): Promise<Envelope> {
-    const data = await this.graphql(owner, eVaultUri, readQuery, { id }, rateLimit);
+    const data = await this.graphql(owner, eVaultUri, readQuery, { id }, rateLimit, actingEName);
     const node = record(data.metaEnvelope);
     const envelopeId = optionalString(node?.id);
     const ontology = optionalString(node?.ontology);
@@ -4033,6 +4048,7 @@ export class MeshengerVideoLibrary {
     query: string,
     variables: Record<string, unknown>,
     rateLimit: RateLimitMode = 'fail-fast',
+    actingEName?: string,
   ): Promise<RecordValue> {
     const platformToken = await this.getPlatformToken(rateLimit);
     const body = record(
@@ -4044,6 +4060,7 @@ export class MeshengerVideoLibrary {
             'Content-Type': 'application/json',
             'X-ENAME': owner,
             Authorization: `Bearer ${platformToken}`,
+            ...(actingEName ? { 'X-ON-BEHALF-OF': normalizeEName(actingEName) } : {}),
           },
           body: JSON.stringify({ query, variables }),
         },

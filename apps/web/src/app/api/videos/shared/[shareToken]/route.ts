@@ -22,12 +22,12 @@ function errorResponse(error: unknown): NextResponse {
   if (error instanceof W3dsAuthError || error instanceof VideoSharingError) {
     return NextResponse.json(
       { error: { code: error.code, message: error.message } },
-      { status: error.status },
+      { status: error.status, headers: { 'Cache-Control': 'private, no-store' } },
     );
   }
   return NextResponse.json(
     { error: { code: 'internal_error', message: 'Shared video is unavailable.' } },
-    { status: 500 },
+    { status: 500, headers: { 'Cache-Control': 'private, no-store' } },
   );
 }
 
@@ -39,7 +39,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const { shareToken } = await context.params;
     const video = await getVideoSharingService().getSharedVideo(accessToken, shareToken);
-    return NextResponse.json(withSharedVideoPlaybackUrls(video, shareToken));
+    return NextResponse.json(withSharedVideoPlaybackUrls(video, shareToken), {
+      headers: { 'Cache-Control': 'private, no-store' },
+    });
   } catch (error) {
     return errorResponse(error);
   }

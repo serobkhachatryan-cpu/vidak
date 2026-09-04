@@ -8,6 +8,7 @@
 
 import 'server-only';
 
+import type { W3dsRecordAccessControl } from './video-sharing-policy';
 import { W3dsOfficialAdapterGateError } from './w3ds-official-adapter-gate';
 
 const eNamePattern = /^@[^/\s@]+$/;
@@ -33,7 +34,10 @@ export interface W3dsOfficialFileUploadInput {
   contentType: string;
   /** Raw base64 or a data URI, exactly as the documented mutation accepts. */
   content: string;
+  /** Legacy input field still required by the eVault schema. */
   acl: readonly string[];
+  /** Authoritative W3DS record policy, written as `_acl` when supplied. */
+  accessControl?: W3dsRecordAccessControl;
 }
 
 export interface W3dsOfficialFileUploadResult {
@@ -263,6 +267,7 @@ export class W3dsOfficialFileHttpClient implements W3dsOfficialFileClient {
               contentType: input.contentType.trim(),
               content: input.content.trim(),
               acl: input.acl.map((entry) => entry.trim()),
+              ...(input.accessControl ? { _acl: input.accessControl } : {}),
             },
           },
         }),

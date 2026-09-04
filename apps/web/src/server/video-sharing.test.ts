@@ -2,7 +2,11 @@ import type { AuthUser } from '@w3ds/auth';
 import { describe, expect, it } from 'vitest';
 import { InMemoryCreatorVideoStore } from './creator-video-store';
 import { VideoSharingError, VideoSharingService } from './video-sharing';
-import { toW3dsRecordAccessControl, type VideoSharingPolicy } from './video-sharing-policy';
+import {
+  toW3dsRecordAccessControl,
+  type VideoSharingPolicy,
+  W3DS_ACL_FULL,
+} from './video-sharing-policy';
 import { InMemoryVideoSharingPolicyStore } from './video-sharing-store';
 
 const owner: AuthUser = {
@@ -56,7 +60,12 @@ const stranger: AuthUser = {
   capabilities: [],
 };
 
-async function createContext() {
+async function createContext(
+  options: {
+    resolveRecipientEName?: (eName: string) => Promise<string>;
+    createToken?: () => string;
+  } = {},
+) {
   const videoStore = new InMemoryCreatorVideoStore();
   const policyStore = new InMemoryVideoSharingPolicyStore();
   const channel = await videoStore.findOrCreateChannel({
@@ -90,7 +99,8 @@ async function createContext() {
       if (!user) throw new Error('unknown token');
       return user;
     },
-    createToken: () => 'share_9f7c22fb-7ea3-419d-a618-98b8427c4753',
+    ...options,
+    createToken: options.createToken ?? (() => 'share_9f7c22fb-7ea3-419d-a618-98b8427c4753'),
   });
   return { service, videoStore, draft };
 }
@@ -113,16 +123,17 @@ describe('video sharing policy', () => {
       groupENames: [],
     };
 
-    expect(toW3dsRecordAccessControl(privatePolicy)).toEqual({
+    expect(toW3dsRecordAccessControl(privatePolicy, owner.eName)).toEqual({
       v: 1,
-      grants: [],
+      grants: [{ ename: owner.eName, perms: W3DS_ACL_FULL }],
       denials: { enames: [], conditions: [] },
       default_perms: 0,
       require: [],
     });
-    expect(toW3dsRecordAccessControl(peoplePolicy)).toEqual({
+    expect(toW3dsRecordAccessControl(peoplePolicy, owner.eName)).toEqual({
       v: 1,
       grants: [
+        { ename: owner.eName, perms: W3DS_ACL_FULL },
         { ename: '@b.w3id', perms: 1 },
         { ename: '@a.w3id', perms: 1 },
       ],
@@ -130,7 +141,8 @@ describe('video sharing policy', () => {
       default_perms: 0,
       require: [],
     });
-    expect(toW3dsRecordAccessControl(publicPolicy)).toMatchObject({
+    expect(toW3dsRecordAccessControl(publicPolicy, owner.eName)).toMatchObject({
+      grants: [{ ename: owner.eName, perms: W3DS_ACL_FULL }],
       default_perms: 1,
       require: [[]],
     });
@@ -165,6 +177,64 @@ describe('video sharing policy', () => {
     await expect(
       service.getSharedVideo('recipient-token', granted.shareToken ?? ''),
     ).rejects.toBeInstanceOf(VideoSharingError);
+  });
+
+  it('rotates the locator when the recipient set changes', async () => {
+    const tokens = [
+      'share_11111111-1111-4111-8111-111111111111',
+      'share_22222222-2222-4222-8222-222222222222',
+    ];
+    const { service, draft } = await createContext({
+      createToken: () => tokens.shift() ?? 'share_exhausted',
+    });
+    const first = await service.updateOwnerPolicy('owner-token', draft.id, {
+      audience: 'people',
+      readerENames: ['@recipient.w3id'],
+    });
+    const second = await service.updateOwnerPolicy('owner-token', draft.id, {
+      audience: 'people',
+      readerENames: ['@new-recipient.w3id'],
+    });
+
+    expect(second.shareToken).not.toBe(first.shareToken);
+    await expect(
+      service.getSharedVideo('recipient-token', first.shareToken ?? ''),
+    ).rejects.toMatchObject({ code: 'not_found', status: 404 });
+  });
+
+  it('does not narrow the owner when their eName is accidentally listed as a recipient', () => {
+    const policy: VideoSharingPolicy = {
+      audience: 'people',
+      readerENames: [owner.eName, '@recipient.w3id'],
+      groupENames: [],
+    };
+
+    expect(toW3dsRecordAccessControl(policy, owner.eName).grants).toEqual([
+      { ename: owner.eName, perms: W3DS_ACL_FULL },
+      { ename: '@recipient.w3id', perms: 1 },
+    ]);
+  });
+
+  it('uses the registry-canonical recipient identity and rejects adding the owner', async () => {
+    const { service: canonicalService, draft: canonicalDraft } = await createContext({
+      resolveRecipientEName: async (eName) =>
+        eName === '@friend.alias' ? '@friend.canonical' : owner.eName,
+    });
+
+    await expect(
+      canonicalService.updateOwnerPolicy('owner-token', canonicalDraft.id, {
+        audience: 'people',
+        readerENames: ['@friend.alias'],
+      }),
+    ).resolves.toMatchObject({ readerENames: ['@friend.canonical'] });
+
+    const { service, draft } = await createContext();
+    await expect(
+      service.updateOwnerPolicy('owner-token', draft.id, {
+        audience: 'people',
+        readerENames: [owner.eName],
+      }),
+    ).rejects.toMatchObject({ code: 'owner_recipient_rejected', status: 400 });
   });
 
   it('does not pretend that a pasted group eName authorizes hosted bytes', async () => {

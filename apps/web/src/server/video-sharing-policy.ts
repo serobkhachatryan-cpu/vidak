@@ -8,6 +8,8 @@
  */
 
 export const W3DS_ACL_READ = 0x01;
+/** The record owner must retain every documented permission. */
+export const W3DS_ACL_FULL = 0x0f;
 
 export type VideoSharingAudience = 'private' | 'people' | 'groups' | 'public';
 
@@ -80,16 +82,31 @@ export function normalizeVideoSharingPolicyInput(
   };
 }
 
-/** Builds the exact W3DS `_acl` block to apply to a record once eVault writes are available. */
+/**
+ * Builds the exact W3DS `_acl` block for one owner-controlled record.
+ *
+ * The owner gets `0x0f` explicitly. eVault does not infer this from record
+ * ownership once `_acl` is present, so omitting it could leave an owner with
+ * read-only access (public) or no access (private).
+ */
 export function toW3dsRecordAccessControl(
   policy: Pick<VideoSharingPolicy, 'audience' | 'readerENames' | 'groupENames'>,
+  ownerEName: string,
 ): W3dsRecordAccessControl {
-  const grants =
+  const owner = normalizePolicyEName(ownerEName, 'Owner');
+  const audienceGrants =
     policy.audience === 'people'
       ? policy.readerENames.map((ename) => ({ ename, perms: W3DS_ACL_READ }))
       : policy.audience === 'groups'
         ? policy.groupENames.map((ename) => ({ ename, perms: W3DS_ACL_READ }))
         : [];
+  // A direct grant is the most-specific eVault ACL match. Keep the owner
+  // first and remove accidental duplicate recipient entries so the owner can
+  // never be narrowed from full control to READ.
+  const grants = [
+    { ename: owner, perms: W3DS_ACL_FULL },
+    ...audienceGrants.filter((grant) => grant.ename !== owner),
+  ];
 
   return {
     v: 1,
@@ -139,4 +156,12 @@ function normalizeENames(value: unknown, label: string): string[] {
     result.add(ename);
   }
   return [...result].sort((left, right) => left.localeCompare(right));
+}
+
+function normalizePolicyEName(value: string, label: string): string {
+  const eName = value.trim();
+  if (!eNamePattern.test(eName)) {
+    throw new VideoSharingPolicyError(`${label} must be a valid eID name starting with @.`);
+  }
+  return eName;
 }

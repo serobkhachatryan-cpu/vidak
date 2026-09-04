@@ -160,16 +160,18 @@ describe('Meshenger video library', () => {
 
   it('opens an authorized shared stream after checking its current conversation access', async () => {
     const library = configuredLibrary();
+    const playbackHeaders: Headers[] = [];
     const probe = vi
       .spyOn(library, 'probeSharedSpaceAccess')
       .mockResolvedValue({ access: 'ok', member: true });
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (url: URL) => {
+      vi.fn(async (url: URL, init?: RequestInit) => {
         if (url.pathname === '/resolve') {
           return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
         }
         if (url.pathname === '/files/shared-file') {
+          playbackHeaders.push(new Headers(init?.headers));
           return new Response(null, {
             status: 302,
             headers: { location: 'https://media.example/shared-video.mp4' },
@@ -199,6 +201,9 @@ describe('Meshenger video library', () => {
         { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
         'backoff',
       );
+      expect(playbackHeaders).toHaveLength(1);
+      expect(playbackHeaders[0]?.get('X-ON-BEHALF-OF')).toBe(grant.eName);
+      expect(playbackHeaders[0]?.get('X-ENAME')).toBe('@friend.w3id');
     } finally {
       vi.unstubAllGlobals();
     }

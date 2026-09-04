@@ -23,12 +23,12 @@ function errorResponse(error: unknown): NextResponse {
   ) {
     return NextResponse.json(
       { error: { code: error.code, message: error.message } },
-      { status: error.status },
+      { status: error.status, headers: { 'Cache-Control': 'private, no-store' } },
     );
   }
   return NextResponse.json(
     { error: { code: 'internal_error', message: 'Shared thumbnail is unavailable.' } },
-    { status: 500 },
+    { status: 500, headers: { 'Cache-Control': 'private, no-store' } },
   );
 }
 
@@ -48,7 +48,10 @@ export async function GET(request: NextRequest, context: RouteContext) {
       });
     } catch (error) {
       if (!(error instanceof MediaAssetError) || error.code !== 'not_found') throw error;
-      return new NextResponse(null, { status: 404 });
+      return new NextResponse(null, {
+        status: 404,
+        headers: { 'Cache-Control': 'private, no-store' },
+      });
     }
   } catch (error) {
     return errorResponse(error);

@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
+import { W3DS_ACL_FULL } from './video-sharing-policy';
 import {
   FakeW3dsOfficialFileClient,
   parseW3dsFileUri,
@@ -97,6 +98,13 @@ describe('official File URI boundary', () => {
       transport: { request },
     });
 
+    const accessControl = {
+      v: 1 as const,
+      grants: [{ ename: '@creator.w3id', perms: W3DS_ACL_FULL }],
+      denials: { enames: [], conditions: [] as [] },
+      default_perms: 0,
+      require: [] as Array<[]>,
+    };
     await expect(
       client.uploadFile({
         ownerEName: '@creator.w3id',
@@ -104,6 +112,7 @@ describe('official File URI boundary', () => {
         contentType: 'image/png',
         content: 'data:image/png;base64,aGVsbG8=',
         acl: ['*'],
+        accessControl,
       }),
     ).resolves.toEqual({
       uri: 'w3ds://file?id=@creator.w3id/file_1',
@@ -136,6 +145,7 @@ describe('official File URI boundary', () => {
           contentType: 'image/png',
           content: 'data:image/png;base64,aGVsbG8=',
           acl: ['*'],
+          _acl: accessControl,
         },
       },
     });

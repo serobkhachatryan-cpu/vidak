@@ -23,14 +23,16 @@ function errorResponse(error: unknown): NextResponse {
   ) {
     const headers =
       error instanceof MediaAssetError && error.responseHeaders ? error.responseHeaders : undefined;
-    return NextResponse.json(
+    const response = NextResponse.json(
       { error: { code: error.code, message: error.message } },
       { status: error.status, ...(headers ? { headers } : {}) },
     );
+    response.headers.set('Cache-Control', 'private, no-store');
+    return response;
   }
   return NextResponse.json(
     { error: { code: 'internal_error', message: 'Shared media is unavailable.' } },
-    { status: 500 },
+    { status: 500, headers: { 'Cache-Control': 'private, no-store' } },
   );
 }
 

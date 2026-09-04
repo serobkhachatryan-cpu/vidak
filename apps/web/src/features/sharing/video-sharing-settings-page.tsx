@@ -120,7 +120,7 @@ export function VideoSharingSettingsPage({ videoId }: { videoId: string }) {
     <ApplicationShell currentHref="/">
       <Page
         title="Sharing settings"
-        description="Decide who can watch this Vidak-hosted video. A private share link locates the video; the recipient’s signed-in eID is still checked before anything plays."
+        description="Decide who can watch this Vidak-hosted video. A private share link only locates the video; Vidak checks the recipient’s signed-in eID before every preview and playback request."
         containerSize="lg"
         actions={
           <Button variant="secondary" onClick={() => router.push('/?tab=yours')}>
@@ -202,7 +202,8 @@ export function VideoSharingSettingsPage({ videoId }: { videoId: string }) {
               <label className="block space-y-2">
                 <span className="font-medium text-foreground">People’s eID names</span>
                 <span className="block text-sm text-muted-foreground">
-                  One per line or separated by commas. Each must start with @.
+                  One per line or separated by commas. Each must start with @. Vidak verifies and
+                  saves the canonical eID identity when you save.
                 </span>
                 <textarea
                   value={people}
@@ -214,6 +215,11 @@ export function VideoSharingSettingsPage({ videoId }: { videoId: string }) {
               </label>
             ) : null}
 
+            <aside className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+              <strong className="text-foreground">Revocation:</strong> changing who can watch
+              immediately stops Vidak access for removed people and rotates the private link. A
+              recipient cannot reuse an old link to continue watching.
+            </aside>
             <aside className="rounded-lg border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
               <strong className="text-foreground">W3DS groups:</strong> group-based sharing will be
               enabled once Vidak can write the same policy to eVault and verify group membership
