@@ -133,7 +133,7 @@ describe('inventory coordinator', () => {
     expect(scanLibrary).toHaveBeenCalledTimes(2);
   });
 
-  it('drops cached shared items after access is revoked', async () => {
+  it('does not offer a freshly scanned shared item after access is revoked', async () => {
     const sharedVideo = video({
       id: 'shared-1',
       title: 'Group cut',
@@ -157,8 +157,8 @@ describe('inventory coordinator', () => {
       ttlMs: 60_000,
     });
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
-    expect(first.items).toHaveLength(1);
-    expect(first.items[0]).not.toHaveProperty('sourceSpaceKey');
+    expect(first.items).toEqual([]);
+    expect(first.discovery).toBe('complete');
     const again = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
     expect(again.metrics.cache).toBe('hit');
     expect(again.items).toEqual([]);
@@ -194,9 +194,8 @@ describe('inventory coordinator', () => {
     });
 
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
-    expect(first.items.map((item) => item.title)).toEqual(
-      expect.arrayContaining(['Personal clip', 'Shared clip']),
-    );
+    expect(first.items.map((item) => item.title)).toEqual(['Personal clip']);
+    expect(first.discovery).toBe('refreshing');
 
     const afterProbeFailure = await coordinator.getSnapshot(
       { eName: '@person.w3id' },
@@ -210,7 +209,7 @@ describe('inventory coordinator', () => {
       deferred: 1,
     });
     expect(JSON.stringify(afterProbeFailure)).not.toContain('@group.w3id');
-    expect(scanLibrary).toHaveBeenCalledTimes(1);
+    expect(scanLibrary).toHaveBeenCalledTimes(2);
   });
 
   it('bounds a cached shared-access check so a stalled source cannot hang the library', async () => {
@@ -242,12 +241,56 @@ describe('inventory coordinator', () => {
     });
 
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
-    expect(first.items).toHaveLength(2);
-    expect(probeSharedSpaceAccess).not.toHaveBeenCalled();
+    expect(first.items.map((item) => item.title)).toEqual(['Personal clip']);
+    expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
 
     const afterTimeout = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
     expect(afterTimeout.items.map((item) => item.title)).toEqual(['Personal clip']);
     expect(afterTimeout.discovery).toBe('refreshing');
+  });
+
+  it('checks the exact conversation and its authorized group fallback before showing history-shared media', async () => {
+    const historyShared = video({
+      id: 'shared-history-1',
+      title: 'History-shared clip',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@group.w3id',
+      sourceChatId: 'chat-1',
+      accessBasis: 'history',
+    });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([historyShared]), 'done', {
+        personalPages: 0,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([historyShared]);
+    });
+    const probeSharedSpaceAccess = vi.fn(
+      (_user: unknown, space: { kind: 'direct' | 'group'; chatId?: string }) =>
+        Promise.resolve(
+          space.kind === 'group'
+            ? { access: 'ok' as const, member: true }
+            : { access: 'missing' as const, member: false },
+        ),
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
+      log: () => undefined,
+    });
+
+    const snapshot = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+
+    expect(snapshot.items.map((item) => item.title)).toEqual(['History-shared clip']);
+    expect(probeSharedSpaceAccess).toHaveBeenCalledWith(
+      { eName: '@person.w3id' },
+      expect.objectContaining({ kind: 'direct', chatId: 'chat-1' }),
+    );
+    expect(probeSharedSpaceAccess).toHaveBeenCalledWith(
+      { eName: '@person.w3id' },
+      expect.objectContaining({ kind: 'group' }),
+    );
   });
 
   it('returns 429 work as partial without pretending it is complete', async () => {

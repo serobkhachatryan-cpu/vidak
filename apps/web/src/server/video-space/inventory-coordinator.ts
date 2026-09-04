@@ -191,11 +191,11 @@ export function createInventoryCoordinator(options?: {
   ): Promise<InventorySnapshot> {
     if (entry.firstResultAt === undefined) await entry.firstReady;
     let snapshot = entry.snapshot;
-    // A fresh scan has just checked the source hierarchy. Only cached results
-    // need an additional entitlement check; avoiding the duplicate probe makes
-    // an initial library load faster and less sensitive to a transient eVault
-    // transport problem.
-    if (cache === 'hit' && !entry.scanning && (entry.scope === 'shared' || entry.scope === 'all')) {
+    // Discovery establishes where a shared reference came from, but the card
+    // must not offer playback until that source proves the viewer still has
+    // access. Check fresh snapshots too: otherwise a first-load card can
+    // briefly offer Watch and then be rejected by the media route.
+    if (entry.scope === 'shared' || entry.scope === 'all') {
       snapshot = await revalidateShared(user, entry);
     }
     const discovery = inventoryDiscovery({
@@ -236,47 +236,44 @@ export function createInventoryCoordinator(options?: {
     entry: CacheEntry,
   ): Promise<MeshengerLibrary> {
     if (entry.spaces.length === 0) return entry.snapshot;
-    const denied = new Set<string>();
-    const missing = new Set<string>();
-    const nonMember = new Set<string>();
-    const unverified = new Set<string>();
+    const accessBySpace = new Map<string, SharedSpaceAccess>();
     await mapPool(entry.spaces, revalidateConcurrency, async (space) => {
       try {
-        const result = await withTimeout(
-          getScanner().probeSharedSpaceAccess(user, space),
-          revalidationTimeoutMs,
+        accessBySpace.set(
+          sharedSpaceProbeKey(space),
+          await withTimeout(
+            getScanner().probeSharedSpaceAccess(user, space),
+            revalidationTimeoutMs,
+          ),
         );
-        if (result.access === 'denied') denied.add(space.eName);
-        else if (result.access === 'missing') missing.add(space.eName);
-        else if (result.access === 'ok' && !result.member && space.kind === 'group') {
-          nonMember.add(space.eName);
-        }
       } catch {
-        // A cached shared card is safe to retain only while its source can be
-        // checked. Keep unrelated personal/verified cards available, hide this
-        // source, and let the normal partial-inventory path try again.
-        unverified.add(space.eName);
+        accessBySpace.set(sharedSpaceProbeKey(space), { access: 'retry', member: false });
       }
     });
-    if (denied.size === 0 && missing.size === 0 && nonMember.size === 0 && unverified.size === 0) {
+    const outcomes = new Map<string, SharedItemAccess>();
+    for (const item of entry.snapshot.items) {
+      if (item.accessScope !== 'shared') continue;
+      outcomes.set(item.id, sharedItemAccess(item, accessBySpace));
+    }
+    if ([...outcomes.values()].every((outcome) => outcome === 'verified')) {
       return entry.snapshot;
     }
     const items = entry.snapshot.items.filter((item) => {
-      const space = item.sourceSpaceKey;
-      if (!space) return true;
-      if (denied.has(space) || missing.has(space) || unverified.has(space)) return false;
-      if (nonMember.has(space) && item.accessBasis === 'membership') return false;
-      return true;
+      const outcome = outcomes.get(item.id);
+      return outcome === undefined || outcome === 'verified';
     });
+    const denied = [...outcomes.values()].filter((outcome) => outcome === 'denied').length;
+    const missing = [...outcomes.values()].filter((outcome) => outcome === 'missing').length;
+    const unavailable = [...outcomes.values()].filter((outcome) => outcome === 'retry').length;
     const completeness = {
       ...entry.snapshot.completeness,
-      denied: entry.snapshot.completeness.denied + denied.size,
-      missing: entry.snapshot.completeness.missing + missing.size,
-      ...(unverified.size > 0
+      denied: entry.snapshot.completeness.denied + denied,
+      missing: entry.snapshot.completeness.missing + missing,
+      ...(unavailable > 0
         ? {
             complete: false,
             retryNeeded: true,
-            deferred: Math.max(entry.snapshot.completeness.deferred ?? 0, unverified.size),
+            deferred: Math.max(entry.snapshot.completeness.deferred ?? 0, unavailable),
           }
         : {}),
     };
@@ -473,12 +470,42 @@ function spacesFromItems(
   if (scope !== 'shared' && scope !== 'all') return [];
   const unique = new Map<string, SharedSpaceProbe>();
   for (const item of items) {
-    if (!item.sourceSpaceKey || item.accessBasis !== 'membership') continue;
-    unique.set(item.sourceSpaceKey, { eName: item.sourceSpaceKey, kind: 'group' });
-  }
-  for (const item of items) {
-    if (!item.sourceSpaceKey || unique.has(item.sourceSpaceKey)) continue;
-    unique.set(item.sourceSpaceKey, { eName: item.sourceSpaceKey, kind: 'direct' });
+    for (const probe of sharedItemProbes(item)) unique.set(sharedSpaceProbeKey(probe), probe);
   }
   return [...unique.values()];
+}
+
+type SharedItemAccess = 'verified' | 'denied' | 'missing' | 'retry';
+
+function sharedItemAccess(
+  item: MeshengerVideo,
+  accessBySpace: ReadonlyMap<string, SharedSpaceAccess>,
+): SharedItemAccess {
+  const accesses = sharedItemProbes(item)
+    .map((probe) => accessBySpace.get(sharedSpaceProbeKey(probe)))
+    .filter((access): access is SharedSpaceAccess => access !== undefined);
+  if (accesses.some((access) => access.access === 'ok' && access.member)) return 'verified';
+  if (accesses.some((access) => access.access === 'retry')) return 'retry';
+  if (accesses.length > 0 && accesses.every((access) => access.access === 'missing'))
+    return 'missing';
+  return 'denied';
+}
+
+/** Mirrors the authorization alternatives checked by the private media route. */
+function sharedItemProbes(item: MeshengerVideo): SharedSpaceProbe[] {
+  if (item.accessScope !== 'shared' || !item.sourceSpaceKey) return [];
+  if (item.accessBasis === 'membership') {
+    return [{ eName: item.sourceSpaceKey, kind: 'group' }];
+  }
+  if (item.accessBasis === 'history' && item.sourceChatId) {
+    return [
+      { eName: item.sourceSpaceKey, kind: 'direct', chatId: item.sourceChatId },
+      { eName: item.sourceSpaceKey, kind: 'group' },
+    ];
+  }
+  return [];
+}
+
+function sharedSpaceProbeKey(space: SharedSpaceProbe): string {
+  return `${space.kind}\u0000${space.eName}\u0000${space.chatId ?? ''}`;
 }
