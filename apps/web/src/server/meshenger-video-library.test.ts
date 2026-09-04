@@ -3219,7 +3219,7 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('restarts a stale running catalogue without dropping discovered cards', async () => {
+  it('restarts a stale catalogue while rebuilding legacy shared records', async () => {
     const store = (await import('./video-space/job-store')).createMemoryInventoryJobStore();
     const job = await store.createJob({
       ownerEName: '@person.w3id',
@@ -3242,6 +3242,14 @@ describe('Meshenger video library', () => {
             accessScope: 'personal',
             sourceId: 'w3ds-file',
           },
+          {
+            key: 'call:@friend.w3id/legacy-shared-clip',
+            fileUris: ['w3ds://file?id=@friend.w3id/legacy-shared-clip'],
+            kind: 'call-recording',
+            title: 'Legacy shared clip',
+            accessScope: 'shared',
+            sourceId: 'call-recording',
+          },
         ],
       },
     });
@@ -3261,6 +3269,7 @@ describe('Meshenger video library', () => {
     const saved = await store.getByOwner('@person.w3id');
 
     expect(result.items.map((item) => item.title)).toContain('Kept library clip');
+    expect(result.items.map((item) => item.title)).not.toContain('Legacy shared clip');
     expect(saved?.id).toBe(job.id);
     expect(saved?.status).toBe('running');
     expect(saved?.ledger.drainFinished).toBe(false);

@@ -559,7 +559,15 @@ export class MeshengerVideoLibrary {
     completeness.markRetry();
     const { completedAt: _completedAt, ...activeJob } = job;
     const found = Array.isArray(job.ledger.found)
-      ? job.ledger.found.filter((item) => !isStaleGenericFileRecord(item))
+      ? job.ledger.found.filter(
+          (item) =>
+            !isStaleGenericFileRecord(item) &&
+            // Shared records from an older catalogue can be truthful metadata
+            // but lack the chat or membership proof now required to mint a
+            // viewer-bound stream. Rebuild those records from their current
+            // authorized sources rather than preserving an unplayable card.
+            record(item)?.accessScope !== 'shared',
+        )
       : [];
     const restarted: InventoryJobRecord = {
       ...activeJob,
