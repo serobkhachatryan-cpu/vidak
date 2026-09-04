@@ -14,6 +14,7 @@ import {
 export const runtime = 'nodejs';
 
 type RouteContext = { params: Promise<{ videoId: string }> };
+const privateNoStoreHeaders = { 'Cache-Control': 'private, no-store' };
 
 function accessTokenFrom(request: NextRequest): string | undefined {
   return getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
@@ -27,12 +28,12 @@ function errorResponse(error: unknown): NextResponse {
   ) {
     return NextResponse.json(
       { error: { code: error.code, message: error.message } },
-      { status: error.status },
+      { status: error.status, headers: privateNoStoreHeaders },
     );
   }
   return NextResponse.json(
     { error: { code: 'internal_error', message: 'Sharing settings are unavailable.' } },
-    { status: 500 },
+    { status: 500, headers: privateNoStoreHeaders },
   );
 }
 
@@ -43,7 +44,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
     if (!accessToken)
       throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
     const { videoId } = await context.params;
-    return NextResponse.json(await getVideoSharingService().getOwnerPolicy(accessToken, videoId));
+    return NextResponse.json(await getVideoSharingService().getOwnerPolicy(accessToken, videoId), {
+      headers: privateNoStoreHeaders,
+    });
   } catch (error) {
     return errorResponse(error);
   }
@@ -60,6 +63,7 @@ export async function PUT(request: NextRequest, context: RouteContext) {
     const { videoId } = await context.params;
     return NextResponse.json(
       await getVideoSharingService().updateOwnerPolicy(accessToken, videoId, body),
+      { headers: privateNoStoreHeaders },
     );
   } catch (error) {
     return errorResponse(error);
