@@ -1,9 +1,11 @@
 'use client';
 
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, EmptyState, Heading, Page, Skeleton, Text } from '@w3ds/ui';
+import { Button, Card, EmptyState, ErrorState, Heading, Page, Skeleton, Text } from '@w3ds/ui';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ApplicationShell } from '../../components/application-shell';
+import { WatchRecoveryActions } from '../watch/watch-recovery-actions';
 import { getImportedVideo } from './imported-video-api';
 
 function providerName(provider: 'youtube' | 'vimeo'): string {
@@ -18,11 +20,14 @@ function formatDuration(value: number | undefined): string | undefined {
 }
 
 export function ImportedVideoWatchPage({ videoId }: { videoId: string }) {
+  const router = useRouter();
   const query = useQuery({
     queryKey: ['imported-channel-video', videoId],
     queryFn: () => getImportedVideo(videoId),
     retry: false,
   });
+  const returnToLibrary = () => router.push('/library');
+  const reportPlaybackProblem = () => router.push('/support');
 
   return (
     <ApplicationShell currentHref="/library">
@@ -41,11 +46,32 @@ export function ImportedVideoWatchPage({ videoId }: { videoId: string }) {
             <Skeleton className="aspect-video w-full" />
             <Skeleton className="h-8 w-2/3" />
           </div>
-        ) : query.isError || !query.data ? (
+        ) : query.isError ? (
+          <ErrorState
+            title="Could not open this imported video"
+            description="Vidak could not refresh this video from its authorised source. Try again, or report the problem if it continues."
+            action={
+              <WatchRecoveryActions
+                primaryLabel="Try again"
+                onPrimary={() => void query.refetch()}
+                secondaryLabel="Back to library"
+                onSecondary={returnToLibrary}
+                onReportProblem={reportPlaybackProblem}
+              />
+            }
+          />
+        ) : !query.data ? (
           <EmptyState
             icon="!"
             title="Imported video unavailable"
             description="The video may have been removed from the connected provider."
+            action={
+              <WatchRecoveryActions
+                primaryLabel="Back to library"
+                onPrimary={returnToLibrary}
+                onReportProblem={reportPlaybackProblem}
+              />
+            }
           />
         ) : (
           <div className="space-y-5">
