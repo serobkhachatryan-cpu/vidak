@@ -308,6 +308,9 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
               onContinueDraft={(video) =>
                 router.push(`/upload?draft=${encodeURIComponent(video.id)}`)
               }
+              onManageSharing={(video) =>
+                router.push(`/videos/${encodeURIComponent(video.id)}/sharing`)
+              }
               onChangeVisibility={(video, next) => {
                 if (!window.confirm(shareChangeConfirmation(next))) return;
                 void (async () => {
@@ -395,6 +398,7 @@ function PrivateLibraryPanel({
   onWatch,
   onContinueDraft,
   onChangeVisibility,
+  onManageSharing,
 }: {
   tab: Exclude<VideoSpaceTab, 'explore'>;
   library: LibraryState;
@@ -405,6 +409,7 @@ function PrivateLibraryPanel({
   onWatch: (video: Video) => void;
   onContinueDraft: (video: Video) => void;
   onChangeVisibility: (video: Video, next: 'private') => void;
+  onManageSharing: (video: Video) => void;
 }) {
   const libraryItems = evaultItemsForTab(library.items, tab);
   const ownedItems = owned.status === 'ready' ? ownedItemsForTab(owned.items, tab) : [];
@@ -532,6 +537,7 @@ function PrivateLibraryPanel({
               onWatch={onWatch}
               onContinueDraft={onContinueDraft}
               onChangeVisibility={onChangeVisibility}
+              onManageSharing={onManageSharing}
             />
           ))}
           {libraryItems.map((video) => (

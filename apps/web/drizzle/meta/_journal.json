@@ -169,6 +169,13 @@
       "when": 1788297600000,
       "tag": "0023_preview_capture_seconds_precision",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1788384000000,
+      "tag": "0024_video_sharing_policies",
+      "breakpoints": true
     }
   ]
 }

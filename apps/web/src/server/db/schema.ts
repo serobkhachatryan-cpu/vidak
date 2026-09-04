@@ -141,6 +141,37 @@ export const videos = pgTable(
 );
 
 /**
+ * Owner-managed sharing policy for a Vidak-hosted video.
+ *
+ * This is the durable product policy and contains only normalized eNames plus
+ * an opaque share token. It is deliberately separate from the video row so
+ * publication lifecycle remains independent from who may receive a private
+ * share. The matching W3DS `_acl` is derived at the boundary, never accepted
+ * wholesale from a browser.
+ */
+export const videoSharingPolicies = pgTable(
+  'video_sharing_policies',
+  {
+    videoId: text('video_id')
+      .primaryKey()
+      .references(() => videos.id, { onDelete: 'cascade' }),
+    ownerId: text('owner_id')
+      .notNull()
+      .references(() => w3dsPlatformUsers.id),
+    audience: text('audience').$type<'private' | 'people' | 'groups' | 'public'>().notNull(),
+    readerENames: jsonb('reader_e_names').$type<string[]>().notNull(),
+    groupENames: jsonb('group_e_names').$type<string[]>().notNull(),
+    shareToken: text('share_token').notNull().unique(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    index('video_sharing_policies_owner_id_idx').on(table.ownerId),
+    index('video_sharing_policies_share_token_idx').on(table.shareToken),
+  ],
+);
+
+/**
  * Upload lifecycle for durable media attached to a creator video.
  * Owner transfer is draft-scoped; anonymous streaming is gated by published
  * public/unlisted visibility on the linked video.
@@ -766,6 +797,7 @@ export type VideoViewEventRow = typeof videoViewEvents.$inferSelect;
 export type W3dsPlatformSessionRow = typeof w3dsPlatformSessions.$inferSelect;
 export type CreatorChannelRow = typeof creatorChannels.$inferSelect;
 export type VideoRow = typeof videos.$inferSelect;
+export type VideoSharingPolicyRow = typeof videoSharingPolicies.$inferSelect;
 export type W3dsPlatformUserRow = typeof w3dsPlatformUsers.$inferSelect;
 export type W3dsPlatformEVaultRow = typeof w3dsPlatformEVault.$inferSelect;
 export type W3dsLoginOfferRow = typeof w3dsLoginOffers.$inferSelect;

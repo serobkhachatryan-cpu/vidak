@@ -19,12 +19,14 @@ export function OwnedVideoCard({
   onWatch,
   onContinueDraft,
   onChangeVisibility,
+  onManageSharing,
 }: {
   video: Video;
   isPending: boolean;
   onWatch: (video: Video) => void;
   onContinueDraft: (video: Video) => void;
   onChangeVisibility: (video: Video, next: 'private') => void;
+  onManageSharing: (video: Video) => void;
 }) {
   const visibility = ownedVideoSpaceVisibility(video);
   const canWatch =
@@ -55,9 +57,14 @@ export function OwnedVideoCard({
         </div>
         <div className="flex flex-wrap gap-2">
           {video.status === 'draft' ? (
-            <Button size="sm" onClick={() => onContinueDraft(video)}>
-              Resume draft
-            </Button>
+            <>
+              <Button size="sm" onClick={() => onContinueDraft(video)}>
+                Resume draft
+              </Button>
+              <Button size="sm" variant="secondary" onClick={() => onManageSharing(video)}>
+                Sharing settings
+              </Button>
+            </>
           ) : (
             <>
               {canWatch ? (
@@ -76,6 +83,9 @@ export function OwnedVideoCard({
                   Unpublish &amp; make private
                 </Button>
               ) : null}
+              <Button size="sm" variant="secondary" onClick={() => onManageSharing(video)}>
+                Sharing settings
+              </Button>
             </>
           )}
         </div>

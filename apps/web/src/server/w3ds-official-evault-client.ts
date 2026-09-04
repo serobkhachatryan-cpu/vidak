@@ -8,6 +8,7 @@
  * not invent POST /platforms/certification.
  */
 
+import type { W3dsRecordAccessControl } from './video-sharing-policy';
 import {
   resolveW3dsOfficialEVaultClient as resolveOfficialClientFromGate,
   W3DS_OFFICIAL_EVAULT_CLIENT_GAPS,
@@ -22,6 +23,8 @@ export interface W3dsOfficialMetaEnvelopeWriteInput {
   ownerEName: string;
   schemaId: string;
   payload: Record<string, unknown>;
+  /** Exact record-level policy to write as `_acl` when the official client is available. */
+  acl?: W3dsRecordAccessControl;
 }
 
 export interface W3dsOfficialMetaEnvelopeCreateResult {
@@ -109,7 +112,12 @@ export class FakeW3dsOfficialEVaultClient implements W3dsOfficialEVaultClient {
   readonly source = 'fake://w3ds-official-evault-client';
   readonly envelopes = new Map<
     string,
-    { ownerEName: string; schemaId: string; payload: Record<string, unknown> }
+    {
+      ownerEName: string;
+      schemaId: string;
+      payload: Record<string, unknown>;
+      acl?: W3dsRecordAccessControl;
+    }
   >();
   readonly calls: Array<{ method: string; input: unknown }> = [];
   /** When set, the next createMetaEnvelope uses this id once. */
@@ -143,6 +151,7 @@ export class FakeW3dsOfficialEVaultClient implements W3dsOfficialEVaultClient {
       ownerEName,
       schemaId: input.schemaId,
       payload: { ...input.payload },
+      ...(input.acl ? { acl: structuredClone(input.acl) } : {}),
     });
     return { id };
   }
@@ -164,6 +173,7 @@ export class FakeW3dsOfficialEVaultClient implements W3dsOfficialEVaultClient {
       ownerEName,
       schemaId: input.schemaId,
       payload: { ...input.payload },
+      ...(input.acl ? { acl: structuredClone(input.acl) } : {}),
     });
     return { id: input.id };
   }

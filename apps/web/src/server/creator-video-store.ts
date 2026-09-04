@@ -46,6 +46,12 @@ export interface CreateDraftRecordInput {
   thumbnailUrl: string;
 }
 
+/** Internal lookup for a recipient-authorized share. Never serialized directly. */
+export interface ShareableCreatorVideoRecord {
+  video: Video;
+  ownerId: string;
+}
+
 /**
  * Durable persistence for local creator channels and video drafts/published rows.
  * Runtime production uses PostgreSQL; in-memory exists only for unit tests.
@@ -65,10 +71,22 @@ export interface CreatorVideoStore {
   getOwnedDraft(videoId: string, ownerId: string): Promise<Video | undefined>;
   /** Returns an owned video in any lifecycle state. */
   getOwnedVideo(videoId: string, ownerId: string): Promise<Video | undefined>;
+  /**
+   * Server-only lookup after a share policy has already been resolved. This is
+   * intentionally not a public-id lookup: callers must authenticate and apply
+   * the separate recipient policy before returning the record.
+   */
+  getShareableVideo(videoId: string): Promise<ShareableCreatorVideoRecord | undefined>;
   updateDraft(
     videoId: string,
     ownerId: string,
     input: UpdateVideoDraftInput,
+  ): Promise<Video | undefined>;
+  /** Updates visibility without changing draft/published lifecycle. */
+  setOwnedVideoVisibility(
+    videoId: string,
+    ownerId: string,
+    visibility: VideoVisibility,
   ): Promise<Video | undefined>;
   /**
    * Records duration extracted from an owned ready video asset. This is an
@@ -422,6 +440,11 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
     return cloneVideo(video);
   }
 
+  async getShareableVideo(videoId: string): Promise<ShareableCreatorVideoRecord | undefined> {
+    const video = this.videosById.get(videoId);
+    return video ? { video: cloneVideo(video), ownerId: video.ownerId } : undefined;
+  }
+
   async updateDraft(
     videoId: string,
     ownerId: string,
@@ -442,6 +465,18 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
       ...(input.thumbnailUrl !== undefined ? { thumbnailUrl: input.thumbnailUrl } : {}),
       updatedAt: new Date().toISOString(),
     };
+    this.videosById.set(videoId, next);
+    return cloneVideo(next);
+  }
+
+  async setOwnedVideoVisibility(
+    videoId: string,
+    ownerId: string,
+    visibility: VideoVisibility,
+  ): Promise<Video | undefined> {
+    const existing = this.videosById.get(videoId);
+    if (!existing || existing.ownerId !== ownerId) return undefined;
+    const next: StoredVideo = { ...existing, visibility, updatedAt: new Date().toISOString() };
     this.videosById.set(videoId, next);
     return cloneVideo(next);
   }
@@ -829,6 +864,13 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
     return row ? toVideo(row) : undefined;
   }
 
+  async getShareableVideo(videoId: string): Promise<ShareableCreatorVideoRecord | undefined> {
+    const normalized = videoId.trim();
+    if (!normalized) return undefined;
+    const [row] = await this.db.select().from(videos).where(eq(videos.id, normalized)).limit(1);
+    return row ? { video: toVideo(row), ownerId: row.ownerId } : undefined;
+  }
+
   async updateDraft(
     videoId: string,
     ownerId: string,
@@ -855,6 +897,19 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
         updatedAt: now,
       })
       .where(and(eq(videos.id, videoId), eq(videos.ownerId, ownerId), eq(videos.status, 'draft')))
+      .returning();
+    return row ? toVideo(row) : undefined;
+  }
+
+  async setOwnedVideoVisibility(
+    videoId: string,
+    ownerId: string,
+    visibility: VideoVisibility,
+  ): Promise<Video | undefined> {
+    const [row] = await this.db
+      .update(videos)
+      .set({ visibility, updatedAt: new Date() })
+      .where(and(eq(videos.id, videoId), eq(videos.ownerId, ownerId)))
       .returning();
     return row ? toVideo(row) : undefined;
   }

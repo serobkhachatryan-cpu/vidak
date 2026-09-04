@@ -31,6 +31,7 @@ const requiredTables = [
   'channel_import_sync_jobs',
   'video_preview_assets',
   'video_view_events',
+  'video_sharing_policies',
   'user_preferences',
   'video_space_inventory_jobs',
   'video_space_inventory_tasks',
@@ -102,6 +103,8 @@ const requiredIndexes = [
   'video_preview_assets_source_uidx',
   'video_preview_assets_status_idx',
   'video_view_events_public_video_viewer_uidx',
+  'video_sharing_policies_owner_id_idx',
+  'video_sharing_policies_share_token_idx',
   'video_view_events_video_id_idx',
   'video_space_inventory_jobs_owner_uidx',
   'video_space_inventory_jobs_status_idx',
@@ -152,7 +155,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(24);
+    expect(applied.rows).toHaveLength(25);
 
     await client.query(
       `insert into video_preview_assets (
@@ -410,6 +413,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(24);
+    expect(Number(applied.rows[0]?.count)).toBe(25);
   });
 });
