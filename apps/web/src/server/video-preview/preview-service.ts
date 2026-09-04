@@ -60,7 +60,10 @@ export interface AuthorizedEVaultPreviewSource {
 export interface VideoPreviewServiceOptions {
   store: VideoPreviewStore;
   storage: MediaStorage;
-  videos: Pick<CreatorVideoStore, 'getOwnedVideo'>;
+  videos: Pick<
+    CreatorVideoStore,
+    'getOwnedVideo' | 'setOwnedVideoDuration' | 'repairOwnedVideoTitle'
+  >;
   media: Pick<MediaAssetStore, 'getReadyThumbnailAssetForVideo' | 'getPrimaryReadyAssetForVideo'>;
   extractor?: VideoFrameExtractor;
   evault?: AuthorizedEVaultPreviewSource;
@@ -90,7 +93,10 @@ const unavailableEVaultPoster = new TextEncoder().encode(`
 export class VideoPreviewService {
   private readonly store: VideoPreviewStore;
   private readonly storage: MediaStorage;
-  private readonly videos: Pick<CreatorVideoStore, 'getOwnedVideo'>;
+  private readonly videos: Pick<
+    CreatorVideoStore,
+    'getOwnedVideo' | 'setOwnedVideoDuration' | 'repairOwnedVideoTitle'
+  >;
   private readonly media: Pick<
     MediaAssetStore,
     'getReadyThumbnailAssetForVideo' | 'getPrimaryReadyAssetForVideo'
@@ -155,6 +161,24 @@ export class VideoPreviewService {
       this.enqueueBackfill({
         key: `owned:${user.id}:${video.id}`,
         run: () => this.ensureOwnedPreview(user, video.id),
+      });
+    }
+  }
+
+  /**
+   * Queues metadata and poster repair for already-published videos. This is
+   * deliberately server-side: it never gives a public request access to an
+   * owner preview or storage key. It lets older catalogue rows self-heal when
+   * their public card is requested.
+   */
+  async schedulePublishedBackfill(
+    videos: ReadonlyArray<Pick<Video, 'id' | 'durationSeconds'>>,
+  ): Promise<void> {
+    for (const video of videos) {
+      if (video.durationSeconds > 0) continue;
+      this.enqueueBackfill({
+        key: `published:${video.id}`,
+        run: () => this.ensurePublishedPreview(video.id),
       });
     }
   }
@@ -230,18 +254,20 @@ export class VideoPreviewService {
     user: Pick<AuthUser, 'id'>,
     videoId: string,
   ): Promise<PreviewDownload | { status: 'processing' } | { status: 'unavailable' }> {
-    const owned = await this.videos.getOwnedVideo(videoId.trim(), user.id);
-    if (!owned) {
-      throw new VideoPreviewError('Video was not found.', 'not_found', 404);
-    }
+    const record = await this.ensureOwnedPreview(user, videoId.trim());
+    return this.openRecord(record);
+  }
 
-    const thumbnail = await this.media.getReadyThumbnailAssetForVideo(owned.id);
-    if (thumbnail && thumbnail.ownerId === user.id && thumbnail.storageKey) {
-      const body = await this.storage.read(thumbnail.storageKey);
-      return { status: 'ready', body, contentType: thumbnail.contentType || 'image/jpeg' };
-    }
-
-    const record = await this.ensureOwnedPreview(user, owned.id);
+  /**
+   * Opens a generated preview for a video whose public/unlisted visibility has
+   * already been checked by the caller. Unlike openOwnedPreview this method
+   * never performs ownership authorization; therefore it must only be used
+   * behind the public video lookup route.
+   */
+  async openPublishedPreview(
+    videoId: string,
+  ): Promise<PreviewDownload | { status: 'processing' } | { status: 'unavailable' }> {
+    const record = await this.ensurePublishedPreview(videoId);
     return this.openRecord(record);
   }
 
@@ -271,6 +297,12 @@ export class VideoPreviewService {
       throw new VideoPreviewError('Video was not found.', 'not_found', 404);
     }
 
+    const primary = await this.media.getPrimaryReadyAssetForVideo(owned.id);
+    if (primary?.ownerId === user.id) {
+      await this.repairOwnedTitle(owned, primary.ownerId);
+      await this.recordOwnedDuration(owned, primary);
+    }
+
     const thumbnail = await this.media.getReadyThumbnailAssetForVideo(owned.id);
     if (thumbnail && thumbnail.ownerId === user.id) {
       return {
@@ -286,11 +318,57 @@ export class VideoPreviewService {
       };
     }
 
-    return this.generate('owned-video', owned.id, async () => {
-      const asset = await this.media.getPrimaryReadyAssetForVideo(owned.id);
-      if (!asset || asset.ownerId !== user.id) return undefined;
-      return this.sourceFromAsset(asset.storageKey);
-    });
+    return this.generate('owned-video', owned.id, async () =>
+      primary?.ownerId === user.id ? this.sourceFromAsset(primary.storageKey) : undefined,
+    );
+  }
+
+  private async ensurePublishedPreview(videoId: string): Promise<VideoPreviewRecord> {
+    const normalizedId = videoId.trim();
+    if (!normalizedId) {
+      throw new VideoPreviewError('Video was not found.', 'not_found', 404);
+    }
+    const primary = await this.media.getPrimaryReadyAssetForVideo(normalizedId);
+    if (!primary) {
+      throw new VideoPreviewError('Video preview is unavailable.', 'unavailable', 422);
+    }
+    // The asset is linked to the video, so its owner is the only principal
+    // permitted to receive the internal duration metadata write.
+    const owned = await this.videos.getOwnedVideo(normalizedId, primary.ownerId);
+    if (owned) {
+      await this.repairOwnedTitle(owned, primary.ownerId);
+      await this.recordOwnedDuration(owned, primary);
+    }
+    return this.generate('owned-video', normalizedId, async () =>
+      this.sourceFromAsset(primary.storageKey),
+    );
+  }
+
+  private async recordOwnedDuration(
+    video: Pick<Video, 'id' | 'durationSeconds'>,
+    asset: { ownerId: string; storageKey: string },
+  ): Promise<void> {
+    if (video.durationSeconds > 0 || !this.extractor.probeDuration) return;
+    try {
+      const source = await this.sourceFromAsset(asset.storageKey);
+      if (!source) return;
+      const duration = await this.extractor.probeDuration(source);
+      if (!Number.isFinite(duration) || !duration || duration <= 0) return;
+      await this.videos.setOwnedVideoDuration(video.id, asset.ownerId, duration);
+    } catch {
+      // Duration repair is best-effort. A valid upload must remain usable when
+      // a particular media container cannot be probed.
+    }
+  }
+
+  private async repairOwnedTitle(video: Video, ownerId: string): Promise<void> {
+    const repaired = repairedTechnicalTitle(video.title, video.createdAt);
+    if (!repaired) return;
+    try {
+      await this.videos.repairOwnedVideoTitle(video.id, ownerId, video.title, repaired);
+    } catch {
+      // Naming repair must never make a valid video or preview unavailable.
+    }
   }
 
   private async ensureEVaultPreview(
@@ -445,6 +523,27 @@ function isStaleFailed(record: VideoPreviewRecord): boolean {
 
 function shouldRetryFailed(record: VideoPreviewRecord, retryFailed: boolean): boolean {
   return retryFailed || isStaleFailed(record);
+}
+
+/**
+ * Camera/recorder defaults have no useful meaning as a public title. Keep the
+ * rule deliberately narrow so a creator's descriptive filename remains their
+ * title; a concurrent manual edit is protected by the store compare-and-set.
+ */
+function repairedTechnicalTitle(title: string, createdAt: string): string | undefined {
+  const normalized = title.trim().replace(/[_-]+/g, ' ');
+  if (!/^(?:img|dsc|mov|video|clip|recording)\s*\d{2,}(?:\s*\(\d+\))?$/i.test(normalized)) {
+    return undefined;
+  }
+  const created = new Date(createdAt);
+  if (Number.isNaN(created.getTime())) return 'Video upload';
+  const date = new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    timeZone: 'UTC',
+  }).format(created);
+  return `Video from ${date}`;
 }
 
 function unavailableEVaultPosterDownload(): PreviewDownload {

@@ -70,6 +70,27 @@ export interface CreatorVideoStore {
     ownerId: string,
     input: UpdateVideoDraftInput,
   ): Promise<Video | undefined>;
+  /**
+   * Records duration extracted from an owned ready video asset. This is an
+   * internal metadata write, intentionally separate from creator-editable
+   * draft fields, and can update both draft and published rows.
+   */
+  setOwnedVideoDuration(
+    videoId: string,
+    ownerId: string,
+    durationSeconds: number,
+  ): Promise<Video | undefined>;
+  /**
+   * Replaces an unchanged technical upload title with a human-readable title.
+   * `expectedTitle` makes this compare-and-set so preview work cannot overwrite
+   * a creator edit made while metadata is being derived.
+   */
+  repairOwnedVideoTitle(
+    videoId: string,
+    ownerId: string,
+    expectedTitle: string,
+    title: string,
+  ): Promise<Video | undefined>;
   deleteDraft(videoId: string, ownerId: string): Promise<boolean>;
   /**
    * Atomically publishes an owned video when it has at least one ready media asset.
@@ -421,6 +442,38 @@ export class InMemoryCreatorVideoStore implements CreatorVideoStore {
       ...(input.thumbnailUrl !== undefined ? { thumbnailUrl: input.thumbnailUrl } : {}),
       updatedAt: new Date().toISOString(),
     };
+    this.videosById.set(videoId, next);
+    return cloneVideo(next);
+  }
+
+  async setOwnedVideoDuration(
+    videoId: string,
+    ownerId: string,
+    durationSeconds: number,
+  ): Promise<Video | undefined> {
+    const existing = this.videosById.get(videoId);
+    if (!existing || existing.ownerId !== ownerId) return undefined;
+    const normalizedDuration = Math.max(0, Math.round(durationSeconds));
+    if (!Number.isFinite(normalizedDuration) || normalizedDuration <= 0) return undefined;
+    const next: StoredVideo = {
+      ...existing,
+      durationSeconds: normalizedDuration,
+      updatedAt: new Date().toISOString(),
+    };
+    this.videosById.set(videoId, next);
+    return cloneVideo(next);
+  }
+
+  async repairOwnedVideoTitle(
+    videoId: string,
+    ownerId: string,
+    expectedTitle: string,
+    title: string,
+  ): Promise<Video | undefined> {
+    const existing = this.videosById.get(videoId);
+    if (!existing || existing.ownerId !== ownerId || existing.title !== expectedTitle)
+      return undefined;
+    const next: StoredVideo = { ...existing, title, updatedAt: new Date().toISOString() };
     this.videosById.set(videoId, next);
     return cloneVideo(next);
   }
@@ -786,6 +839,39 @@ export class PostgresCreatorVideoStore implements CreatorVideoStore {
         updatedAt: now,
       })
       .where(and(eq(videos.id, videoId), eq(videos.ownerId, ownerId), eq(videos.status, 'draft')))
+      .returning();
+    return row ? toVideo(row) : undefined;
+  }
+
+  async setOwnedVideoDuration(
+    videoId: string,
+    ownerId: string,
+    durationSeconds: number,
+  ): Promise<Video | undefined> {
+    const normalizedDuration = Math.max(0, Math.round(durationSeconds));
+    if (!Number.isFinite(normalizedDuration) || normalizedDuration <= 0) return undefined;
+    const [row] = await this.db
+      .update(videos)
+      .set({ durationSeconds: normalizedDuration, updatedAt: new Date() })
+      .where(and(eq(videos.id, videoId), eq(videos.ownerId, ownerId)))
+      .returning();
+    return row ? toVideo(row) : undefined;
+  }
+
+  async repairOwnedVideoTitle(
+    videoId: string,
+    ownerId: string,
+    expectedTitle: string,
+    title: string,
+  ): Promise<Video | undefined> {
+    const normalizedTitle = title.trim();
+    if (!normalizedTitle) return undefined;
+    const [row] = await this.db
+      .update(videos)
+      .set({ title: normalizedTitle, updatedAt: new Date() })
+      .where(
+        and(eq(videos.id, videoId), eq(videos.ownerId, ownerId), eq(videos.title, expectedTitle)),
+      )
       .returning();
     return row ? toVideo(row) : undefined;
   }

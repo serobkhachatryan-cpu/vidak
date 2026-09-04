@@ -34,6 +34,14 @@ export async function GET(request: NextRequest) {
       ...(cursor ? { cursor } : {}),
       ...(limit !== undefined ? { limit } : {}),
     });
+    // Existing published rows are repaired in the background. Discovery stays
+    // fast, while a later card render can use the derived public poster and
+    // persisted duration instead of a permanent 0:00/blank-preview state.
+    void import('../../../../server/video-preview/preview-runtime')
+      .then(({ getVideoPreviewService }) =>
+        getVideoPreviewService().schedulePublishedBackfill(page.items),
+      )
+      .catch(() => undefined);
     return NextResponse.json({
       ...page,
       items: await withPublicMediaContentUrls(page.items),

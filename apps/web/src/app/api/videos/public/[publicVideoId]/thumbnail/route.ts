@@ -1,13 +1,18 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { CreatorVideoError, getCreatorVideoService } from '../../../../../../server/creator-video';
 import { getMediaAssetService, MediaAssetError } from '../../../../../../server/media-asset';
+import { getVideoPreviewService, VideoPreviewError } from '../../../../../../server/video-preview';
 
 export const runtime = 'nodejs';
 
 type RouteContext = { params: Promise<{ publicVideoId: string }> };
 
 function errorResponse(error: unknown): NextResponse {
-  if (error instanceof CreatorVideoError || error instanceof MediaAssetError) {
+  if (
+    error instanceof CreatorVideoError ||
+    error instanceof MediaAssetError ||
+    error instanceof VideoPreviewError
+  ) {
     return NextResponse.json(
       { error: { code: error.code, message: error.message } },
       { status: error.status },
@@ -28,10 +33,28 @@ export async function GET(_request: NextRequest, context: RouteContext) {
   try {
     const { publicVideoId } = await context.params;
     const video = await getCreatorVideoService().getPublicVideo(publicVideoId);
-    const download = await getMediaAssetService().openPublishedThumbnailDownload(video.id);
-    return new NextResponse(download.body, {
-      status: download.status,
-      headers: download.headers,
+    try {
+      const download = await getMediaAssetService().openPublishedThumbnailDownload(video.id);
+      return new NextResponse(download.body, {
+        status: download.status,
+        headers: download.headers,
+      });
+    } catch (error) {
+      if (!(error instanceof MediaAssetError) || error.code !== 'not_found') throw error;
+    }
+
+    const generated = await getVideoPreviewService().openPublishedPreview(video.id);
+    if (generated.status !== 'ready') {
+      return NextResponse.json({ status: generated.status }, { status: 202 });
+    }
+    return new NextResponse(Buffer.from(generated.body), {
+      status: 200,
+      headers: {
+        'Content-Type': generated.contentType,
+        'Content-Length': String(generated.body.byteLength),
+        'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
+        'X-Content-Type-Options': 'nosniff',
+      },
     });
   } catch (error) {
     return errorResponse(error);

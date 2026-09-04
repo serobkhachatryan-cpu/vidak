@@ -161,6 +161,59 @@ describe('VideoPreviewService', () => {
     );
   });
 
+  it('persists probed duration even when the creator uploaded a poster', async () => {
+    const { videos, media, storage } = createService();
+    const video = await seedOwnedDraft(videos, {
+      id: 'video-duration',
+      ownerId: 'user-1',
+      title: 'A real clip',
+      thumbnailUrl: '/api/videos/drafts/video-duration/thumbnail',
+    });
+    media.registerOwnedDraft(video.id, 'user-1');
+    const mediaStorageKey = storage.createStorageKey();
+    const thumbnailStorageKey = storage.createStorageKey();
+    await storage.write(mediaStorageKey, new Uint8Array([1, 2, 3]));
+    await storage.write(thumbnailStorageKey, jpeg);
+    await media.createAsset({
+      id: 'media-duration',
+      ownerId: 'user-1',
+      videoId: video.id,
+      storageKey: mediaStorageKey,
+      originalFilename: 'clip.mp4',
+      contentType: 'video/mp4',
+      byteSize: 3,
+      uploadState: 'ready',
+    });
+    await media.createAsset({
+      id: 'poster-duration',
+      ownerId: 'user-1',
+      videoId: video.id,
+      storageKey: thumbnailStorageKey,
+      originalFilename: 'poster.jpg',
+      contentType: 'image/jpeg',
+      byteSize: jpeg.byteLength,
+      uploadState: 'ready',
+    });
+
+    const service = new VideoPreviewService({
+      store: new InMemoryVideoPreviewStore(),
+      storage,
+      videos,
+      media,
+      extractor: {
+        extractUsefulFrame: async () => ({ jpeg, captureSeconds: 3 }),
+        probeDuration: async () => 31.6,
+      },
+    });
+
+    await expect(service.openOwnedPreview({ id: 'user-1' }, video.id)).resolves.toMatchObject({
+      status: 'ready',
+    });
+    await expect(videos.getOwnedVideo(video.id, 'user-1')).resolves.toMatchObject({
+      durationSeconds: 32,
+    });
+  });
+
   it('derives a still at a useful non-black timestamp when no poster exists', async () => {
     const { service, videos, media, storage } = createService({ captureSeconds: 3 });
     const video = await seedOwnedDraft(videos, {
@@ -192,6 +245,9 @@ describe('VideoPreviewService', () => {
       .openOwnedPreview({ id: 'user-1' }, video.id)
       .then((result) => result);
     expect(record.status).toBe('ready');
+    await expect(videos.getOwnedVideo(video.id, 'user-1')).resolves.toMatchObject({
+      title: expect.stringMatching(/^Video from /),
+    });
   });
 
   it('does not publish when a private preview is generated', async () => {

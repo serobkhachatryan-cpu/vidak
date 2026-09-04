@@ -53,8 +53,9 @@ export async function withPublicMediaContentUrls(videos: readonly Video[]): Prom
 
 /**
  * Resolves a durable same-origin thumbnail URL for public responses.
- * Clears ephemeral `blob:` / `data:` values. Prefers a ready thumbnail asset
- * over any previously stored string.
+ * Clears ephemeral `blob:` / `data:` values. A published video with playable
+ * media always points to the public thumbnail route: that route serves an
+ * uploaded poster when present and otherwise derives a durable still frame.
  */
 export async function withPublicThumbnailUrl(video: Video): Promise<Video> {
   if (
@@ -63,7 +64,8 @@ export async function withPublicThumbnailUrl(video: Video): Promise<Video> {
     (video.visibility === 'public' || video.visibility === 'unlisted')
   ) {
     const hasThumbnail = await getMediaAssetService().hasReadyThumbnailAsset(video.id);
-    if (hasThumbnail) {
+    const hasPlayableMedia = await getMediaAssetService().hasPrimaryReadyAsset(video.id);
+    if (hasThumbnail || hasPlayableMedia) {
       return {
         ...video,
         thumbnailUrl: publicThumbnailPath(video.publicVideoId),

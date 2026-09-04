@@ -17,10 +17,17 @@ export type PreviewFrameSource =
 export interface ExtractedPreviewFrame {
   jpeg: Uint8Array;
   captureSeconds: number;
+  /** Duration observed while probing the same source, when available. */
+  durationSeconds?: number;
 }
 
 export interface VideoFrameExtractor {
   extractUsefulFrame(source: PreviewFrameSource): Promise<ExtractedPreviewFrame | undefined>;
+  /**
+   * Optional lightweight metadata probe. Implementations that cannot inspect
+   * duration can omit it without making preview generation unavailable.
+   */
+  probeDuration?(source: PreviewFrameSource): Promise<number | undefined>;
 }
 
 export class VideoFrameExtractorError extends Error {
@@ -47,15 +54,31 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     const workspace = await mkdtemp(join(tmpdir(), 'vidak-preview-'));
     try {
       const input = await this.materializeInput(source, workspace);
-      const duration = await this.probeDuration(input);
+      const duration = await this.probeDurationForInput(input);
       const candidates = previewCaptureCandidates(duration ?? 0);
       for (const captureSeconds of candidates) {
         const sample = await this.extractRgbSample(input, captureSeconds, workspace);
         if (!sample || isMostlyBlackFrame(sample, sampleWidth, sampleHeight)) continue;
         const jpeg = await this.extractJpeg(input, captureSeconds, workspace);
-        if (jpeg?.byteLength) return { jpeg, captureSeconds };
+        if (jpeg?.byteLength) {
+          return {
+            jpeg,
+            captureSeconds,
+            ...(duration !== undefined ? { durationSeconds: duration } : {}),
+          };
+        }
       }
       return undefined;
+    } finally {
+      await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  async probeDuration(source: PreviewFrameSource): Promise<number | undefined> {
+    const workspace = await mkdtemp(join(tmpdir(), 'vidak-preview-'));
+    try {
+      const input = await this.materializeInput(source, workspace);
+      return this.probeDurationForInput(input);
     } finally {
       await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
     }
@@ -69,7 +92,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     return path;
   }
 
-  private async probeDuration(input: string): Promise<number | undefined> {
+  private async probeDurationForInput(input: string): Promise<number | undefined> {
     try {
       const stdout = await runProcess(
         this.ffprobePath,
