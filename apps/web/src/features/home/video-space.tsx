@@ -3,9 +3,10 @@
 import type { Video } from '@w3ds/types';
 import { Button, EmptyState, ErrorState, Page, Text, VidakLogo, VideoCardSkeleton } from '@w3ds/ui';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { videoApiClient } from '../../lib/video-api-client';
+import { createLatestRequestTracker } from './latest-request';
 import { PublicExplorePanel } from './public-explore-panel';
 import { LibraryVideoCard, OwnedVideoCard } from './video-space-cards';
 import {
@@ -18,8 +19,8 @@ import {
   shareChangeConfirmation,
   type VideoSpaceLibraryItem,
   type VideoSpaceTab,
-  videoSpaceGuideCopy,
   videoSpaceEmptyCopy,
+  videoSpaceGuideCopy,
   videoSpaceTabs,
 } from './video-space-model';
 
@@ -49,8 +50,15 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   const [owned, setOwned] = useState<OwnedState>({ status: 'loading' });
   const [pendingVideoId, setPendingVideoId] = useState<string | undefined>();
   const [actionError, setActionError] = useState<string | undefined>();
+  const libraryRequest = useRef(createLatestRequestTracker());
+  const ownedRequest = useRef(createLatestRequestTracker());
+  const libraryAbort = useRef<AbortController | undefined>(undefined);
 
   const loadEvault = useCallback(async (refresh = false) => {
+    const request = libraryRequest.current.next();
+    libraryAbort.current?.abort();
+    const controller = new AbortController();
+    libraryAbort.current = controller;
     setLibrary((current) =>
       current.items.length > 0
         ? {
@@ -62,13 +70,17 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
     try {
       const query = new URLSearchParams({ scope: 'all' });
       if (refresh) query.set('refresh', '1');
-      const response = await fetch(`/api/evault/videos?${query.toString()}`, { cache: 'no-store' });
+      const response = await fetch(`/api/evault/videos?${query.toString()}`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      });
       const body = (await response.json()) as {
         items?: VideoSpaceLibraryItem[];
         completeness?: InventoryCompleteness;
         discovery?: InventoryDiscovery;
       };
       if (!response.ok || !Array.isArray(body.items)) throw new Error();
+      if (!libraryRequest.current.isCurrent(request)) return;
       setLibrary({
         status: 'ready',
         items: body.items.map((item) => ({
@@ -80,9 +92,14 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
         ...(body.discovery ? { discovery: body.discovery } : {}),
       });
     } catch {
+      if (!libraryRequest.current.isCurrent(request)) return;
       setLibrary((current) =>
         current.items.length > 0 ? { ...current, status: 'error' } : { status: 'error', items: [] },
       );
+    } finally {
+      if (libraryRequest.current.isCurrent(request) && libraryAbort.current === controller) {
+        libraryAbort.current = undefined;
+      }
     }
   }, []);
 
@@ -90,12 +107,17 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
     async (refresh = false) => {
       setActionError(undefined);
       setOwned((current) => (current.status === 'ready' ? current : { status: 'loading' }));
+      const request = ownedRequest.current.next();
       void videoApiClient
         .listOwnedVideos()
-        .then((items) => setOwned({ status: 'ready', items }))
-        .catch(() =>
-          setOwned((current) => (current.status === 'ready' ? current : { status: 'error' })),
-        );
+        .then((items) => {
+          if (ownedRequest.current.isCurrent(request)) setOwned({ status: 'ready', items });
+        })
+        .catch(() => {
+          if (ownedRequest.current.isCurrent(request)) {
+            setOwned((current) => (current.status === 'ready' ? current : { status: 'error' }));
+          }
+        });
       await loadEvault(refresh);
     },
     [loadEvault],
@@ -104,6 +126,14 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   useEffect(() => {
     void load(false);
   }, [load]);
+
+  useEffect(() => {
+    return () => {
+      libraryRequest.current.invalidate();
+      ownedRequest.current.invalidate();
+      libraryAbort.current?.abort();
+    };
+  }, []);
 
   useEffect(() => {
     if (library.discovery !== 'refreshing' && library.discovery !== 'partial') return;
