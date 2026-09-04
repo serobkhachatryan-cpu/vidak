@@ -46,7 +46,6 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
           setStatus('ready');
           return;
         }
-        if (cached) return;
         setItem(undefined);
         setStatus('missing');
       } catch {
