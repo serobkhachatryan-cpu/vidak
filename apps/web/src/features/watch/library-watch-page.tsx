@@ -97,6 +97,7 @@ function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
   const [segmentDurations, setSegmentDurations] = useState<Array<number | undefined>>([]);
   const [playbackError, setPlaybackError] = useState(false);
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
+  const [playerLoading, setPlayerLoading] = useState(true);
   const continuePlayback = useRef(false);
   const player = useRef<HTMLVideoElement>(null);
   const streamId = video.streamIds?.[segmentIndex] ?? video.streamIds?.[0];
@@ -113,8 +114,13 @@ function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
     setSegmentDurations([]);
     setPlaybackError(false);
     setPlaybackAttempt(0);
+    setPlayerLoading(true);
     continuePlayback.current = false;
   }, [video.id]);
+
+  useEffect(() => {
+    setPlayerLoading(true);
+  }, [streamId, playbackAttempt]);
 
   if (!streamId) {
     return (
@@ -136,49 +142,68 @@ function LibraryWatchPlayer({ video }: { video: VideoSpaceLibraryItem }) {
           description="The source link may have expired. Retry to refresh it once."
           retry={() => {
             setPlaybackError(false);
+            setPlayerLoading(true);
             setPlaybackAttempt((attempt) => attempt + 1);
           }}
           retryLabel="Retry playback"
         />
       ) : (
-        // biome-ignore lint/a11y/useMediaCaption: Historical source recordings do not include caption tracks.
-        <video
-          key={`${streamId}:${playbackAttempt}`}
-          ref={player}
-          aria-label={video.title}
-          className="aspect-video w-full rounded-xl bg-black"
-          controls
-          preload="metadata"
-          src={`/api/evault/videos/${encodeURIComponent(streamId)}?attempt=${playbackAttempt}`}
-          onCanPlay={() => {
-            if (!continuePlayback.current) return;
-            continuePlayback.current = false;
-            void player.current?.play().catch(() => undefined);
-          }}
-          onError={() => setPlaybackError(true)}
-          onLoadedMetadata={() => {
-            const duration = player.current?.duration;
-            if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0) return;
-            setSegmentDurations((current) => {
-              if (current[segmentIndex] === duration) return current;
-              const next = [...current];
-              next[segmentIndex] = duration;
-              return next;
-            });
-          }}
-          onTimeUpdate={() => {
-            const position = player.current?.currentTime;
-            if (typeof position === 'number' && Number.isFinite(position) && position >= 0) {
-              setCurrentSegmentSeconds(position);
-            }
-          }}
-          onEnded={() => {
-            if (segmentIndex >= (video.streamIds?.length ?? 1) - 1) return;
-            setCurrentSegmentSeconds(0);
-            continuePlayback.current = true;
-            setSegmentIndex((current) => current + 1);
-          }}
-        />
+        <div className="relative">
+          {/* biome-ignore lint/a11y/useMediaCaption: Historical source recordings do not include caption tracks. */}
+          <video
+            key={`${streamId}:${playbackAttempt}`}
+            ref={player}
+            aria-label={video.title}
+            className="aspect-video w-full rounded-xl bg-black"
+            controls
+            preload="metadata"
+            src={`/api/evault/videos/${encodeURIComponent(streamId)}?attempt=${playbackAttempt}`}
+            onCanPlay={() => {
+              setPlayerLoading(false);
+              if (!continuePlayback.current) return;
+              continuePlayback.current = false;
+              void player.current?.play().catch(() => undefined);
+            }}
+            onError={() => {
+              setPlayerLoading(false);
+              setPlaybackError(true);
+            }}
+            onLoadedMetadata={() => {
+              const duration = player.current?.duration;
+              if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0)
+                return;
+              setSegmentDurations((current) => {
+                if (current[segmentIndex] === duration) return current;
+                const next = [...current];
+                next[segmentIndex] = duration;
+                return next;
+              });
+            }}
+            onTimeUpdate={() => {
+              const position = player.current?.currentTime;
+              if (typeof position === 'number' && Number.isFinite(position) && position >= 0) {
+                setCurrentSegmentSeconds(position);
+              }
+            }}
+            onEnded={() => {
+              if (segmentIndex >= (video.streamIds?.length ?? 1) - 1) return;
+              setCurrentSegmentSeconds(0);
+              setPlayerLoading(true);
+              continuePlayback.current = true;
+              setSegmentIndex((current) => current + 1);
+            }}
+          />
+          {playerLoading ? (
+            <div
+              className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 rounded-xl bg-black/60 px-4 text-sm text-white"
+              role="status"
+              aria-live="polite"
+            >
+              <Spinner size="sm" aria-hidden="true" />
+              Opening private video…
+            </div>
+          ) : null}
+        </div>
       )}
       {(video.streamIds?.length ?? 0) > 1 ? (
         <Text size="sm" tone="muted">
