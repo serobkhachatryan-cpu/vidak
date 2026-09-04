@@ -168,6 +168,54 @@ describe('inventory coordinator', () => {
     expect(scanLibrary).toHaveBeenCalledTimes(1);
   });
 
+  it('fails closed for an unverified shared source without hiding cached personal videos', async () => {
+    const ownedVideo = video({ id: 'own-1', title: 'Personal clip' });
+    const sharedVideo = video({
+      id: 'shared-1',
+      title: 'Shared clip',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@group.w3id',
+      accessBasis: 'membership',
+    });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([ownedVideo, sharedVideo]), 'done', {
+        personalPages: 1,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([ownedVideo, sharedVideo]);
+    });
+    const probeSharedSpaceAccess = vi
+      .fn()
+      .mockResolvedValueOnce({ access: 'ok', member: true })
+      .mockRejectedValueOnce(new Error('private eVault transport detail'));
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
+      log: () => undefined,
+      ttlMs: 60_000,
+    });
+
+    const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    expect(first.items.map((item) => item.title)).toEqual(
+      expect.arrayContaining(['Personal clip', 'Shared clip']),
+    );
+
+    const afterProbeFailure = await coordinator.getSnapshot(
+      { eName: '@person.w3id' },
+      { scope: 'all' },
+    );
+    expect(afterProbeFailure.items.map((item) => item.title)).toEqual(['Personal clip']);
+    expect(afterProbeFailure.discovery).toBe('refreshing');
+    expect(afterProbeFailure.completeness).toMatchObject({
+      complete: false,
+      retryNeeded: true,
+      deferred: 1,
+    });
+    expect(JSON.stringify(afterProbeFailure)).not.toContain('@group.w3id');
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+  });
+
   it('returns 429 work as partial without pretending it is complete', async () => {
     const owned = video({ id: 'own-1', title: 'Mine' });
     const incomplete = {

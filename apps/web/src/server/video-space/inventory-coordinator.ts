@@ -227,19 +227,29 @@ export function createInventoryCoordinator(options?: {
     const denied = new Set<string>();
     const missing = new Set<string>();
     const nonMember = new Set<string>();
+    const unverified = new Set<string>();
     await mapPool(entry.spaces, revalidateConcurrency, async (space) => {
-      const result = await getScanner().probeSharedSpaceAccess(user, space);
-      if (result.access === 'denied') denied.add(space.eName);
-      else if (result.access === 'missing') missing.add(space.eName);
-      else if (result.access === 'ok' && !result.member && space.kind === 'group') {
-        nonMember.add(space.eName);
+      try {
+        const result = await getScanner().probeSharedSpaceAccess(user, space);
+        if (result.access === 'denied') denied.add(space.eName);
+        else if (result.access === 'missing') missing.add(space.eName);
+        else if (result.access === 'ok' && !result.member && space.kind === 'group') {
+          nonMember.add(space.eName);
+        }
+      } catch {
+        // A cached shared card is safe to retain only while its source can be
+        // checked. Keep unrelated personal/verified cards available, hide this
+        // source, and let the normal partial-inventory path try again.
+        unverified.add(space.eName);
       }
     });
-    if (denied.size === 0 && missing.size === 0 && nonMember.size === 0) return entry.snapshot;
+    if (denied.size === 0 && missing.size === 0 && nonMember.size === 0 && unverified.size === 0) {
+      return entry.snapshot;
+    }
     const items = entry.snapshot.items.filter((item) => {
       const space = item.sourceSpaceKey;
       if (!space) return true;
-      if (denied.has(space) || missing.has(space)) return false;
+      if (denied.has(space) || missing.has(space) || unverified.has(space)) return false;
       if (nonMember.has(space) && item.accessBasis === 'membership') return false;
       return true;
     });
@@ -247,6 +257,13 @@ export function createInventoryCoordinator(options?: {
       ...entry.snapshot.completeness,
       denied: entry.snapshot.completeness.denied + denied.size,
       missing: entry.snapshot.completeness.missing + missing.size,
+      ...(unverified.size > 0
+        ? {
+            complete: false,
+            retryNeeded: true,
+            deferred: Math.max(entry.snapshot.completeness.deferred ?? 0, unverified.size),
+          }
+        : {}),
     };
     const next = { ...entry.snapshot, items, completeness };
     entry.snapshot = next;
