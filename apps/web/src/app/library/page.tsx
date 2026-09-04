@@ -11,7 +11,7 @@ function LibraryContent() {
     <ApplicationShell currentHref="/library">
       <Page
         title="Linked channel videos"
-        description="Public videos from channels you chose to link to Vidak."
+        description="Public videos from channels you chose to link to Vidak. Your private eVault videos are in Your videos."
       >
         <ImportedVideosLibrary />
       </Page>

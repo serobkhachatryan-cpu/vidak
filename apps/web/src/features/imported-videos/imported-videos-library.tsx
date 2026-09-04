@@ -58,11 +58,16 @@ export function ImportedVideosLibrary() {
       <EmptyState
         icon="◌"
         title="No linked-channel videos yet"
-        description="Add a public YouTube channel to see its latest public videos here. Owner-channel connections appear only when they are available."
+        description="This area contains only public videos from channels you deliberately link. Your private eVault videos stay in Your videos."
         action={
-          <Button onClick={() => router.push('/settings?section=imports')}>
-            Add a public YouTube channel
-          </Button>
+          <div className="flex flex-col items-center gap-2 sm:flex-row">
+            <Button onClick={() => router.push('/settings?section=imports')}>
+              Add a public YouTube channel
+            </Button>
+            <Button variant="secondary" onClick={() => router.push('/your-videos')}>
+              Open your video space
+            </Button>
+          </div>
         }
       />
     );
