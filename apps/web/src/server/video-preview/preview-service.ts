@@ -167,16 +167,17 @@ export class VideoPreviewService {
   }
 
   /**
-   * Queues metadata and poster repair for already-published videos. This is
+   * Queues title, metadata, and poster repair for already-published videos. This is
    * deliberately server-side: it never gives a public request access to an
    * owner preview or storage key. It lets older catalogue rows self-heal when
    * their public card is requested.
    */
   async schedulePublishedBackfill(
-    videos: ReadonlyArray<Pick<Video, 'id' | 'durationSeconds'>>,
+    videos: ReadonlyArray<Pick<Video, 'id' | 'title' | 'createdAt' | 'durationSeconds'>>,
   ): Promise<void> {
     for (const video of videos) {
-      if (video.durationSeconds > 0) continue;
+      const needsTitleRepair = Boolean(repairedTechnicalTitle(video.title, video.createdAt));
+      if (video.durationSeconds > 0 && !needsTitleRepair) continue;
       this.enqueueBackfill({
         key: `published:${video.id}`,
         run: () => this.ensurePublishedPreview(video.id),

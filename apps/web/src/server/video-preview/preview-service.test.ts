@@ -255,6 +255,39 @@ describe('VideoPreviewService', () => {
     });
   });
 
+  it('repairs a technical published title even after its duration has been backfilled', async () => {
+    const { service, videos, media, storage } = createService();
+    const video = await seedOwnedDraft(videos, {
+      id: 'video-published-title',
+      ownerId: 'user-1',
+      title: 'IMG_1589',
+    });
+    media.registerOwnedDraft(video.id, 'user-1');
+    const storageKey = storage.createStorageKey();
+    await storage.write(storageKey, new Uint8Array([1, 2, 3]));
+    await media.createAsset({
+      id: 'media-published-title',
+      ownerId: 'user-1',
+      videoId: video.id,
+      storageKey,
+      originalFilename: 'IMG_1589.mp4',
+      contentType: 'video/mp4',
+      byteSize: 3,
+      uploadState: 'ready',
+    });
+    const backfilled = await videos.setOwnedVideoDuration(video.id, 'user-1', 42);
+    if (!backfilled) throw new Error('Expected seeded video duration to persist.');
+
+    await service.schedulePublishedBackfill([backfilled]);
+
+    await vi.waitFor(async () => {
+      await expect(videos.getOwnedVideo(video.id, 'user-1')).resolves.toMatchObject({
+        title: expect.stringMatching(/^Video from /),
+        durationSeconds: 42,
+      });
+    });
+  });
+
   it('does not publish when a private preview is generated', async () => {
     const { service, videos, media, storage } = createService();
     const video = await seedOwnedDraft(videos, {
