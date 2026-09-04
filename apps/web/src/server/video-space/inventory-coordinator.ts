@@ -25,6 +25,7 @@ import { mapPool } from './map-pool';
 
 const cacheTtlMs = 45_000;
 const revalidateConcurrency = 4;
+const sharedAccessProbeTimeoutMs = 3_000;
 // Keep a durable background pass short. The next pump resumes its exact queue,
 // allowing interactive playback and deployments to preempt deep history scans.
 const backgroundInventoryMaxWaves = 2;
@@ -92,10 +93,12 @@ export function createInventoryCoordinator(options?: {
   createScanner?: () => InventoryScanner;
   now?: () => number;
   ttlMs?: number;
+  revalidationTimeoutMs?: number;
   log?: (line: string) => void;
 }) {
   const now = options?.now ?? (() => Date.now());
   const ttlMs = options?.ttlMs ?? cacheTtlMs;
+  const revalidationTimeoutMs = options?.revalidationTimeoutMs ?? sharedAccessProbeTimeoutMs;
   const log = options?.log ?? ((line: string) => console.info(line));
   const createScanner = options?.createScanner ?? (() => createMeshengerVideoLibrary());
   const entries = new Map<string, CacheEntry>();
@@ -183,7 +186,11 @@ export function createInventoryCoordinator(options?: {
   ): Promise<InventorySnapshot> {
     if (entry.firstResultAt === undefined) await entry.firstReady;
     let snapshot = entry.snapshot;
-    if (!entry.scanning && (entry.scope === 'shared' || entry.scope === 'all')) {
+    // A fresh scan has just checked the source hierarchy. Only cached results
+    // need an additional entitlement check; avoiding the duplicate probe makes
+    // an initial library load faster and less sensitive to a transient eVault
+    // transport problem.
+    if (cache === 'hit' && !entry.scanning && (entry.scope === 'shared' || entry.scope === 'all')) {
       snapshot = await revalidateShared(user, entry);
     }
     const discovery = inventoryDiscovery({
@@ -230,7 +237,10 @@ export function createInventoryCoordinator(options?: {
     const unverified = new Set<string>();
     await mapPool(entry.spaces, revalidateConcurrency, async (space) => {
       try {
-        const result = await getScanner().probeSharedSpaceAccess(user, space);
+        const result = await withTimeout(
+          getScanner().probeSharedSpaceAccess(user, space),
+          revalidationTimeoutMs,
+        );
         if (result.access === 'denied') denied.add(space.eName);
         else if (result.access === 'missing') missing.add(space.eName);
         else if (result.access === 'ok' && !result.member && space.kind === 'group') {
@@ -433,6 +443,22 @@ function mergeLibraries(previous: MeshengerLibrary, next: MeshengerLibrary): Mes
     messages: [...messages.values()],
     completeness: next.completeness,
   };
+}
+
+function withTimeout<T>(value: Promise<T>, timeoutMs: number): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Timed out.')), timeoutMs);
+    void value.then(
+      (result) => {
+        clearTimeout(timer);
+        resolve(result);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
 }
 
 function spacesFromItems(

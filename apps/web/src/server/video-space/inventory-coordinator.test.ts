@@ -150,10 +150,7 @@ describe('inventory coordinator', () => {
       });
       return library([sharedVideo]);
     });
-    const probeSharedSpaceAccess = vi
-      .fn()
-      .mockResolvedValueOnce({ access: 'ok', member: true })
-      .mockResolvedValueOnce({ access: 'denied', member: false });
+    const probeSharedSpaceAccess = vi.fn().mockResolvedValue({ access: 'denied', member: false });
     const coordinator = createInventoryCoordinator({
       createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
       log: () => undefined,
@@ -166,6 +163,7 @@ describe('inventory coordinator', () => {
     expect(again.metrics.cache).toBe('hit');
     expect(again.items).toEqual([]);
     expect(scanLibrary).toHaveBeenCalledTimes(1);
+    expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
   });
 
   it('fails closed for an unverified shared source without hiding cached personal videos', async () => {
@@ -188,8 +186,7 @@ describe('inventory coordinator', () => {
     });
     const probeSharedSpaceAccess = vi
       .fn()
-      .mockResolvedValueOnce({ access: 'ok', member: true })
-      .mockRejectedValueOnce(new Error('private eVault transport detail'));
+      .mockRejectedValue(new Error('private eVault transport detail'));
     const coordinator = createInventoryCoordinator({
       createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
       log: () => undefined,
@@ -214,6 +211,43 @@ describe('inventory coordinator', () => {
     });
     expect(JSON.stringify(afterProbeFailure)).not.toContain('@group.w3id');
     expect(scanLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds a cached shared-access check so a stalled source cannot hang the library', async () => {
+    const ownedVideo = video({ id: 'own-1', title: 'Personal clip' });
+    const sharedVideo = video({
+      id: 'shared-1',
+      title: 'Shared clip',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@group.w3id',
+      accessBasis: 'membership',
+    });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([ownedVideo, sharedVideo]), 'done', {
+        personalPages: 1,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([ownedVideo, sharedVideo]);
+    });
+    const probeSharedSpaceAccess = vi.fn(
+      () => new Promise<{ access: 'ok'; member: boolean }>(() => undefined),
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
+      log: () => undefined,
+      ttlMs: 60_000,
+      revalidationTimeoutMs: 1,
+    });
+
+    const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    expect(first.items).toHaveLength(2);
+    expect(probeSharedSpaceAccess).not.toHaveBeenCalled();
+
+    const afterTimeout = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    expect(afterTimeout.items.map((item) => item.title)).toEqual(['Personal clip']);
+    expect(afterTimeout.discovery).toBe('refreshing');
   });
 
   it('returns 429 work as partial without pretending it is complete', async () => {
