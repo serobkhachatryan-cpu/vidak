@@ -7,6 +7,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { videoApiClient } from '../../lib/video-api-client';
 import { createLatestRequestTracker, shouldStartRequest } from './latest-request';
+import { libraryPollingDelayMs } from './library-polling';
 import { PublicExplorePanel } from './public-explore-panel';
 import { LibraryVideoCard, OwnedVideoCard } from './video-space-cards';
 import {
@@ -144,12 +145,16 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   }, []);
 
   useEffect(() => {
-    if (library.discovery !== 'refreshing' && library.discovery !== 'partial') return;
-    const timer = window.setInterval(() => {
+    const delay = libraryPollingDelayMs({
+      ...(library.discovery ? { discovery: library.discovery } : {}),
+      ...(library.completeness ? { completeness: library.completeness } : {}),
+    });
+    if (delay === undefined) return;
+    const timer = window.setTimeout(() => {
       void loadEvault(false);
-    }, 1500);
-    return () => window.clearInterval(timer);
-  }, [library.discovery, loadEvault]);
+    }, delay);
+    return () => window.clearTimeout(timer);
+  }, [library.completeness, library.discovery, loadEvault]);
 
   const setTab = (next: VideoSpaceTab) => {
     const params = new URLSearchParams(searchParams.toString());
