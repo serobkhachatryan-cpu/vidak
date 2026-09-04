@@ -155,41 +155,14 @@ function buildQualityOptions(
 
 function formatQualityLabel(rendition: VideoMediaRendition): string {
   const contentType = rendition.contentType?.replace(/^video\//, '').toUpperCase();
-  return [rendition.label, contentType].filter(Boolean).join(' · ');
+  const height = rendition.height ? `${rendition.height}p` : undefined;
+  return [rendition.label, height, contentType].filter(Boolean).join(' · ');
 }
-
-const qualityTiers = [
-  { id: '2160p', label: '2160p', badge: '4K' },
-  { id: '1440p', label: '1440p', badge: '2K' },
-  { id: '1080p', label: '1080p', badge: 'HD' },
-  { id: '720p', label: '720p', badge: 'HD' },
-  { id: '480p', label: '480p' },
-  { id: '360p', label: '360p' },
-  { id: '240p', label: '240p' },
-  { id: '144p', label: '144p' },
-] as const;
 
 const playbackSpeeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 3] as const;
 
 function formatPlaybackSpeed(speed: number): string {
   return `${String(speed)}x`;
-}
-
-type QualityTierId = (typeof qualityTiers)[number]['id'];
-
-function qualityTierFor(rendition: VideoMediaRendition): QualityTierId | undefined {
-  if (rendition.height) {
-    const tier = qualityTiers.find(
-      (candidate) => Number.parseInt(candidate.id, 10) === rendition.height,
-    );
-    if (tier) return tier.id;
-  }
-
-  const match = `${rendition.id} ${rendition.label}`.match(
-    /\b(2160|1440|1080|720|480|360|240|144)p\b/i,
-  );
-  if (match?.[1]) return `${match[1]}p` as QualityTierId;
-  return /\b4k\b/i.test(`${rendition.id} ${rendition.label}`) ? '2160p' : undefined;
 }
 
 function VideoQualityMenu({
@@ -204,18 +177,23 @@ function VideoQualityMenu({
   const automaticQuality =
     qualityOptions.find((rendition) => rendition.isDefault) ?? qualityOptions[0];
   if (!automaticQuality) return null;
+  if (qualityOptions.length === 1) {
+    return (
+      <div
+        className="flex h-9 items-center gap-2 rounded-md bg-black/80 px-3 font-sans text-xs font-semibold text-white shadow-sm backdrop-blur"
+        data-testid="video-quality-indicator"
+      >
+        <span>Quality</span>
+        <span className="text-white/70">{formatQualityLabel(automaticQuality)}</span>
+      </div>
+    );
+  }
 
   const selectedQuality =
     selectedQualityId === 'auto'
       ? automaticQuality
       : (qualityOptions.find((rendition) => rendition.id === selectedQualityId) ??
         automaticQuality);
-  const qualityByTier = new Map<QualityTierId, VideoMediaRendition>();
-  for (const rendition of qualityOptions) {
-    const tierId = qualityTierFor(rendition);
-    if (tierId && !qualityByTier.has(tierId)) qualityByTier.set(tierId, rendition);
-  }
-  const ungroupedOptions = qualityOptions.filter((rendition) => !qualityTierFor(rendition));
   const chooseQuality = (qualityId: string, target: HTMLElement) => {
     onQualityChange(qualityId);
     target.closest('details')?.removeAttribute('open');
@@ -255,33 +233,7 @@ function VideoQualityMenu({
           <span className="text-xs text-white/60">Default</span>
         </button>
         <hr className="my-1 border-white/10" />
-        {qualityTiers.map((tier) => {
-          const rendition = qualityByTier.get(tier.id);
-          const isSelected = rendition?.id === selectedQuality.id && selectedQualityId !== 'auto';
-          return (
-            <button
-              key={tier.id}
-              type="button"
-              role="menuitemradio"
-              aria-checked={isSelected}
-              disabled={!rendition}
-              onClick={
-                rendition ? (event) => chooseQuality(rendition.id, event.currentTarget) : undefined
-              }
-              className={cx(
-                'flex w-full items-center justify-between px-4 py-3 text-left font-sans focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white',
-                rendition ? 'hover:bg-white/10' : 'cursor-not-allowed text-white/35',
-                isSelected && 'bg-white/15',
-              )}
-            >
-              <span>{tier.label}</span>
-              <span className="text-xs text-white/60">
-                {rendition ? ('badge' in tier ? tier.badge : 'Available') : 'Not available'}
-              </span>
-            </button>
-          );
-        })}
-        {ungroupedOptions.map((rendition) => (
+        {qualityOptions.map((rendition) => (
           <button
             key={rendition.id}
             type="button"
@@ -291,7 +243,9 @@ function VideoQualityMenu({
             className="flex w-full items-center justify-between px-4 py-3 text-left font-sans hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white"
           >
             <span>{formatQualityLabel(rendition)}</span>
-            <span className="text-xs text-white/60">Original</span>
+            <span className="text-xs text-white/60">
+              {rendition.isDefault ? 'Default' : 'Available'}
+            </span>
           </button>
         ))}
       </div>

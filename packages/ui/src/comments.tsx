@@ -495,7 +495,7 @@ export function Comments({
         <EmptyState
           icon="◌"
           title="Comments are not available yet"
-          description="You can still watch and share this video. Commenting will return when a durable comments service is ready."
+          description="You can still watch this video. Commenting will return when a durable comments service is ready."
         />
       ) : state === 'empty' ? (
         <EmptyState icon="◌" title="No comments yet" description="Start the conversation." />
