@@ -1,8 +1,11 @@
 import type { InventoryCompleteness, InventoryDiscovery } from './video-space-model';
 
-const activePollingDelayMs = 2_000;
-const deferredPollingDelayMs = 5_000;
-const rateLimitedPollingDelayMs = 10_000;
+// Discovery now continues on the server-side durable queue. The browser only
+// needs occasional progress updates; polling the full private catalogue every
+// couple of seconds makes the library compete with video playback.
+const activePollingDelayMs = 15_000;
+const deferredPollingDelayMs = 20_000;
+const rateLimitedPollingDelayMs = 30_000;
 
 /**
  * Poll only while the server has background work to report. A terminal partial

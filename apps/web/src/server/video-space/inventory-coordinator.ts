@@ -28,6 +28,12 @@ import { mapPool } from './map-pool';
 const cacheTtlMs = 45_000;
 const revalidateConcurrency = 4;
 const sharedAccessProbeTimeoutMs = 3_000;
+// Listing a private library must not turn every browser refresh into another
+// full round of remote eVault authorization reads. Playback is still checked
+// independently at the media route; this short cache only keeps catalogue
+// metadata responsive between those checks.
+const sharedAccessCacheTtlMs = 30_000;
+const sharedAccessRetryCacheTtlMs = 5_000;
 const sharedSourceNameTimeoutMs = 750;
 // Keep a durable background pass short. The next pump resumes its exact queue,
 // allowing interactive playback and deployments to preempt deep history scans.
@@ -76,6 +82,8 @@ interface CacheEntry {
   completedAt?: number;
   sourceCounts: InventorySourceCounts;
   spaces: SharedSpaceProbe[];
+  /** Short-lived authorization results for catalogue cards, keyed by source probe. */
+  sharedAccess: Map<string, CachedSharedSpaceAccess>;
   /** Per-viewer cache of safe, explicitly chosen source display names. */
   sharedSourceNames: Map<string, string>;
   resolvedSharedSourceNames: Set<string>;
@@ -83,6 +91,11 @@ interface CacheEntry {
   checkingSharedItemIds: Set<string>;
   /** Emit at most one aggregate event while the same shared retry state persists. */
   sharedRetryReported: boolean;
+}
+
+interface CachedSharedSpaceAccess {
+  value: SharedSpaceAccess;
+  checkedAt: number;
 }
 
 export function publicLibraryItems(
@@ -122,12 +135,14 @@ export function createInventoryCoordinator(options?: {
   now?: () => number;
   ttlMs?: number;
   revalidationTimeoutMs?: number;
+  sharedAccessCacheTtlMs?: number;
   resolveSharedSourceNames?: (eNames: readonly string[]) => Promise<ReadonlyMap<string, string>>;
   log?: (line: string) => void;
 }) {
   const now = options?.now ?? (() => Date.now());
   const ttlMs = options?.ttlMs ?? cacheTtlMs;
   const revalidationTimeoutMs = options?.revalidationTimeoutMs ?? sharedAccessProbeTimeoutMs;
+  const cachedSharedAccessTtlMs = options?.sharedAccessCacheTtlMs ?? sharedAccessCacheTtlMs;
   const resolveSharedSourceNames =
     options?.resolveSharedSourceNames ??
     ((eNames: readonly string[]) => getW3dsAuthService().findChosenPublicNamesByENames(eNames));
@@ -166,6 +181,7 @@ export function createInventoryCoordinator(options?: {
       startedAt: now(),
       sourceCounts: emptySourceCounts(),
       spaces: previous?.spaces ?? [],
+      sharedAccess: previous?.sharedAccess ?? new Map(),
       sharedSourceNames: previous?.sharedSourceNames ?? new Map(),
       resolvedSharedSourceNames: previous?.resolvedSharedSourceNames ?? new Set(),
       checkingSharedItemIds: previous?.checkingSharedItemIds ?? new Set(),
@@ -318,18 +334,29 @@ export function createInventoryCoordinator(options?: {
   ): Promise<MeshengerLibrary> {
     if (entry.spaces.length === 0) return entry.snapshot;
     const accessBySpace = new Map<string, SharedSpaceAccess>();
-    await mapPool(entry.spaces, revalidateConcurrency, async (space) => {
+    const checkedAt = now();
+    const probes = entry.spaces.filter((space) => {
+      const key = sharedSpaceProbeKey(space);
+      const cached = entry.sharedAccess.get(key);
+      if (cached && sharedAccessIsFresh(cached, checkedAt, cachedSharedAccessTtlMs)) {
+        accessBySpace.set(key, cached.value);
+        return false;
+      }
+      return true;
+    });
+    await mapPool(probes, revalidateConcurrency, async (space) => {
+      const key = sharedSpaceProbeKey(space);
+      let access: SharedSpaceAccess;
       try {
-        accessBySpace.set(
-          sharedSpaceProbeKey(space),
-          await withTimeout(
-            getScanner().probeSharedSpaceAccess(user, space),
-            revalidationTimeoutMs,
-          ),
+        access = await withTimeout(
+          getScanner().probeSharedSpaceAccess(user, space),
+          revalidationTimeoutMs,
         );
       } catch {
-        accessBySpace.set(sharedSpaceProbeKey(space), { access: 'retry', member: false });
+        access = { access: 'retry', member: false };
       }
+      accessBySpace.set(key, access);
+      entry.sharedAccess.set(key, { value: access, checkedAt });
     });
     const outcomes = new Map<string, SharedItemAccess>();
     for (const item of entry.snapshot.items) {
@@ -372,6 +399,7 @@ export function createInventoryCoordinator(options?: {
     const next = { ...entry.snapshot, items, completeness };
     entry.snapshot = next;
     entry.spaces = spacesFromItems(items, 'shared');
+    pruneSharedAccess(entry);
     return next;
   }
 
@@ -399,6 +427,7 @@ export function createInventoryCoordinator(options?: {
           startedAt: now(),
           sourceCounts: emptySourceCounts(),
           spaces: [],
+          sharedAccess: new Map(),
           sharedSourceNames: new Map(),
           resolvedSharedSourceNames: new Set(),
           checkingSharedItemIds: new Set(),
@@ -623,4 +652,20 @@ function sharedSpaceProbeKey(space: SharedSpaceProbe): string {
   }\u0000${space.kind === 'reference' ? space.referenceId : ''}\u0000${
     space.kind === 'reference' ? space.fileId : ''
   }`;
+}
+
+function sharedAccessIsFresh(cached: CachedSharedSpaceAccess, now: number, ttlMs: number): boolean {
+  // A retry is intentionally short-lived so an intermittent remote eVault
+  // failure can recover promptly. Positive/negative results are stable enough
+  // for the catalogue cache; the media route always performs its own check.
+  const maxAge =
+    cached.value.access === 'retry' ? Math.min(ttlMs, sharedAccessRetryCacheTtlMs) : ttlMs;
+  return now - cached.checkedAt < maxAge;
+}
+
+function pruneSharedAccess(entry: CacheEntry): void {
+  const activeKeys = new Set(entry.spaces.map(sharedSpaceProbeKey));
+  for (const key of entry.sharedAccess.keys()) {
+    if (!activeKeys.has(key)) entry.sharedAccess.delete(key);
+  }
 }

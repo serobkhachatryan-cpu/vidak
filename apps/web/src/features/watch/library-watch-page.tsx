@@ -39,10 +39,17 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
     if (cached) {
       setItem(cached);
       setStatus('ready');
-    } else {
-      setItem(undefined);
-      setStatus('loading');
+      // Navigation from the library already has a viewer-bound opaque stream
+      // grant. Do not immediately reload the entire private catalogue just to
+      // rediscover the same card: that used to make Watch contend with the
+      // video source itself. The media route rechecks authorization before
+      // any bytes are streamed.
+      return () => {
+        cancelled = true;
+      };
     }
+    setItem(undefined);
+    setStatus('loading');
     void (async () => {
       try {
         const response = await fetch('/api/evault/videos?scope=all', { cache: 'no-store' });

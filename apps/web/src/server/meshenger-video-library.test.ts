@@ -209,6 +209,55 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('coalesces the initial byte-range authorization burst for one shared stream', async () => {
+    const library = configuredLibrary();
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@cache-friend.w3id', uri: 'https://cache-friend-vault.example' });
+        }
+        if (url.pathname === '/files/cache-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/cache-shared-video.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        eName: '@cache-viewer.w3id',
+        fileUri: 'w3ds://file?id=@cache-friend.w3id/cache-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@cache-friend.w3id',
+        sourceChatId: 'cache-chat',
+        accessBasis: 'history',
+      },
+      secret,
+    );
+
+    try {
+      await expect(
+        Promise.all([
+          library.resolveMediaUrl({ eName: '@cache-viewer.w3id' }, streamId),
+          library.resolveMediaUrl({ eName: '@cache-viewer.w3id' }, streamId),
+        ]),
+      ).resolves.toEqual([
+        'https://media.example/cache-shared-video.mp4',
+        'https://media.example/cache-shared-video.mp4',
+      ]);
+      expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('falls back to the viewer’s current Chat grant when a source mirror omits the viewer', async () => {
     const library = configuredLibrary();
     vi.stubGlobal(

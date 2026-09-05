@@ -96,6 +96,12 @@ const maxRejectedAttempts = 4;
 const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
 const maxRenewedStreams = 256;
+const maxCachedSharedPlaybackAccess = 512;
+// A browser asks for several byte ranges when opening one media element. Keep
+// one successful viewer-bound ACL check just long enough to cover that burst;
+// the signed stream is still bound to its viewer and every new playback start
+// performs a fresh verification.
+const sharedPlaybackAccessTtlMs = 15_000;
 // Give a user-initiated source read a short quiet window before the next
 // inventory wave hits the same eVault. Inventory is resumable; playback is
 // immediately visible, so the interactive request takes precedence.
@@ -233,6 +239,9 @@ interface CachedMediaUrl {
 interface RenewedStream {
   eName: string;
   streamId: string;
+  expiresAt: number;
+}
+interface CachedSharedPlaybackAccess {
   expiresAt: number;
 }
 type DiscoveredVideo = DiscoveredVideoRecord;
@@ -375,6 +384,8 @@ const cachedMediaUrls = new Map<string, CachedMediaUrl>();
 // URL does not mint a fresh grant per range. Every request still calls
 // resolveMediaUrl and rechecks current source authorization.
 const renewedStreams = new Map<string, RenewedStream>();
+const cachedSharedPlaybackAccess = new Map<string, CachedSharedPlaybackAccess>();
+const sharedPlaybackAccessInflight = new Map<string, Promise<SharedSpaceAccess>>();
 
 function getInventoryJobStoreForLibrary(): InventoryJobStore {
   if (process.env.DATABASE_URL?.trim()) return getInventoryJobStore();
@@ -920,6 +931,10 @@ export class MeshengerVideoLibrary {
   async invalidateMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<void> {
     const { grant } = await this.requirePlayableStreamGrant(user, streamId);
     cachedMediaUrls.delete(`${grant.eName}\u0000${grant.fileUri}`);
+    // An upstream 401/403/404 can mean its authorization changed. Do not let
+    // the short Range-request optimization mask that signal on the recovery
+    // attempt.
+    cachedSharedPlaybackAccess.delete(sharedPlaybackAccessKey(user.eName, streamId));
   }
 
   private requireBoundStreamGrant(
@@ -1004,12 +1019,15 @@ export class MeshengerVideoLibrary {
               },
               { eName: sourceSpaceKey, kind: 'group' },
             ];
+    const playbackAccessKey = sharedPlaybackAccessKey(user.eName, streamId);
+    if (hasCachedSharedPlaybackAccess(playbackAccessKey, this.now())) return bound;
+
     let retrying = false;
     for (const source of probes) {
       // Playback is interactive work. A short bounded retry turns a transient
       // registry or eVault hiccup into a playable shared video without ever
       // treating a denied or missing source as authorized.
-      const access = await this.probeSharedSpaceAccess(user, source, 'backoff');
+      const access = await this.probeSharedPlaybackAccess(user, playbackAccessKey, source);
       if (access.access === 'ok' && access.member) return bound;
       retrying ||= access.access === 'retry';
     }
@@ -1025,6 +1043,43 @@ export class MeshengerVideoLibrary {
       'authorization_denied',
       403,
     );
+  }
+
+  /**
+   * Coalesce the ACL reads caused by a media element's initial Range burst.
+   * We cache only a positive result and only for the exact opaque stream and
+   * authenticated viewer. Denials and transient failures never receive a
+   * bypass, and the next normal playback start rechecks the source.
+   */
+  private async probeSharedPlaybackAccess(
+    user: Pick<AuthUser, 'eName'>,
+    playbackAccessKey: string,
+    source: SharedSpaceProbe,
+  ): Promise<SharedSpaceAccess> {
+    const cached = cachedSharedPlaybackAccess.get(playbackAccessKey);
+    const now = this.now();
+    if (cached && cached.expiresAt > now) return { access: 'ok', member: true };
+    if (cached) cachedSharedPlaybackAccess.delete(playbackAccessKey);
+
+    const inflight = sharedPlaybackAccessInflight.get(playbackAccessKey);
+    if (inflight) return inflight;
+
+    const pending = this.probeSharedSpaceAccess(user, source, 'backoff')
+      .then((access) => {
+        if (access.access === 'ok' && access.member) {
+          cacheSharedPlaybackAccess(
+            playbackAccessKey,
+            this.now() + sharedPlaybackAccessTtlMs,
+            this.now(),
+          );
+        }
+        return access;
+      })
+      .finally(() => {
+        sharedPlaybackAccessInflight.delete(playbackAccessKey);
+      });
+    sharedPlaybackAccessInflight.set(playbackAccessKey, pending);
+    return pending;
   }
 
   /**
@@ -4642,6 +4697,27 @@ function cacheRenewedStream(key: string, renewed: RenewedStream, now: number): v
       renewedStreams.delete(cachedKey);
   }
   renewedStreams.set(key, renewed);
+}
+function sharedPlaybackAccessKey(viewerEName: string, streamId: string): string {
+  return `${normalizeEName(viewerEName)}\u0000${streamId}`;
+}
+function hasCachedSharedPlaybackAccess(key: string, now: number): boolean {
+  const cached = cachedSharedPlaybackAccess.get(key);
+  if (!cached) return false;
+  if (cached.expiresAt > now) return true;
+  cachedSharedPlaybackAccess.delete(key);
+  return false;
+}
+function cacheSharedPlaybackAccess(key: string, expiresAt: number, now: number): void {
+  for (const [cachedKey, cached] of cachedSharedPlaybackAccess) {
+    if (
+      cached.expiresAt <= now ||
+      cachedSharedPlaybackAccess.size >= maxCachedSharedPlaybackAccess
+    ) {
+      cachedSharedPlaybackAccess.delete(cachedKey);
+    }
+  }
+  cachedSharedPlaybackAccess.set(key, { expiresAt });
 }
 function httpUrl(value: string): string {
   try {

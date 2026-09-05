@@ -211,6 +211,41 @@ describe('inventory coordinator', () => {
     );
   });
 
+  it('reuses a verified shared-source check between catalogue progress polls', async () => {
+    let currentTime = 1_000;
+    const sharedVideo = video({
+      id: 'shared-1',
+      title: 'Shared clip',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@group.w3id',
+      accessBasis: 'membership',
+    });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([sharedVideo]), 'done', {
+        personalPages: 0,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([sharedVideo]);
+    });
+    const probeSharedSpaceAccess = vi.fn().mockResolvedValue({ access: 'ok', member: true });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
+      now: () => currentTime,
+      sharedAccessCacheTtlMs: 30_000,
+      log: () => undefined,
+    });
+
+    await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
+
+    currentTime += 30_000;
+    await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(2);
+  });
+
   it('keeps a retryable shared source visible but disabled without rescanning the library', async () => {
     const operationalLogs: string[] = [];
     setOperationalLogSinkForTests((line) => operationalLogs.push(line));
@@ -265,7 +300,7 @@ describe('inventory coordinator', () => {
     });
     expect(JSON.stringify(afterProbeFailure)).not.toContain('@group.w3id');
     expect(scanLibrary).toHaveBeenCalledTimes(1);
-    expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(2);
+    expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
     expect(operationalLogs).toHaveLength(1);
     const operationalLog = operationalLogs[0] ?? '';
     expect(JSON.parse(operationalLog)).toMatchObject({
