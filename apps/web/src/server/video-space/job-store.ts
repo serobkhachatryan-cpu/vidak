@@ -401,10 +401,7 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
       messages: Array.isArray(ledger.messages)
         ? (ledger.messages as MeshengerMessage[]).slice(0, maxPersistedLibraryMetadata)
         : [],
-      sourceCounts:
-        ledger.sourceCounts && typeof ledger.sourceCounts === 'object'
-          ? (ledger.sourceCounts as InventorySourceCounts)
-          : emptySourceCounts(),
+      sourceCounts: sourceCountsFromLedger(ledger),
     };
   }
 
@@ -429,13 +426,17 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
       const rows = await db().select().from(videoSpaceInventoryJobs);
       const jobs: InventoryJobRecord[] = [];
       for (const row of rows) {
-        const extras = await loadJobExtras(row.id, row.ledger as Record<string, unknown>);
+        // The process pump only needs an owner and durable checkpoint state to
+        // decide whether to resume a job. Hydrating every saved card here on
+        // every short scheduler tick made large shared libraries compete with
+        // their own API responses. `scanLibrary` loads the one selected job in
+        // full through getByOwner before it reads or updates that checkpoint.
         const job = asJobRecord(
           row,
-          extras.items,
-          extras.conversations,
-          extras.messages,
-          extras.sourceCounts,
+          [],
+          [],
+          [],
+          sourceCountsFromLedger(row.ledger as Record<string, unknown>),
         );
         if (inventoryJobNeedsDrain(job) || isStaleCatalogueVersion(job.ledger)) jobs.push(job);
       }
@@ -662,6 +663,12 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
       await this.clearVaultInflight(inventoryDrainGateKey(jobId));
     },
   };
+}
+
+function sourceCountsFromLedger(ledger: Record<string, unknown>): InventorySourceCounts {
+  return ledger.sourceCounts && typeof ledger.sourceCounts === 'object'
+    ? (ledger.sourceCounts as InventorySourceCounts)
+    : emptySourceCounts();
 }
 
 let defaultStore: InventoryJobStore | undefined;
