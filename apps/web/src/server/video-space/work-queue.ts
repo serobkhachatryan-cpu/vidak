@@ -124,6 +124,12 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
       );
       const wakeAt = gatedTimes.length ? Math.min(...gatedTimes) : timestamp + maxWaitMs;
       await options.persist?.(queue);
+      // A durable background pass has an explicit wave budget. Do not sleep
+      // through one vault's Retry-After while holding the global inventory
+      // pump: persist its exact cursor and let the next short scheduler tick
+      // advance other users and ready vaults instead. Unbounded foreground
+      // drains retain the existing wait behaviour.
+      if (Number.isFinite(maxWaves)) return;
       await sleep(Math.min(Math.max(wakeAt - now(), 10), maxWaitMs));
       continue;
     }

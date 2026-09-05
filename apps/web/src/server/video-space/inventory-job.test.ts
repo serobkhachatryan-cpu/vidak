@@ -138,6 +138,48 @@ describe('durable inventory checkpoints', () => {
     expect(persisted).toBe(1);
   });
 
+  it('yields deferred durable work instead of blocking the next inventory pump', async () => {
+    const now = 1_000;
+    const queue: Work[] = [
+      {
+        type: 'group-open',
+        vaultKey: '@limited.w3id',
+        after: null,
+        attempts: 1,
+        notBefore: now + 10_000,
+        id: 'delayed',
+      },
+    ];
+    let processed = 0;
+    let persisted = 0;
+    let slept = 0;
+
+    await drainFairVaultQueue(
+      queue,
+      async () => {
+        processed += 1;
+      },
+      {
+        vaultKey: (item) => item.vaultKey,
+        priority: () => 0,
+        now: () => now,
+        sleep: async () => {
+          slept += 1;
+        },
+        maxWaves: 2,
+        persist: () => {
+          persisted += 1;
+        },
+        workKey: (item) => item.id,
+      },
+    );
+
+    expect(processed).toBe(0);
+    expect(persisted).toBe(1);
+    expect(slept).toBe(0);
+    expect(queue).toEqual([expect.objectContaining({ id: 'delayed' })]);
+  });
+
   it('keeps Retry-After on the same cursor and lets other vaults continue', async () => {
     let now = 1_000;
     const seen: string[] = [];
