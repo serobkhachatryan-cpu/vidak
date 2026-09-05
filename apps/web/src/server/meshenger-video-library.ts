@@ -88,6 +88,11 @@ const w3dsFileOntology = documentedOntologyId('w3ds-file');
 const pageSize = 100;
 const maxPages = 30;
 const requestTimeoutMs = 12_000;
+// A source eVault address is directory metadata, not authorization evidence.
+// Keep it briefly so an interactive authorization probe and the immediately
+// following File redirect do not ask the registry for the same mapping twice.
+const eVaultResolutionTtlMs = 30_000;
+const maxCachedEVaultResolutions = 256;
 // The canonical File redirect is a fast path. If an eVault is overloaded, do
 // not let that optional attempt consume the whole interactive playback budget
 // before the proven metadata fallback starts.
@@ -249,6 +254,7 @@ interface ChatReference {
 }
 type SourceFailure = 'denied' | 'missing' | 'unavailable' | 'rate_limited' | 'rejected';
 type RateLimitMode = 'fail-fast' | 'backoff';
+type ViewerIdentity = Pick<AuthUser, 'eName'> & Partial<Pick<AuthUser, 'eVaultUri'>>;
 export type SharedSpaceProbe =
   | { eName: string; kind: 'group' }
   | { eName: string; kind: 'direct'; chatId: string }
@@ -278,6 +284,10 @@ interface GroupDiscovery {
 interface ResolvedVault {
   ownerEName: string;
   eVaultUri: string;
+}
+interface CachedEVaultResolution {
+  vault: ResolvedVault;
+  expiresAt: number;
 }
 
 function isStaleGenericFileRecord(value: unknown): boolean {
@@ -373,8 +383,20 @@ const chatMessagesQuery = `query AuthorizedChatMessages($ontologyId: ID!, $chatI
     pageInfo { hasNextPage endCursor }
   }
 }`;
+// Shared playback needs one named Chat/Chat-reference, never an arbitrary
+// slice of the owner's chat history. The documented eVault search supports
+// exact structured-field matching; include both canonical and legacy field
+// names because historical Chat references use either shape.
+const exactChatAuthorizationQuery = `query ExactChatAuthorization($ontologyId: ID!, $chatId: String!, $first: Int!) {
+  metaEnvelopes(filter: { ontologyId: $ontologyId, search: { term: $chatId, fields: ["id", "chatId", "canonicalChatId"], mode: EXACT } }, first: $first) {
+    edges { node { ${envelopeNode} } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
 const readQuery = `query MeshengerVideoEnvelope($id: ID!) { metaEnvelope(id: $id) { ${envelopeNode} } }`;
 const cachedMediaUrls = new Map<string, CachedMediaUrl>();
+const cachedEVaultResolutions = new Map<string, CachedEVaultResolution>();
+const pendingEVaultResolutions = new Map<string, Promise<ResolvedVault>>();
 // Native media elements retain their original `src` while issuing subsequent
 // Range requests. Retain the renewed opaque grant server-side so one expired
 // URL does not mint a fresh grant per range. Every request still calls
@@ -615,7 +637,7 @@ export class MeshengerVideoLibrary {
 
   /** Lightweight shared-space probe for cached metadata. Does not list videos. */
   async probeSharedSpaceAccess(
-    user: Pick<AuthUser, 'eName'>,
+    user: ViewerIdentity,
     space: SharedSpaceProbe,
     rateLimit: RateLimitMode = 'fail-fast',
   ): Promise<SharedSpaceAccess> {
@@ -627,7 +649,7 @@ export class MeshengerVideoLibrary {
       // the actual authorization evidence; a canonical owner's vault need not
       // have a GroupManifest, so probing one here made legitimate shares vanish.
       const viewerVaultRead = await this.readSource(
-        () => this.resolveEVault(user.eName, rateLimit),
+        () => this.resolveViewerEVault(user, rateLimit),
         undefined,
       );
       if (viewerVaultRead.failure === 'denied') return { access: 'denied', member: false };
@@ -663,48 +685,33 @@ export class MeshengerVideoLibrary {
     }
     if (space.kind === 'direct') {
       if (!space.chatId) return { access: 'missing', member: false };
-      const vaultRead = await this.readSource(
-        () => this.resolveEVault(space.eName, rateLimit),
-        undefined,
-      );
-      let sourceAccess: SharedSpaceAccess;
-      if (vaultRead.failure === 'denied') sourceAccess = { access: 'denied', member: false };
-      else if (vaultRead.failure === 'missing') sourceAccess = { access: 'missing', member: false };
-      else if (isRetryFailure(vaultRead.failure) || !vaultRead.value) {
-        sourceAccess = { access: 'retry', member: false };
-      } else {
-        const sourceVault = vaultRead.value;
-        const chats = await this.readSource(
-          () =>
-            this.listEnvelopes(
-              sourceVault.ownerEName,
-              sourceVault.eVaultUri,
-              chatOntology,
-              undefined,
-              {
-                maxPages: 3,
-                rateLimit,
-              },
-            ),
-          undefined,
+      const sourceAccessPromise = this.probeDirectSourceChatAccess(user, space, rateLimit);
+
+      // Interactive playback can use either the source's current Chat mirror
+      // or the viewer's durable Chat grant. Probe both exact records in
+      // parallel so historical shares do not wait for a negative remote check
+      // before proving the viewer's authorization. Background inventory keeps
+      // the lighter single-source probe to avoid needless remote load.
+      if (rateLimit === 'backoff') {
+        const safeSourceAccessPromise = sourceAccessPromise.catch(
+          () => ({ access: 'retry', member: false }) as const,
         );
-        if (chats.failure === 'denied') sourceAccess = { access: 'denied', member: false };
-        else if (chats.failure === 'missing') sourceAccess = { access: 'missing', member: false };
-        else if (isRetryFailure(chats.failure)) sourceAccess = { access: 'retry', member: false };
-        else {
-          const chat = chats.value?.items.find((item) => {
-            const chatId = optionalString(item.parsed.id) ?? item.id;
-            return chatId === space.chatId && item.parsed.isReference !== true;
-          });
-          const member =
-            chat !== undefined &&
-            asArray(chat.parsed.participantIds).some(
-              (participant) =>
-                typeof participant === 'string' && sameEName(participant, user.eName),
-            );
-          sourceAccess = chat ? { access: 'ok', member } : { access: 'missing', member: false };
-        }
+        const viewerAccessPromise = this.probeViewerChatGrantAccess(
+          user,
+          { eName: space.eName, chatId: space.chatId },
+          rateLimit,
+        ).catch(() => ({ access: 'retry', member: false }) as const);
+        const first = await Promise.race([
+          safeSourceAccessPromise.then((access) => ({ source: true as const, access })),
+          viewerAccessPromise.then((access) => ({ source: false as const, access })),
+        ]);
+        if (first.access.access === 'ok' && first.access.member) return first.access;
+        const second = first.source ? await viewerAccessPromise : await safeSourceAccessPromise;
+        if (second.access === 'ok' && second.member) return second;
+        return combineSharedAccess(first.access, second);
       }
+
+      const sourceAccess = await sourceAccessPromise;
       if (sourceAccess.access === 'ok' && sourceAccess.member) return sourceAccess;
 
       // The viewer's Chat grant is the durable authority for historical direct
@@ -762,12 +769,12 @@ export class MeshengerVideoLibrary {
    * current Chat grant as the durable fallback before denying playback.
    */
   private async probeViewerChatGrantAccess(
-    user: Pick<AuthUser, 'eName'>,
+    user: ViewerIdentity,
     source: { eName: string; chatId: string },
     rateLimit: RateLimitMode,
   ): Promise<SharedSpaceAccess> {
     const viewerVaultRead = await this.readSource(
-      () => this.resolveEVault(user.eName, rateLimit),
+      () => this.resolveViewerEVault(user, rateLimit),
       undefined,
     );
     if (viewerVaultRead.failure === 'denied') return { access: 'denied', member: false };
@@ -778,22 +785,64 @@ export class MeshengerVideoLibrary {
     const viewerVault = viewerVaultRead.value;
     const chatsRead = await this.readSource(
       () =>
-        this.listEnvelopes(viewerVault.ownerEName, viewerVault.eVaultUri, chatOntology, undefined, {
-          maxPages: 3,
+        this.findChatAuthorizationEnvelopes(
+          viewerVault.ownerEName,
+          viewerVault.eVaultUri,
+          source.chatId,
           rateLimit,
-        }),
-      { items: [] as Envelope[], complete: false },
+        ),
+      [] as Envelope[],
     );
     if (chatsRead.failure === 'denied') return { access: 'denied', member: false };
     if (chatsRead.failure === 'missing') return { access: 'missing', member: false };
     if (isRetryFailure(chatsRead.failure)) return { access: 'retry', member: false };
-    const authorized = chatGrantsFromEnvelopes(chatsRead.value.items, user.eName).some(
+    const authorized = chatGrantsFromEnvelopes(chatsRead.value, user.eName).some(
       (grant) => sameEName(grant.groupEName, source.eName) && grant.chatId === source.chatId,
     );
     return { access: authorized ? 'ok' : 'missing', member: authorized };
   }
 
-  async resolveMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string> {
+  /** Reads one exact source Chat record instead of paging unrelated history. */
+  private async probeDirectSourceChatAccess(
+    user: ViewerIdentity,
+    space: Extract<SharedSpaceProbe, { kind: 'direct' }>,
+    rateLimit: RateLimitMode,
+  ): Promise<SharedSpaceAccess> {
+    const vaultRead = await this.readSource(
+      () => this.resolveEVault(space.eName, rateLimit),
+      undefined,
+    );
+    if (vaultRead.failure === 'denied') return { access: 'denied', member: false };
+    if (vaultRead.failure === 'missing') return { access: 'missing', member: false };
+    if (isRetryFailure(vaultRead.failure) || !vaultRead.value) {
+      return { access: 'retry', member: false };
+    }
+    const sourceVault = vaultRead.value;
+    const chats = await this.readSource(
+      () =>
+        this.findChatAuthorizationEnvelopes(
+          sourceVault.ownerEName,
+          sourceVault.eVaultUri,
+          space.chatId,
+          rateLimit,
+        ),
+      [] as Envelope[],
+    );
+    if (chats.failure === 'denied') return { access: 'denied', member: false };
+    if (chats.failure === 'missing') return { access: 'missing', member: false };
+    if (isRetryFailure(chats.failure)) return { access: 'retry', member: false };
+    const chat = chats.value.find((item) => {
+      const chatId = optionalString(item.parsed.id) ?? item.id;
+      return chatId === space.chatId && item.parsed.isReference !== true;
+    });
+    if (!chat) return { access: 'missing', member: false };
+    const member = asArray(chat.parsed.participantIds).some(
+      (participant) => typeof participant === 'string' && sameEName(participant, user.eName),
+    );
+    return { access: 'ok', member };
+  }
+
+  async resolveMediaUrl(user: ViewerIdentity, streamId: string): Promise<string> {
     const { grant, file } = await this.requirePlayableStreamGrant(user, streamId);
     const cacheKey = `${grant.eName}\u0000${grant.fileUri}`;
     const cached = cachedMediaUrls.get(cacheKey);
@@ -889,7 +938,7 @@ export class MeshengerVideoLibrary {
   }
 
   /** Reissues a viewer-bound stream after rechecking its current source access. */
-  async renewPlayableStream(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string> {
+  async renewPlayableStream(user: ViewerIdentity, streamId: string): Promise<string> {
     const bound = this.requireBoundStreamGrant(user, streamId, { allowExpired: true });
     const now = this.now();
     const cached = renewedStreams.get(streamId);
@@ -922,7 +971,7 @@ export class MeshengerVideoLibrary {
    * Drops a cached signed source after the upstream reports an expired or denied
    * media URL. The next request resolves the File envelope again.
    */
-  async invalidateMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<void> {
+  async invalidateMediaUrl(user: ViewerIdentity, streamId: string): Promise<void> {
     const { grant } = await this.requirePlayableStreamGrant(user, streamId);
     cachedMediaUrls.delete(`${grant.eName}\u0000${grant.fileUri}`);
     // An upstream 401/403/404 can mean its authorization changed. Do not let
@@ -952,7 +1001,7 @@ export class MeshengerVideoLibrary {
   }
 
   private async requirePlayableStreamGrant(
-    user: Pick<AuthUser, 'eName'>,
+    user: ViewerIdentity,
     streamId: string,
     options?: { allowExpired?: boolean },
   ): Promise<{ grant: StreamGrant; file: NonNullable<ReturnType<typeof parseW3dsFileUri>> }> {
@@ -3986,6 +4035,50 @@ export class MeshengerVideoLibrary {
     return page;
   }
 
+  /**
+   * Finds the one Chat or Chat-reference that authorizes a shared playback
+   * request. Normal playback uses the indexed exact query. A bounded legacy
+   * scan is retained only for older eVaults that have not indexed these
+   * documented Chat fields yet, so an optimization can never hide a valid
+   * existing share.
+   */
+  private async findChatAuthorizationEnvelopes(
+    owner: string,
+    eVaultUri: string,
+    chatId: string,
+    rateLimit: RateLimitMode = 'fail-fast',
+  ): Promise<Envelope[]> {
+    let exact: Envelope[] = [];
+    try {
+      const data = await this.graphql(
+        owner,
+        eVaultUri,
+        exactChatAuthorizationQuery,
+        {
+          ontologyId: chatOntology,
+          chatId,
+          first: 8,
+        },
+        rateLimit,
+      );
+      exact = asArray(record(data.metaEnvelopes)?.edges)
+        .map(envelopeFromEdge)
+        .filter((item): item is Envelope => item !== undefined);
+    } catch (error) {
+      // Compatibility fallback below. Preserve temporary availability/rate
+      // failures so the player can retry instead of starting a deep scan.
+      const failure = sourceFailureClass(error);
+      if (failure === 'fatal' || isRetryFailure(failure)) throw error;
+    }
+    if (exact.some((item) => chatAuthorizationMatches(item, chatId))) return exact;
+    return (
+      await this.listEnvelopes(owner, eVaultUri, chatOntology, undefined, {
+        maxPages: 3,
+        rateLimit,
+      })
+    ).items;
+  }
+
   private async readEnvelope(
     owner: string,
     eVaultUri: string,
@@ -4015,6 +4108,40 @@ export class MeshengerVideoLibrary {
     rateLimit: RateLimitMode = 'fail-fast',
   ): Promise<ResolvedVault> {
     const requested = normalizeEName(eName);
+    const now = Date.now();
+    const cached = cachedEVaultResolutions.get(requested);
+    if (cached && cached.expiresAt > now) return cached.vault;
+    if (cached) cachedEVaultResolutions.delete(requested);
+    const pending = pendingEVaultResolutions.get(requested);
+    if (pending) return pending;
+    const resolution = this.resolveEVaultUncached(requested, rateLimit)
+      .then((vault) => {
+        cacheEVaultResolution(requested, vault, now);
+        return vault;
+      })
+      .finally(() => {
+        pendingEVaultResolutions.delete(requested);
+      });
+    pendingEVaultResolutions.set(requested, resolution);
+    return resolution;
+  }
+
+  /** Uses the eVault URI issued in the authenticated session when available. */
+  private async resolveViewerEVault(
+    user: ViewerIdentity,
+    rateLimit: RateLimitMode,
+  ): Promise<ResolvedVault> {
+    const ownerEName = requireEName(user.eName);
+    if (user.eVaultUri?.trim()) {
+      return { ownerEName, eVaultUri: httpUrl(user.eVaultUri) };
+    }
+    return this.resolveEVault(ownerEName, rateLimit);
+  }
+
+  private async resolveEVaultUncached(
+    requested: string,
+    rateLimit: RateLimitMode,
+  ): Promise<ResolvedVault> {
     const url = new URL('/resolve', this.config.registryBaseUrl);
     url.searchParams.set('w3id', requested);
     const resolved = record(await this.requestJson(url, { method: 'GET' }, rateLimit));
@@ -4207,6 +4334,14 @@ export function createMeshengerVideoLibrary(
     },
     options,
   );
+}
+
+/** Test helper; production caches expire automatically and are never globally reset. */
+export function resetMeshengerVideoLibraryCachesForTests(): void {
+  cachedMediaUrls.clear();
+  cachedEVaultResolutions.clear();
+  pendingEVaultResolutions.clear();
+  renewedStreams.clear();
 }
 
 export function createMeshengerVideoStreamId(grant: StreamGrant, secret: string): string {
@@ -4476,6 +4611,14 @@ function chatGrantsFromEnvelopes(envelopes: Envelope[], viewerEName: string): Ch
   }
   return [...unique.values()];
 }
+function chatAuthorizationMatches(envelope: Envelope, chatId: string): boolean {
+  return [
+    envelope.id,
+    optionalString(envelope.parsed.id),
+    optionalString(envelope.parsed.chatId),
+    optionalString(envelope.parsed.canonicalChatId),
+  ].some((value) => value === chatId);
+}
 function chatEnvelopesToConversations(
   ownerEName: string,
   chatReferences: ChatReference[],
@@ -4621,6 +4764,18 @@ function requireEName(value: string): string {
     );
   return value;
 }
+function combineSharedAccess(
+  first: SharedSpaceAccess,
+  second: SharedSpaceAccess,
+): SharedSpaceAccess {
+  if (first.access === 'retry' || second.access === 'retry') {
+    return { access: 'retry', member: false };
+  }
+  if (first.access === 'denied' || second.access === 'denied') {
+    return { access: 'denied', member: false };
+  }
+  return { access: 'missing', member: false };
+}
 function invalidStream(): never {
   throw new MeshengerVideoLibraryError('The video link is invalid.', 'invalid_stream', 401);
 }
@@ -4631,6 +4786,14 @@ function cacheMediaUrl(key: string, url: string, expiresAt: number): void {
       cachedMediaUrls.delete(cachedKey);
   }
   cachedMediaUrls.set(key, { url, expiresAt });
+}
+function cacheEVaultResolution(key: string, vault: ResolvedVault, now: number): void {
+  for (const [cachedKey, cached] of cachedEVaultResolutions) {
+    if (cached.expiresAt <= now || cachedEVaultResolutions.size >= maxCachedEVaultResolutions) {
+      cachedEVaultResolutions.delete(cachedKey);
+    }
+  }
+  cachedEVaultResolutions.set(key, { vault, expiresAt: now + eVaultResolutionTtlMs });
 }
 function cacheRenewedStream(key: string, renewed: RenewedStream, now: number): void {
   for (const [cachedKey, cached] of renewedStreams) {

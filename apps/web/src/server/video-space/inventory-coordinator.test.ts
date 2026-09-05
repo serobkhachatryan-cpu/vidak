@@ -255,7 +255,9 @@ describe('inventory coordinator', () => {
     await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
 
-    currentTime += 30_000;
+    // The cross-route positive authorization cache is intentionally one
+    // minute, so a media player's Range requests do not repeatedly re-probe.
+    currentTime += 60_001;
     await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
     await vi.waitFor(() => expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(2));
   });

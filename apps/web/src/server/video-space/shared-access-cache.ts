@@ -2,7 +2,10 @@ import 'server-only';
 
 import type { SharedSpaceAccess, SharedSpaceProbe } from '../meshenger-video-library';
 
-const verifiedAccessTtlMs = 15_000;
+// Native media players issue bursts of independent Range requests. Retain a
+// positive source check long enough to keep one viewing session smooth, while
+// still re-evaluating a changed W3DS policy within one minute.
+const verifiedAccessTtlMs = 60_000;
 const maxVerifiedAccessEntries = 512;
 
 interface VerifiedAccess {

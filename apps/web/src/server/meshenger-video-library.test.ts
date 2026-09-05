@@ -7,6 +7,7 @@ import {
   compactMediaSourceMetadata,
   createMeshengerVideoLibrary,
   createMeshengerVideoStreamId,
+  resetMeshengerVideoLibraryCachesForTests,
   verifyMeshengerVideoStreamId,
 } from './meshenger-video-library';
 import { VIDEO_SPACE_CATALOGUE_VERSION } from './video-space/catalogue-version';
@@ -54,6 +55,7 @@ function configuredLibrary() {
 describe('Meshenger video library', () => {
   afterEach(() => {
     resetSharedAccessCacheForTests();
+    resetMeshengerVideoLibraryCachesForTests();
   });
 
   it('keeps deferred resolver metadata small while retaining title and media hints', () => {
@@ -411,6 +413,77 @@ describe('Meshenger video library', () => {
       await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
         'https://media.example/shared-video.mp4',
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses one exact Chat authorization lookup instead of paging source chat history', async () => {
+    const fetcher = vi.fn(async (url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          query?: string;
+          variables?: { chatId?: string; first?: number };
+        };
+        expect(body.query).toContain('ExactChatAuthorization');
+        expect(body.query).not.toContain('query AuthorizedMedia');
+        expect(body.variables).toMatchObject({ chatId: 'chat-1', first: 8 });
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'chat-1',
+                    ontology: documentedAuthorizationOntologies.chat,
+                    parsed: { id: 'chat-1', participantIds: ['@person.w3id'] },
+                    envelopes: [],
+                  },
+                },
+              ],
+              // A full history scan would now request another page. Exact
+              // authorization must stop after this one matching query.
+              pageInfo: { hasNextPage: true, endCursor: 'unrelated-history' },
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      await expect(
+        configuredLibrary().probeSharedSpaceAccess(
+          { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+          { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+        ),
+      ).resolves.toEqual({ access: 'ok', member: true });
+      expect(
+        fetcher.mock.calls.filter(
+          ([url]) =>
+            (url as URL).hostname === 'friend-vault.example' &&
+            (url as URL).pathname === '/graphql',
+        ),
+      ).toHaveLength(1);
+      expect(
+        fetcher.mock.calls.filter(
+          ([url]) =>
+            (url as URL).pathname === '/resolve' &&
+            (url as URL).searchParams.get('w3id') === '@friend.w3id',
+        ),
+      ).toHaveLength(1);
+      expect(
+        fetcher.mock.calls.some(
+          ([url]) =>
+            (url as URL).pathname === '/resolve' &&
+            (url as URL).searchParams.get('w3id') === '@person.w3id',
+        ),
+      ).toBe(false);
     } finally {
       vi.unstubAllGlobals();
     }
