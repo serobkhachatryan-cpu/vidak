@@ -398,6 +398,7 @@ export function discoverVideoMessageVideos(
   referenced: Set<string>,
   viewerEName: string,
   sourceSpaceKey?: string,
+  sourceChatIdHint?: string,
 ): DiscoveredVideoRecord[] {
   const discovered: DiscoveredVideoRecord[] = [];
   for (const message of messages) {
@@ -409,7 +410,11 @@ export function discoverVideoMessageVideos(
     const fileUris = [decision.fileUri];
     for (const fileUri of fileUris) referenced.add(fileUri);
     const shape = optionalString(message.parsed.shape) ?? optionalString(message.parsed.type);
-    const sourceChatId = optionalString(message.parsed.chatId);
+    // The Messages-by-Chat endpoint already proves its chat context. Some
+    // documented Message envelopes omit a duplicate `chatId` field, so retain
+    // that trusted request context rather than turning a valid shared video
+    // into an unprovable history card after persistence/revalidation.
+    const sourceChatId = optionalString(message.parsed.chatId) ?? sourceChatIdHint;
     const accessScope = scopeForRecord({
       viewerEName,
       payload: message.parsed,

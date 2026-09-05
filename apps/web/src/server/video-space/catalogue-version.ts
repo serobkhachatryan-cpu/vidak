@@ -1,9 +1,10 @@
 /**
  * Bump when catalogue rules or persisted checkpoint layout changes and jobs
- * must rescan. Version 10 rebuilds File-reference shares with their actual
- * viewer-owned authorization proof instead of the incorrect group probe.
+ * must rescan. Version 11 also preserves the authoritative chat context from
+ * Messages-by-Chat responses, so valid shared videos whose envelopes omit a
+ * duplicate `chatId` field remain displayed and playable after revalidation.
  */
-export const VIDEO_SPACE_CATALOGUE_VERSION = 10;
+export const VIDEO_SPACE_CATALOGUE_VERSION = 11;
 
 export function readCatalogueVersion(ledger: Record<string, unknown>): number {
   const value = ledger.catalogueVersion;

@@ -609,11 +609,12 @@ export class MeshengerVideoLibrary {
       ? job.ledger.found.filter(
           (item) =>
             !isStaleGenericFileRecord(item) &&
-            // Shared records from an older catalogue can be truthful metadata
-            // but lack the chat or membership proof now required to mint a
-            // viewer-bound stream. Rebuild those records from their current
-            // authorized sources rather than preserving an unplayable card.
-            record(item)?.accessScope !== 'shared',
+            // Retain only cards that already carry a durable authorization
+            // path. They stay safe because every media request verifies that
+            // proof again, while preserving them avoids an empty Shared tab
+            // during a catalogue-version reindex. Legacy cards without such
+            // proof are rebuilt before they become playable.
+            (record(item)?.accessScope !== 'shared' || hasReusableSharedProof(item)),
         )
       : [];
     const restarted: InventoryJobRecord = {
@@ -2122,6 +2123,7 @@ export class MeshengerVideoLibrary {
               attempts: 0,
             });
           },
+          chatId,
         ),
       );
       appendRetained(
@@ -2920,6 +2922,7 @@ export class MeshengerVideoLibrary {
                       attempts: 0,
                     });
                   },
+                  item.chatId,
                 ),
               );
               appendRetained(
@@ -3341,6 +3344,9 @@ export class MeshengerVideoLibrary {
             input.referenced,
             input.viewerEName,
             input.groupEName,
+            undefined,
+            undefined,
+            chatId,
           ),
         );
         messageRecords.push(
@@ -3381,6 +3387,9 @@ export class MeshengerVideoLibrary {
                 input.referenced,
                 input.viewerEName,
                 authorEName,
+                undefined,
+                undefined,
+                chatId,
               ),
             );
             messageRecords.push(
@@ -3592,6 +3601,9 @@ export class MeshengerVideoLibrary {
           input.referenced,
           input.viewerEName,
           input.ownerEName,
+          undefined,
+          undefined,
+          chatId,
         ),
       );
       messages.push(
@@ -3675,6 +3687,7 @@ export class MeshengerVideoLibrary {
     sourceSpaceKey?: string,
     completeness?: InventoryCompletenessTracker,
     onResolve?: (fileUri: string, envelopeId: string, sourceMetadata: RecordValue) => void,
+    sourceChatIdHint?: string,
   ): DiscoveredVideo[] {
     const accepted: Envelope[] = [];
     for (const message of messages) {
@@ -3694,7 +3707,13 @@ export class MeshengerVideoLibrary {
         continue;
       }
       if (decision.status === 'resolve') {
-        onResolve?.(decision.fileUri, message.id, sourceMetadata);
+        onResolve?.(
+          decision.fileUri,
+          message.id,
+          sourceChatIdHint && !optionalString(sourceMetadata.chatId)
+            ? { ...sourceMetadata, chatId: sourceChatIdHint }
+            : sourceMetadata,
+        );
         continue;
       }
       const type = optionalString(message.parsed.type)?.toLowerCase();
@@ -3703,12 +3722,24 @@ export class MeshengerVideoLibrary {
         (type === 'file' || type === 'video' || type === 'circle' || !type) &&
         decision.reason === 'missing_w3ds_file_uri'
       ) {
-        onResolve('', message.id, sourceMetadata);
+        onResolve(
+          '',
+          message.id,
+          sourceChatIdHint && !optionalString(sourceMetadata.chatId)
+            ? { ...sourceMetadata, chatId: sourceChatIdHint }
+            : sourceMetadata,
+        );
         continue;
       }
       completeness?.recordUnresolved(decision.reason);
     }
-    return discoverVideoMessageVideos(accepted, referenced, viewerEName, sourceSpaceKey);
+    return discoverVideoMessageVideos(
+      accepted,
+      referenced,
+      viewerEName,
+      sourceSpaceKey,
+      sourceChatIdHint,
+    );
   }
 
   private async resolveQueuedMedia(
@@ -3904,6 +3935,7 @@ export class MeshengerVideoLibrary {
           referenced,
           viewerEName,
           item.sourceSpaceKey,
+          optionalString(item.sourceMetadata?.chatId),
         ),
       );
       return;
@@ -4352,6 +4384,20 @@ export function resetMeshengerVideoLibraryCachesForTests(): void {
   cachedEVaultResolutions.clear();
   pendingEVaultResolutions.clear();
   renewedStreams.clear();
+}
+
+function hasReusableSharedProof(value: unknown): boolean {
+  const item = record(value);
+  const sourceSpaceKey = optionalString(item?.sourceSpaceKey);
+  const accessBasis = optionalString(item?.accessBasis);
+  if (!sourceSpaceKey) return false;
+  if (accessBasis === 'membership') return true;
+  if (accessBasis === 'history') return Boolean(optionalString(item?.sourceChatId));
+  return (
+    accessBasis === 'reference' &&
+    Boolean(optionalString(item?.sourceReferenceId)) &&
+    Boolean(optionalString(item?.sourceReferenceFileId))
+  );
 }
 
 export function createMeshengerVideoStreamId(grant: StreamGrant, secret: string): string {

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull, lte, or } from 'drizzle-orm';
+import { and, eq, isNull, lte, notInArray, or } from 'drizzle-orm';
 import { getW3dsDatabase, type W3dsDatabase } from '../db/client';
 import {
   type VideoSpaceInventoryJobStatus,
@@ -518,6 +518,22 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
             target: [videoSpaceInventoryItems.jobId, videoSpaceInventoryItems.itemKey],
             set: { card },
           });
+      }
+      // A completed catalogue is the only safe point to reconcile cards:
+      // while a job is still scanning, deleting absent rows makes shared
+      // videos disappear between bounded worker waves. At the terminal
+      // checkpoint, however, retaining records that the current ACL/source
+      // scan no longer produced can surface revoked or stale shares.
+      if (job.status === 'complete' && job.ledger.drainFinished === true) {
+        const itemKeys = [...new Set(job.items.map((item) => item.id))];
+        const condition =
+          itemKeys.length > 0
+            ? and(
+                eq(videoSpaceInventoryItems.jobId, job.id),
+                notInArray(videoSpaceInventoryItems.itemKey, itemKeys),
+              )
+            : eq(videoSpaceInventoryItems.jobId, job.id);
+        await db().delete(videoSpaceInventoryItems).where(condition);
       }
     },
     async enqueueTask(input) {

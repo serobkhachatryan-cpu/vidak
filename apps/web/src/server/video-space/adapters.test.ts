@@ -72,6 +72,35 @@ describe('video space adapters', () => {
     ]);
   });
 
+  it('retains the authorized chat context when a Message omits a duplicate chatId', () => {
+    expect(
+      discoverVideoMessageVideos(
+        [
+          {
+            id: 'message-without-chat-id',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'video',
+              fileId: fileUri,
+              file: { filename: 'Shared cut.mp4' },
+              senderEName: owner,
+            },
+          },
+        ],
+        new Set(),
+        viewer,
+        owner,
+        'authorized-chat',
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        accessScope: 'shared',
+        accessBasis: 'history',
+        sourceChatId: 'authorized-chat',
+      }),
+    ]);
+  });
+
   it('uses the canonical target for a shared File reference without leaving it untitled', () => {
     const referenced = new Set<string>();
     expect(

@@ -807,7 +807,9 @@ describe('inventory coordinator', () => {
     await coordinator.pumpRunning();
     const afterPump = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
     expect(afterPump.items.map((item) => item.title)).toEqual(['Later clip']);
-    expect(afterPump.discovery).toBe('partial');
+    // The queue is still durable and running, so the client keeps its
+    // low-frequency progress poll instead of freezing on the first batch.
+    expect(afterPump.discovery).toBe('refreshing');
     expect(
       scanLibrary.mock.calls.some((call) => (call[1] as { drain?: boolean }).drain === true),
     ).toBe(true);
@@ -818,6 +820,48 @@ describe('inventory coordinator', () => {
           (call[1] as { maxWaves?: number }).maxWaves === 2,
       ),
     ).toBe(true);
+  });
+
+  it('keeps progress polling active when the foreground checkpoint leaves durable work', async () => {
+    const refreshing = {
+      indexed: 1,
+      expected: 3,
+      denied: 0,
+      missing: 0,
+      failed: 0,
+      complete: false,
+      retryNeeded: false,
+      retryUnavailable: 0,
+      retryRejected: 0,
+      retryRateLimited: 0,
+      retrying: 0,
+    };
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([], refreshing), 'batch', {
+        personalPages: 0,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([], refreshing);
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    const snapshot = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+
+    expect(snapshot.discovery).toBe('refreshing');
+    expect(scanLibrary).toHaveBeenCalledWith(
+      { eName: '@person.w3id' },
+      expect.objectContaining({ drain: false }),
+    );
   });
 
   it('reports a pump outage once without including private failure details', async () => {

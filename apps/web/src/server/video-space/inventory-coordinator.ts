@@ -11,7 +11,7 @@ import {
 import { reportOperationalEvent } from '../ops-observability';
 import { getW3dsAuthService } from '../w3ds-auth';
 import type { InventoryCompleteness } from './completeness';
-import { completeInventory } from './completeness';
+import { completeInventory, inventoryJobNeedsDrain } from './completeness';
 import {
   emptySourceCounts,
   formatInventoryMetricsLog,
@@ -216,17 +216,24 @@ export function createInventoryCoordinator(options?: {
           }
         },
       })
-      .then((library) => {
+      .then(async (library) => {
         entry.snapshot = mergeLibraries(entry.snapshot, library);
         entry.spaces = spacesFromItems(entry.snapshot.items, scope);
         entry.resolveFirst();
-        // A bounded foreground pass can return a retryable partial snapshot.
-        // It is no longer actively scanning once this call settles: mark it as
-        // terminal for the cache/UI, retain the cards, and let an explicit
-        // Refresh resume the durable job. Leaving this true makes every client
-        // poll start another expensive private scan indefinitely.
-        entry.scanning = false;
-        entry.completedAt = now();
+        // The foreground request only seeds a durable job. Its promise can
+        // settle after one checkpoint while the persisted queue still has
+        // hundreds of pages to resume. Read the job state before deciding the
+        // UI is terminal; otherwise the client stops its low-frequency
+        // progress polling and newly indexed shared cards remain invisible
+        // until a manual refresh or navigation.
+        const needsDrain = await durableInventoryNeedsDrain(user.eName);
+        if (needsDrain === true) {
+          entry.scanning = true;
+          delete entry.completedAt;
+        } else if (needsDrain === false) {
+          entry.scanning = false;
+          entry.completedAt = now();
+        }
       })
       .catch(() => {
         entry.scanning = false;
@@ -476,7 +483,7 @@ export function createInventoryCoordinator(options?: {
           entry.scanning = true;
           entries.set(key, entry);
         }
-        await getScanner().scanLibrary(
+        const library = await getScanner().scanLibrary(
           { eName: job.ownerEName, eVaultUri: job.ownerEVaultUri },
           {
             scope: 'all',
@@ -488,7 +495,7 @@ export function createInventoryCoordinator(options?: {
               entry.spaces = spacesFromItems(entry.snapshot.items, 'all');
               if (entry.firstResultAt === undefined) entry.firstResultAt = now();
               entry.resolveFirst();
-              if (phase === 'done' || library.completeness.complete) {
+              if (phase === 'done') {
                 entry.scanning = false;
                 entry.completedAt = now();
               } else {
@@ -497,11 +504,22 @@ export function createInventoryCoordinator(options?: {
             },
           },
         );
-        // This pump wave is bounded too. A persisted job may remain for a
-        // later explicit refresh, but the finished wave must not advertise an
-        // active scan and cause the browser to hammer the private library.
-        entry.scanning = false;
-        entry.completedAt = now();
+        entry.snapshot = mergeLibraries(entry.snapshot, library);
+        entry.spaces = spacesFromItems(entry.snapshot.items, 'all');
+        entry.resolveFirst();
+        // `maxWaves` deliberately yields long scans. The database—not the
+        // completion of this one worker call—is authoritative for whether
+        // another wave remains. Keeping this true causes only a 15s progress
+        // poll; it does not restart discovery because the process pump resumes
+        // the same checkpointed queue.
+        const current = await store.getByOwner(job.ownerEName);
+        if (current && inventoryJobNeedsDrain(current)) {
+          entry.scanning = true;
+          delete entry.completedAt;
+        } else {
+          entry.scanning = false;
+          entry.completedAt = now();
+        }
       }
       pumpFailureReported = false;
     } catch {
@@ -523,6 +541,18 @@ export function createInventoryCoordinator(options?: {
       () => undefined,
     );
     return next;
+  }
+
+  async function durableInventoryNeedsDrain(eName: string): Promise<boolean | undefined> {
+    try {
+      const { getInventoryJobStore } = await import('./job-store');
+      const job = await getInventoryJobStore().getByOwner(eName);
+      return job ? inventoryJobNeedsDrain(job) : false;
+    } catch {
+      // The first result remains useful even if persistence is temporarily
+      // unavailable. The process-level pump will retry independently.
+      return undefined;
+    }
   }
 
   return {

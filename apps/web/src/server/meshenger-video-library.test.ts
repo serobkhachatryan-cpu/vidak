@@ -3745,6 +3745,17 @@ describe('Meshenger video library', () => {
             accessScope: 'shared',
             sourceId: 'call-recording',
           },
+          {
+            key: 'message:@friend.w3id/verified-shared-clip',
+            fileUris: ['w3ds://file?id=@friend.w3id/verified-shared-clip'],
+            kind: 'video-message',
+            title: 'Verified shared clip',
+            accessScope: 'shared',
+            sourceId: 'video-message',
+            sourceSpaceKey: '@friend.w3id',
+            sourceChatId: 'chat-1',
+            accessBasis: 'history',
+          },
         ],
       },
     });
@@ -3765,6 +3776,7 @@ describe('Meshenger video library', () => {
 
     expect(result.items.map((item) => item.title)).toContain('Kept library clip');
     expect(result.items.map((item) => item.title)).not.toContain('Legacy shared clip');
+    expect(result.items.map((item) => item.title)).toContain('Verified shared clip');
     expect(saved?.id).toBe(job.id);
     expect(saved?.status).toBe('running');
     expect(saved?.ledger.drainFinished).toBe(false);
