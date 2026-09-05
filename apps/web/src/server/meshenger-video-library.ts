@@ -869,6 +869,16 @@ export class MeshengerVideoLibrary {
   }
 
   /**
+   * Starts the current authorization proof without resolving or downloading
+   * media. The library uses this when a viewer signals intent to watch a
+   * shared item, so the eventual player request can reuse the same short-lived
+   * verified-source entry.
+   */
+  async authorizePlayableStream(user: ViewerIdentity, streamId: string): Promise<void> {
+    await this.requirePlayableStreamGrant(user, streamId, { allowExpired: true });
+  }
+
+  /**
    * Dereference the canonical W3DS File URI first.  eVault returns a fresh
    * media redirect here, avoiding a GraphQL metadata read on the playback
    * path.  Older deployments that do not expose this endpoint retain the

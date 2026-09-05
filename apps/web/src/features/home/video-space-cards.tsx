@@ -4,6 +4,7 @@ import type { Video } from '@w3ds/types';
 import { Button, VideoSpacePoster } from '@w3ds/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { useCallback, useRef } from 'react';
 import {
   canPlayLibraryVideo,
   libraryCardDetails,
@@ -96,9 +97,25 @@ export function OwnedVideoCard({
 
 export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   const router = useRouter();
+  const authorizationWarmupStarted = useRef(false);
   const visibilityLabel = videoSpaceVisibilityLabels[video.visibility];
   const watchHref = `/watch/space/${encodeURIComponent(video.id)}`;
   const canPlay = canPlayLibraryVideo(video);
+  const warmSharedAuthorization = useCallback(() => {
+    const streamId = video.streamIds?.[0];
+    if (video.accessScope !== 'shared' || !streamId || authorizationWarmupStarted.current) return;
+    authorizationWarmupStarted.current = true;
+    // This proves only the current viewer's source access. It deliberately
+    // does not resolve or preload private media bytes before Watch is chosen.
+    void fetch(`/api/evault/videos/${encodeURIComponent(streamId)}/authorize`, {
+      cache: 'no-store',
+      credentials: 'same-origin',
+    }).catch(() => {
+      // A click still uses the authoritative media route. Let a later hover
+      // make another best-effort attempt after a transient network failure.
+      authorizationWarmupStarted.current = false;
+    });
+  }, [video.accessScope, video.streamIds]);
   const poster = (
     <VideoSpacePoster
       title={video.title}
@@ -118,7 +135,13 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   return (
     <article className="overflow-hidden rounded-xl border border-border bg-surface-raised">
       {canPlay ? (
-        <Link href={watchHref} aria-label={`Watch ${video.title}`} className="block">
+        <Link
+          href={watchHref}
+          aria-label={`Watch ${video.title}`}
+          className="block"
+          onPointerEnter={warmSharedAuthorization}
+          onFocus={warmSharedAuthorization}
+        >
           {poster}
         </Link>
       ) : (
@@ -130,7 +153,15 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
           <p className="text-sm text-muted-foreground">{libraryCardDetails(video)}</p>
         </div>
         {canPlay ? (
-          <Button size="sm" onClick={() => router.push(watchHref)}>
+          <Button
+            size="sm"
+            onPointerEnter={warmSharedAuthorization}
+            onFocus={warmSharedAuthorization}
+            onClick={() => {
+              warmSharedAuthorization();
+              router.push(watchHref);
+            }}
+          >
             Watch video
           </Button>
         ) : (

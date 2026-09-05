@@ -321,6 +321,53 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('warms shared authorization before Watch without dereferencing media', async () => {
+    const library = configuredLibrary();
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/warm-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'chat-warm',
+        accessBasis: 'history',
+      },
+      secret,
+    );
+
+    try {
+      await expect(
+        library.authorizePlayableStream({ eName: grant.eName }, streamId),
+      ).resolves.toBeUndefined();
+      expect(probe).toHaveBeenCalledTimes(1);
+
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (url: URL) => {
+          if (url.pathname === '/resolve') {
+            return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+          }
+          if (url.pathname === '/files/warm-file') {
+            return new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/warm-video.mp4' },
+            });
+          }
+          throw new Error(`Unexpected request: ${url.pathname}`);
+        }),
+      );
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/warm-video.mp4',
+      );
+      expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('falls back to the viewer’s current Chat grant when a source mirror omits the viewer', async () => {
     const library = configuredLibrary();
     vi.stubGlobal(
