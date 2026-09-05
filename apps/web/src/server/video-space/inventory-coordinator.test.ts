@@ -11,6 +11,7 @@ import { completeInventory } from './completeness';
 import type { InventorySourceCounts } from './discovery';
 import { createInventoryCoordinator, publicLibraryItems } from './inventory-coordinator';
 import { createMemoryInventoryJobStore, setInventoryJobStoreForTests } from './job-store';
+import { resetSharedAccessCacheForTests } from './shared-access-cache';
 
 type SnapshotHandler = (
   library: MeshengerLibrary,
@@ -37,12 +38,14 @@ function library(items: MeshengerVideo[], completeness = completeInventory): Mes
 describe('inventory coordinator', () => {
   beforeEach(() => {
     setInventoryJobStoreForTests(createMemoryInventoryJobStore());
+    resetSharedAccessCacheForTests();
   });
 
   afterEach(() => {
     vi.useRealTimers();
     setInventoryJobStoreForTests(undefined);
     setOperationalLogSinkForTests(undefined);
+    resetSharedAccessCacheForTests();
   });
 
   it('scopes owned and shared scans and coalesces in-flight work', async () => {
@@ -163,11 +166,17 @@ describe('inventory coordinator', () => {
       ttlMs: 60_000,
     });
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
-    expect(first.items).toEqual([]);
+    expect(first.items).toEqual([
+      expect.objectContaining({ id: 'shared-1', sourceAccess: 'checking' }),
+    ]);
     expect(first.discovery).toBe('complete');
-    const again = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
-    expect(again.metrics.cache).toBe('hit');
-    expect(again.items).toEqual([]);
+    await vi.waitFor(async () => {
+      const afterRecheck = await coordinator.getSnapshot(
+        { eName: '@person.w3id' },
+        { scope: 'shared' },
+      );
+      expect(afterRecheck.items).toEqual([]);
+    });
     expect(scanLibrary).toHaveBeenCalledTimes(1);
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
   });
@@ -238,12 +247,17 @@ describe('inventory coordinator', () => {
     });
 
     await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    await vi.waitFor(() => expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1));
+    await vi.waitFor(async () => {
+      const settled = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+      expect(settled.items[0]?.sourceAccess).toBeUndefined();
+    });
     await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
 
     currentTime += 30_000;
     await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
-    expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(2);
+    await vi.waitFor(() => expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(2));
   });
 
   it('keeps a retryable shared source visible but disabled without rescanning the library', async () => {
@@ -281,24 +295,25 @@ describe('inventory coordinator', () => {
       sourceAccess: 'checking',
       streamIds: ['opaque-stream'],
     });
-    expect(first.discovery).toBe('refreshing');
+    expect(first.discovery).toBe('complete');
 
-    const afterProbeFailure = await coordinator.getSnapshot(
-      { eName: '@person.w3id' },
-      { scope: 'all' },
-    );
-    expect(afterProbeFailure.items.map((item) => item.title)).toEqual([
-      'Personal clip',
-      'Shared clip',
-    ]);
-    expect(afterProbeFailure.metrics.cache).toBe('hit');
-    expect(afterProbeFailure.discovery).toBe('refreshing');
-    expect(afterProbeFailure.completeness).toMatchObject({
+    let afterProbeFailure: Awaited<ReturnType<typeof coordinator.getSnapshot>> | undefined;
+    await vi.waitFor(async () => {
+      afterProbeFailure = await coordinator.getSnapshot(
+        { eName: '@person.w3id' },
+        { scope: 'all' },
+      );
+      expect(afterProbeFailure.discovery).toBe('refreshing');
+    });
+    const retrySnapshot = afterProbeFailure as Awaited<ReturnType<typeof coordinator.getSnapshot>>;
+    expect(retrySnapshot.items.map((item) => item.title)).toEqual(['Personal clip', 'Shared clip']);
+    expect(retrySnapshot.metrics.cache).toBe('hit');
+    expect(retrySnapshot.completeness).toMatchObject({
       complete: false,
       retryNeeded: true,
       deferred: 1,
     });
-    expect(JSON.stringify(afterProbeFailure)).not.toContain('@group.w3id');
+    expect(JSON.stringify(retrySnapshot)).not.toContain('@group.w3id');
     expect(scanLibrary).toHaveBeenCalledTimes(1);
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
     expect(operationalLogs).toHaveLength(1);
@@ -344,9 +359,17 @@ describe('inventory coordinator', () => {
     expect(first.items.map((item) => item.title)).toEqual(['Personal clip', 'Shared clip']);
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
 
-    const afterTimeout = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
-    expect(afterTimeout.items.map((item) => item.title)).toEqual(['Personal clip', 'Shared clip']);
-    expect(afterTimeout.discovery).toBe('refreshing');
+    await vi.waitFor(async () => {
+      const afterTimeout = await coordinator.getSnapshot(
+        { eName: '@person.w3id' },
+        { scope: 'all' },
+      );
+      expect(afterTimeout.items.map((item) => item.title)).toEqual([
+        'Personal clip',
+        'Shared clip',
+      ]);
+      expect(afterTimeout.discovery).toBe('refreshing');
+    });
   });
 
   it('checks the exact conversation and its authorized group fallback before showing history-shared media', async () => {
@@ -588,12 +611,18 @@ describe('inventory coordinator', () => {
       log: () => undefined,
     });
 
-    const snapshot = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
-    expect(snapshot.items).toEqual([
-      expect.objectContaining({ sharedVia: 'conversation', sharedBy: 'Ada Lovelace' }),
-    ]);
-    expect(JSON.stringify(snapshot.items)).not.toContain('@friend.w3id');
-    expect(JSON.stringify(snapshot.items)).not.toContain('private-chat-123');
+    await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    await vi.waitFor(async () => {
+      const snapshot = await coordinator.getSnapshot(
+        { eName: '@person.w3id' },
+        { scope: 'shared' },
+      );
+      expect(snapshot.items).toEqual([
+        expect.objectContaining({ sharedVia: 'conversation', sharedBy: 'Ada Lovelace' }),
+      ]);
+      expect(JSON.stringify(snapshot.items)).not.toContain('@friend.w3id');
+      expect(JSON.stringify(snapshot.items)).not.toContain('private-chat-123');
+    });
     expect(resolveSharedSourceNames).toHaveBeenCalledWith(['@friend.w3id']);
   });
 
@@ -763,7 +792,7 @@ describe('inventory coordinator', () => {
       log: () => undefined,
     });
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
-    expect(first.discovery).toBe('partial');
+    expect(first.discovery).toBe('refreshing');
     expect(first.items).toEqual([]);
     expect(
       scanLibrary.mock.calls.every((call) => (call[1] as { drain?: boolean }).drain !== true),

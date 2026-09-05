@@ -24,6 +24,7 @@ import {
   inventoryDiscovery,
 } from './discovery';
 import { mapPool } from './map-pool';
+import { coalesceSharedAccessProbe } from './shared-access-cache';
 
 const cacheTtlMs = 45_000;
 const revalidateConcurrency = 4;
@@ -89,8 +90,12 @@ interface CacheEntry {
   resolvedSharedSourceNames: Set<string>;
   /** Shared cards whose current source probe is retryable, never denied. */
   checkingSharedItemIds: Set<string>;
+  /** One background recheck; never make the private catalogue wait for it. */
+  sharedRevalidation: Promise<void> | undefined;
   /** Emit at most one aggregate event while the same shared retry state persists. */
   sharedRetryReported: boolean;
+  /** Source attribution is decorative and must stay off the first-card path. */
+  sharedSourceNamesInflight: Promise<void> | undefined;
 }
 
 interface CachedSharedSpaceAccess {
@@ -185,7 +190,9 @@ export function createInventoryCoordinator(options?: {
       sharedSourceNames: previous?.sharedSourceNames ?? new Map(),
       resolvedSharedSourceNames: previous?.resolvedSharedSourceNames ?? new Set(),
       checkingSharedItemIds: previous?.checkingSharedItemIds ?? new Set(),
+      sharedRevalidation: undefined,
       sharedRetryReported: previous?.sharedRetryReported ?? false,
+      sharedSourceNamesInflight: undefined,
       ...(previous?.snapshot.items.length
         ? { firstResultAt: previous.firstResultAt ?? now() }
         : {}),
@@ -240,14 +247,15 @@ export function createInventoryCoordinator(options?: {
     cache: InventoryCacheOutcome,
   ): Promise<InventorySnapshot> {
     if (entry.firstResultAt === undefined) await entry.firstReady;
-    let snapshot = entry.snapshot;
-    // Discovery establishes where a shared reference came from, but the card
-    // must not offer playback until that source proves the viewer still has
-    // access. Check fresh snapshots too: otherwise a first-load card can
-    // briefly offer Watch and then be rejected by the media route.
+    // A shared source recheck can need several remote eVault pages. Preserve
+    // the previously discovered viewer-bound card and recheck in the
+    // background instead of making the catalogue (or every Watch click) wait
+    // for all sources. The media route remains the authoritative byte-access
+    // enforcement point.
     if (entry.scope === 'shared' || entry.scope === 'all') {
-      snapshot = await revalidateShared(user, entry);
+      scheduleSharedRevalidation(user, entry);
     }
+    const snapshot = entry.snapshot;
     const discovery = inventoryDiscovery({
       scanning: entry.scanning,
       completeness: snapshot.completeness,
@@ -270,12 +278,16 @@ export function createInventoryCoordinator(options?: {
         metrics,
       }),
     );
+    scheduleSharedSourceNames(snapshot.items, entry);
+    const checkingSharedItemIds = new Set(entry.checkingSharedItemIds);
+    for (const item of snapshot.items) {
+      if (sharedItemNeedsRevalidation(item, entry, now(), cachedSharedAccessTtlMs)) {
+        checkingSharedItemIds.add(item.id);
+      }
+    }
     return {
-      items: publicLibraryItems(
-        snapshot.items,
-        await sharedSourceNamesFor(snapshot.items, entry),
-      ).map((item) =>
-        entry.checkingSharedItemIds.has(item.id)
+      items: publicLibraryItems(snapshot.items, entry.sharedSourceNames).map((item) =>
+        checkingSharedItemIds.has(item.id)
           ? // A transient source probe must never turn an already-discovered,
             // viewer-bound share into a dead card. The media route repeats the
             // authorization check when Watch is opened (and for every media
@@ -293,10 +305,8 @@ export function createInventoryCoordinator(options?: {
     };
   }
 
-  async function sharedSourceNamesFor(
-    items: readonly MeshengerVideo[],
-    entry: CacheEntry,
-  ): Promise<ReadonlyMap<string, string>> {
+  function scheduleSharedSourceNames(items: readonly MeshengerVideo[], entry: CacheEntry): void {
+    if (entry.sharedSourceNamesInflight) return;
     const eNames = [
       ...new Set(
         items
@@ -310,22 +320,44 @@ export function createInventoryCoordinator(options?: {
           .filter((eName) => !entry.resolvedSharedSourceNames.has(eName)),
       ),
     ];
-    if (eNames.length === 0) return entry.sharedSourceNames;
-    try {
-      const resolved = await withTimeout(
-        resolveSharedSourceNames(eNames),
-        sharedSourceNameTimeoutMs,
-      );
-      for (const eName of eNames) {
-        entry.resolvedSharedSourceNames.add(eName);
-        const name = resolved.get(eName)?.trim();
-        if (name) entry.sharedSourceNames.set(eName, name);
-      }
-    } catch {
-      // Attribution must never delay or block a verified private library.
-      // Leave unresolved names uncached so a later response can retry.
+    if (eNames.length === 0) return;
+    entry.sharedSourceNamesInflight = withTimeout(
+      Promise.resolve().then(() => resolveSharedSourceNames(eNames)),
+      sharedSourceNameTimeoutMs,
+    )
+      .then((resolved) => {
+        for (const eName of eNames) {
+          entry.resolvedSharedSourceNames.add(eName);
+          const name = resolved.get(eName)?.trim();
+          if (name) entry.sharedSourceNames.set(eName, name);
+        }
+      })
+      .catch(() => {
+        // Attribution must never delay or block a verified private library.
+        // Leave unresolved names uncached so a later response can retry.
+      })
+      .finally(() => {
+        entry.sharedSourceNamesInflight = undefined;
+      });
+  }
+
+  function scheduleSharedRevalidation(
+    user: Pick<AuthUser, 'eName' | 'eVaultUri'>,
+    entry: CacheEntry,
+  ): void {
+    if (entry.sharedRevalidation || !hasStaleSharedAccess(entry, now(), cachedSharedAccessTtlMs)) {
+      return;
     }
-    return entry.sharedSourceNames;
+    let pending: Promise<void>;
+    pending = revalidateShared(user, entry)
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => {
+        if (entry.sharedRevalidation === pending) entry.sharedRevalidation = undefined;
+      });
+    entry.sharedRevalidation = pending;
   }
 
   async function revalidateShared(
@@ -349,7 +381,12 @@ export function createInventoryCoordinator(options?: {
       let access: SharedSpaceAccess;
       try {
         access = await withTimeout(
-          getScanner().probeSharedSpaceAccess(user, space),
+          coalesceSharedAccessProbe(
+            user.eName,
+            space,
+            () => getScanner().probeSharedSpaceAccess(user, space),
+            checkedAt,
+          ),
           revalidationTimeoutMs,
         );
       } catch {
@@ -431,7 +468,9 @@ export function createInventoryCoordinator(options?: {
           sharedSourceNames: new Map(),
           resolvedSharedSourceNames: new Set(),
           checkingSharedItemIds: new Set(),
+          sharedRevalidation: undefined,
           sharedRetryReported: false,
+          sharedSourceNamesInflight: undefined,
         };
         if (!previous) {
           entry.scanning = true;
@@ -661,6 +700,25 @@ function sharedAccessIsFresh(cached: CachedSharedSpaceAccess, now: number, ttlMs
   const maxAge =
     cached.value.access === 'retry' ? Math.min(ttlMs, sharedAccessRetryCacheTtlMs) : ttlMs;
   return now - cached.checkedAt < maxAge;
+}
+
+function hasStaleSharedAccess(entry: CacheEntry, checkedAt: number, ttlMs: number): boolean {
+  return entry.spaces.some((space) => {
+    const cached = entry.sharedAccess.get(sharedSpaceProbeKey(space));
+    return !cached || !sharedAccessIsFresh(cached, checkedAt, ttlMs);
+  });
+}
+
+function sharedItemNeedsRevalidation(
+  item: MeshengerVideo,
+  entry: CacheEntry,
+  checkedAt: number,
+  ttlMs: number,
+): boolean {
+  return sharedItemProbes(item).some((space) => {
+    const cached = entry.sharedAccess.get(sharedSpaceProbeKey(space));
+    return !cached || !sharedAccessIsFresh(cached, checkedAt, ttlMs);
+  });
 }
 
 function pruneSharedAccess(entry: CacheEntry): void {

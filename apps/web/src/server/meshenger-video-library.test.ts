@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
@@ -13,6 +13,10 @@ import { VIDEO_SPACE_CATALOGUE_VERSION } from './video-space/catalogue-version';
 import { emptyInventoryCoverage, emptyInventoryMediaCounts } from './video-space/completeness';
 import { documentedAuthorizationOntologies } from './video-space/documented-sources';
 import { createMemoryInventoryJobStore } from './video-space/job-store';
+import {
+  rememberVerifiedSharedAccess,
+  resetSharedAccessCacheForTests,
+} from './video-space/shared-access-cache';
 import { titleFromFilename } from './video-space/titles';
 
 const t = (filename: string) => titleFromFilename(filename) ?? filename;
@@ -48,6 +52,10 @@ function configuredLibrary() {
 }
 
 describe('Meshenger video library', () => {
+  afterEach(() => {
+    resetSharedAccessCacheForTests();
+  });
+
   it('keeps deferred resolver metadata small while retaining title and media hints', () => {
     const metadata = compactMediaSourceMetadata({
       type: 'file',
@@ -253,6 +261,59 @@ describe('Meshenger video library', () => {
         'https://media.example/cache-shared-video.mp4',
       ]);
       expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reuses a fresh library verification when the viewer opens that shared video', async () => {
+    const library = configuredLibrary();
+    const viewer = '@library-cache-viewer.w3id';
+    const source = {
+      eName: '@library-cache-friend.w3id',
+      kind: 'direct' as const,
+      chatId: 'chat-1',
+    };
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    rememberVerifiedSharedAccess(viewer, source);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({
+            ename: '@library-cache-friend.w3id',
+            uri: 'https://library-cache-friend-vault.example',
+          });
+        }
+        if (url.pathname === '/files/library-cache-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/library-cache.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        eName: viewer,
+        fileUri: 'w3ds://file?id=@library-cache-friend.w3id/library-cache-file',
+        accessScope: 'shared',
+        sourceSpaceKey: source.eName,
+        sourceChatId: source.chatId,
+        accessBasis: 'history',
+      },
+      secret,
+    );
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: viewer }, streamId)).resolves.toBe(
+        'https://media.example/library-cache.mp4',
+      );
+      expect(probe).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }
