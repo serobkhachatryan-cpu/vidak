@@ -12,7 +12,12 @@ import {
   type VideoSpaceLibraryItem,
   videoSpaceVisibilityLabels,
 } from '../home/video-space-model';
-import { elapsedRecordingDuration, totalRecordingDuration } from '../meshenger/segmented-playback';
+import {
+  elapsedRecordingDuration,
+  recordingPositionAt,
+  recordingTimelineDuration,
+  totalRecordingDuration,
+} from '../meshenger/segmented-playback';
 import { WatchRecoveryActions } from './watch-recovery-actions';
 
 export function LibraryWatchPage({ itemId }: { itemId: string }) {
@@ -159,10 +164,15 @@ function LibraryWatchPlayer({
   const [playbackError, setPlaybackError] = useState(false);
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
   const [playerLoading, setPlayerLoading] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
   const continuePlayback = useRef(false);
+  const pendingSegmentSeek = useRef<number | undefined>(undefined);
+  const playerContainer = useRef<HTMLDivElement>(null);
   const player = useRef<HTMLVideoElement>(null);
   const streamId = video.streamIds?.[segmentIndex] ?? video.streamIds?.[0];
   const totalDuration = totalRecordingDuration(video.durationSeconds, segmentDurations);
+  const timelineDuration = recordingTimelineDuration(segmentDurations);
   const elapsedDuration = elapsedRecordingDuration(
     segmentIndex,
     currentSegmentSeconds,
@@ -176,12 +186,67 @@ function LibraryWatchPlayer({
     setPlaybackError(false);
     setPlaybackAttempt(0);
     setPlayerLoading(true);
+    setIsPlaying(false);
+    setMuted(false);
     continuePlayback.current = false;
+    pendingSegmentSeek.current = undefined;
   }, [video.id]);
 
   useEffect(() => {
     setPlayerLoading(true);
   }, [streamId, playbackAttempt]);
+
+  useEffect(() => {
+    const streamIds = video.streamIds ?? [];
+    if (streamIds.length < 2) return;
+
+    let cancelled = false;
+    const readDuration = (candidateStreamId: string) =>
+      new Promise<number | undefined>((resolve) => {
+        const probe = document.createElement('video');
+        let settled = false;
+        const finish = (duration: number | undefined) => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(timeout);
+          probe.removeAttribute('src');
+          probe.load();
+          resolve(duration);
+        };
+        const timeout = window.setTimeout(() => finish(undefined), 12_000);
+        probe.preload = 'metadata';
+        probe.muted = true;
+        probe.onloadedmetadata = () => {
+          const duration = probe.duration;
+          finish(Number.isFinite(duration) && duration > 0 ? duration : undefined);
+        };
+        probe.onerror = () => finish(undefined);
+        probe.src = `/api/evault/videos/${encodeURIComponent(candidateStreamId)}?metadata=1`;
+      });
+
+    void (async () => {
+      // Probe one source at a time after the viewer has opened the recording.
+      // This gives the player an exact, recording-level seek map without
+      // competing with interactive playback or downloading media bodies.
+      for (let index = 1; index < streamIds.length; index += 1) {
+        const candidateStreamId = streamIds[index];
+        if (!candidateStreamId) continue;
+        const duration = await readDuration(candidateStreamId);
+        if (cancelled) return;
+        if (duration === undefined) continue;
+        setSegmentDurations((current) => {
+          if (current[index] === duration) return current;
+          const next = [...current];
+          next[index] = duration;
+          return next;
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [video.id, video.streamIds]);
 
   if (!streamId) {
     return (
@@ -198,6 +263,45 @@ function LibraryWatchPlayer({
       />
     );
   }
+
+  const hasMultipleSources = (video.streamIds?.length ?? 0) > 1;
+  const displayDuration = timelineDuration ?? totalDuration;
+  const playbackPosition = Math.min(elapsedDuration, displayDuration ?? elapsedDuration);
+
+  const togglePlayback = () => {
+    const element = player.current;
+    if (!element) return;
+    if (element.paused) {
+      void element.play().catch(() => setPlaybackError(true));
+      return;
+    }
+    element.pause();
+  };
+
+  const seekRecording = (nextSeconds: number) => {
+    const target = recordingPositionAt(nextSeconds, segmentDurations);
+    if (!target) return;
+    const element = player.current;
+    const shouldContinue = Boolean(element && !element.paused);
+    if (target.segmentIndex === segmentIndex && element) {
+      element.currentTime = target.seconds;
+      setCurrentSegmentSeconds(target.seconds);
+      return;
+    }
+    pendingSegmentSeek.current = target.seconds;
+    continuePlayback.current = shouldContinue;
+    setCurrentSegmentSeconds(target.seconds);
+    setPlayerLoading(true);
+    setSegmentIndex(target.segmentIndex);
+  };
+
+  const toggleFullscreen = () => {
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+      return;
+    }
+    void playerContainer.current?.requestFullscreen().catch(() => undefined);
+  };
 
   return (
     <div className="space-y-4">
@@ -223,18 +327,25 @@ function LibraryWatchPlayer({
           }
         />
       ) : (
-        <div className="relative">
+        <div ref={playerContainer} className="relative bg-black">
           {/* biome-ignore lint/a11y/useMediaCaption: Historical source recordings do not include caption tracks. */}
           <video
             key={`${streamId}:${playbackAttempt}`}
             ref={player}
             aria-label={video.title}
             className="aspect-video w-full rounded-xl bg-black"
-            controls
+            controls={!hasMultipleSources}
+            muted={muted}
+            playsInline
             preload="metadata"
             src={`/api/evault/videos/${encodeURIComponent(streamId)}?attempt=${playbackAttempt}`}
             onCanPlay={() => {
               setPlayerLoading(false);
+              const pendingSeek = pendingSegmentSeek.current;
+              if (pendingSeek !== undefined && player.current) {
+                player.current.currentTime = pendingSeek;
+                pendingSegmentSeek.current = undefined;
+              }
               if (!continuePlayback.current) return;
               continuePlayback.current = false;
               void player.current?.play().catch(() => undefined);
@@ -254,6 +365,8 @@ function LibraryWatchPlayer({
                 return next;
               });
             }}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
             onTimeUpdate={() => {
               const position = player.current?.currentTime;
               if (typeof position === 'number' && Number.isFinite(position) && position >= 0) {
@@ -280,14 +393,53 @@ function LibraryWatchPlayer({
           ) : null}
         </div>
       )}
-      {(video.streamIds?.length ?? 0) > 1 ? (
-        <Text size="sm" tone="muted">
-          One recording · part {segmentIndex + 1} of {video.streamIds?.length} · continues
-          automatically
-          {totalDuration !== undefined
-            ? ` · ${formatSpaceDuration(Math.min(elapsedDuration, totalDuration))} / ${formatSpaceDuration(totalDuration)}`
-            : ''}
-        </Text>
+      {hasMultipleSources ? (
+        <div className="space-y-2" aria-label="Recording playback controls">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              type="button"
+              onClick={togglePlayback}
+            >
+              {isPlaying ? 'Pause' : 'Play'} recording
+            </button>
+            <button
+              className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              type="button"
+              onClick={() => setMuted((current) => !current)}
+            >
+              {muted ? 'Unmute' : 'Mute'}
+            </button>
+            <button
+              className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              type="button"
+              onClick={toggleFullscreen}
+            >
+              Full screen
+            </button>
+            <Text size="sm" tone="muted">
+              {displayDuration !== undefined
+                ? `${formatSpaceDuration(playbackPosition)} / ${formatSpaceDuration(displayDuration)}`
+                : `${formatSpaceDuration(elapsedDuration)} elapsed`}
+            </Text>
+          </div>
+          <input
+            aria-label="Seek within recording"
+            className="h-2 w-full cursor-pointer accent-primary disabled:cursor-not-allowed"
+            disabled={timelineDuration === undefined}
+            max={timelineDuration ?? 0}
+            min={0}
+            step="any"
+            type="range"
+            value={Math.min(playbackPosition, timelineDuration ?? 0)}
+            onChange={(event) => seekRecording(Number(event.target.value))}
+          />
+          <Text size="sm" tone="muted">
+            {timelineDuration !== undefined
+              ? 'One continuous recording. Use the timeline to move anywhere in the call.'
+              : 'One continuous recording. Preparing the full timeline for seeking…'}
+          </Text>
+        </div>
       ) : null}
     </div>
   );
