@@ -7,12 +7,17 @@ const smokeModule = (await import(
   pathToFileURL(resolve(repoRoot, 'scripts/verify-production.mjs')).href
 )) as {
   ProductionSmokeError: new (message: string) => Error;
-  runProductionSmoke: (input: { origin: string; fetchImpl: typeof fetch }) => Promise<{
+  runProductionSmoke: (input: {
+    origin: string;
+    playbackGrantEndpoint?: string;
+    fetchImpl: typeof fetch;
+  }) => Promise<{
     publicChannels: number;
     publicVideos: number;
     checkedPublicPosters: number;
     checkedPublicPlayback: number;
     searchChecked: boolean;
+    checkedPlaybackGrantEndpoint: boolean;
   }>;
 };
 
@@ -29,6 +34,18 @@ function createFetch(overrides: Record<string, unknown> = {}) {
   return vi.fn(async (request: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(typeof request === 'string' ? request : request.toString());
     const path = `${url.pathname}${url.search}`;
+    if (
+      url.origin === 'https://meshenger.example' &&
+      path === '/api/integrations/vidak/recording-playback-grant'
+    ) {
+      expect(init).toMatchObject({
+        method: 'POST',
+        body: '{}',
+        headers: { 'content-type': 'application/json' },
+        redirect: 'manual',
+      });
+      return new Response(null, { status: 401, headers: { 'cache-control': 'no-store' } });
+    }
     if (path === '/') {
       return new Response('<!doctype html>', {
         headers: {
@@ -86,7 +103,19 @@ describe('production smoke verifier', () => {
       checkedPublicPosters: 1,
       checkedPublicPlayback: 1,
       searchChecked: true,
+      checkedPlaybackGrantEndpoint: false,
     });
+  });
+
+  it('optionally proves the deployed source grant rejects an unsigned request', async () => {
+    const summary = await smokeModule.runProductionSmoke({
+      origin,
+      playbackGrantEndpoint:
+        'https://meshenger.example/api/integrations/vidak/recording-playback-grant',
+      fetchImpl: createFetch(),
+    });
+
+    expect(summary.checkedPlaybackGrantEndpoint).toBe(true);
   });
 
   it('rejects a public identity-field regression without echoing its value', async () => {

@@ -4,7 +4,11 @@ import type { Video } from '@w3ds/types';
 import { Button, VideoSpacePoster } from '@w3ds/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useRef } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
+import {
+  scheduleSharedVideoAuthorizationWarmup,
+  warmSharedVideoAuthorization,
+} from './shared-video-authorization-warmup';
 import {
   canPlayLibraryVideo,
   libraryCardDetails,
@@ -97,25 +101,37 @@ export function OwnedVideoCard({
 
 export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   const router = useRouter();
-  const authorizationWarmupStarted = useRef(false);
+  const cancelScheduledAuthorization = useRef<(() => void) | undefined>(undefined);
   const visibilityLabel = videoSpaceVisibilityLabels[video.visibility];
   const watchHref = `/watch/space/${encodeURIComponent(video.id)}`;
   const canPlay = canPlayLibraryVideo(video);
+  const cancelSharedAuthorizationWarmup = useCallback(() => {
+    cancelScheduledAuthorization.current?.();
+    cancelScheduledAuthorization.current = undefined;
+  }, []);
   const warmSharedAuthorization = useCallback(() => {
+    cancelSharedAuthorizationWarmup();
     const streamId = video.streamIds?.[0];
-    if (video.accessScope !== 'shared' || !streamId || authorizationWarmupStarted.current) return;
-    authorizationWarmupStarted.current = true;
-    // This proves only the current viewer's source access. It deliberately
-    // does not resolve or preload private media bytes before Watch is chosen.
-    void fetch(`/api/evault/videos/${encodeURIComponent(streamId)}/authorize`, {
-      cache: 'no-store',
-      credentials: 'same-origin',
-    }).catch(() => {
-      // A click still uses the authoritative media route. Let a later hover
-      // make another best-effort attempt after a transient network failure.
-      authorizationWarmupStarted.current = false;
-    });
-  }, [video.accessScope, video.streamIds]);
+    if (video.accessScope !== 'shared' || !streamId) return;
+    // Pointer-down/click remains the immediate, authoritative warmup path.
+    warmSharedVideoAuthorization(`/api/evault/videos/${encodeURIComponent(streamId)}/authorize`);
+  }, [cancelSharedAuthorizationWarmup, video.accessScope, video.streamIds]);
+  const scheduleSharedAuthorizationWarmup = useCallback(() => {
+    const streamId = video.streamIds?.[0];
+    if (video.accessScope !== 'shared' || !streamId) return;
+    cancelSharedAuthorizationWarmup();
+    // A short dwell offers a likely Watch click a head start without starting
+    // authorization for every visible card or building a hover-request burst.
+    cancelScheduledAuthorization.current = scheduleSharedVideoAuthorizationWarmup(
+      `/api/evault/videos/${encodeURIComponent(streamId)}/authorize`,
+    );
+  }, [cancelSharedAuthorizationWarmup, video.accessScope, video.streamIds]);
+  useEffect(
+    () => () => {
+      cancelSharedAuthorizationWarmup();
+    },
+    [cancelSharedAuthorizationWarmup],
+  );
   const poster = (
     <VideoSpacePoster
       title={video.title}
@@ -137,10 +153,15 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
       {canPlay ? (
         <Link
           href={watchHref}
+          prefetch={false}
           aria-label={`Watch ${video.title}`}
           className="block"
-          onPointerEnter={warmSharedAuthorization}
-          onFocus={warmSharedAuthorization}
+          onPointerEnter={scheduleSharedAuthorizationWarmup}
+          onPointerLeave={cancelSharedAuthorizationWarmup}
+          onFocus={scheduleSharedAuthorizationWarmup}
+          onBlur={cancelSharedAuthorizationWarmup}
+          onPointerDown={warmSharedAuthorization}
+          onClick={warmSharedAuthorization}
         >
           {poster}
         </Link>
@@ -155,8 +176,11 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
         {canPlay ? (
           <Button
             size="sm"
-            onPointerEnter={warmSharedAuthorization}
-            onFocus={warmSharedAuthorization}
+            onPointerEnter={scheduleSharedAuthorizationWarmup}
+            onPointerLeave={cancelSharedAuthorizationWarmup}
+            onFocus={scheduleSharedAuthorizationWarmup}
+            onBlur={cancelSharedAuthorizationWarmup}
+            onPointerDown={warmSharedAuthorization}
             onClick={() => {
               warmSharedAuthorization();
               router.push(watchHref);

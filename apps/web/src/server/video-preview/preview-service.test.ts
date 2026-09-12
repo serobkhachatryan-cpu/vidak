@@ -12,6 +12,11 @@ import {
   type MediaUploadSession,
 } from '../media-storage';
 import { setOperationalLogSinkForTests } from '../ops-observability';
+import {
+  reserveInteractivePlayback,
+  resetBackgroundWorkPriorityForTests,
+} from '../video-space/background-work-priority';
+import type { PreviewFrameSource } from './frame-extractor';
 import { sanitizeOwnedVideoForLibrary, VideoPreviewService } from './preview-service';
 import { InMemoryVideoPreviewStore } from './preview-store';
 
@@ -80,14 +85,18 @@ async function seedOwnedDraft(
 
 function createService(options?: {
   captureSeconds?: number;
-  extract?: () => Promise<{ jpeg: Uint8Array; captureSeconds: number } | undefined>;
+  extract?: (
+    source: PreviewFrameSource,
+    options?: { signal?: AbortSignal },
+  ) => Promise<{ jpeg: Uint8Array; captureSeconds: number } | undefined>;
   evaultUrl?: string;
 }) {
   const videos = new InMemoryCreatorVideoStore();
   const media = new InMemoryMediaAssetStore();
   const storage = new MemoryMediaStorage();
+  const store = new InMemoryVideoPreviewStore();
   const service = new VideoPreviewService({
-    store: new InMemoryVideoPreviewStore(),
+    store,
     storage,
     videos,
     media,
@@ -100,7 +109,17 @@ function createService(options?: {
           }),
     },
     evault: {
-      inspectStream: (_user, streamId) => {
+      inspectBoundStream: (_user, streamId) => {
+        if (streamId === 'other-stream') {
+          const error = new Error('This video is not available to this account.') as Error & {
+            status: number;
+          };
+          error.status = 403;
+          throw error;
+        }
+        return { fileUri: `w3ds://file?id=@owner.w3id/${streamId}` };
+      },
+      inspectPlayableStream: async (_user, streamId) => {
         if (streamId === 'other-stream') {
           const error = new Error('This video is not available to this account.') as Error & {
             status: number;
@@ -113,12 +132,218 @@ function createService(options?: {
       resolveMediaUrl: async () => options?.evaultUrl ?? 'https://media.example/private.mp4',
     },
   });
-  return { service, videos, media, storage };
+  return { service, videos, media, storage, store };
 }
 
 describe('VideoPreviewService', () => {
   afterEach(() => {
     setOperationalLogSinkForTests(undefined);
+    resetBackgroundWorkPriorityForTests();
+  });
+
+  it('preempts an active shared preview when playback begins', async () => {
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    const { service, store } = createService({
+      extract: async (_source, options) => {
+        markStarted();
+        await new Promise<void>((resolve) => {
+          options?.signal?.addEventListener('abort', () => resolve(), { once: true });
+        });
+        return undefined;
+      },
+    });
+
+    await service.scheduleLibraryBackfill({ eName: '@viewer.w3id' }, [
+      { streamIds: ['shared-stream'] },
+    ]);
+    await started;
+    reserveInteractivePlayback(30_000);
+
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/shared-stream'),
+      ).resolves.toMatchObject({ status: 'pending' });
+    });
+    await expect(
+      service.openEVaultPreview({ eName: '@viewer.w3id' }, 'shared-stream'),
+    ).resolves.toEqual({ status: 'processing' });
+  });
+
+  it('cancels an in-flight preview source resolution when playback takes priority', async () => {
+    let markResolutionStarted: () => void = () => undefined;
+    const resolutionStarted = new Promise<void>((resolve) => {
+      markResolutionStarted = resolve;
+    });
+    let resolutionSignal: AbortSignal | undefined;
+    const inspectPlayableStream = vi.fn();
+    const resolveMediaUrl = vi.fn(
+      async (_user, _streamId, options?: { priority?: 'background'; signal?: AbortSignal }) => {
+        resolutionSignal = options?.signal;
+        markResolutionStarted();
+        await new Promise<void>((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => reject(new Error('cancelled')), {
+            once: true,
+          });
+        });
+        return 'https://media.example/private.mp4';
+      },
+    );
+    const store = new InMemoryVideoPreviewStore();
+    const service = new VideoPreviewService({
+      store,
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      extractor: { extractUsefulFrame: async () => ({ jpeg, captureSeconds: 3 }) },
+      evault: {
+        inspectBoundStream: () => ({ fileUri: 'w3ds://file?id=@owner.w3id/shared-stream' }),
+        inspectPlayableStream,
+        resolveMediaUrl,
+      },
+    });
+
+    await service.scheduleLibraryBackfill({ eName: '@viewer.w3id' }, [
+      { streamIds: ['shared-stream'] },
+    ]);
+    await resolutionStarted;
+    reserveInteractivePlayback(30_000);
+
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/shared-stream'),
+      ).resolves.toMatchObject({ status: 'pending' });
+    });
+    expect(inspectPlayableStream).not.toHaveBeenCalled();
+    expect(resolveMediaUrl).toHaveBeenCalledWith(
+      { eName: '@viewer.w3id' },
+      'shared-stream',
+      expect.objectContaining({ priority: 'background' }),
+    );
+    expect(resolutionSignal?.aborted).toBe(true);
+  });
+
+  it('preempts an in-flight live poster authorization for interactive playback', async () => {
+    let markStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let authorizationSignal: AbortSignal | undefined;
+    const inspectPlayableStream = vi.fn(
+      async (_user, _streamId, options?: { priority?: 'background'; signal?: AbortSignal }) => {
+        authorizationSignal = options?.signal;
+        markStarted();
+        return new Promise<{ fileUri: string }>((_resolve, reject) => {
+          if (options?.signal?.aborted) {
+            reject(new Error('cancelled'));
+            return;
+          }
+          options?.signal?.addEventListener('abort', () => reject(new Error('cancelled')), {
+            once: true,
+          });
+        });
+      },
+    );
+    const service = new VideoPreviewService({
+      store: new InMemoryVideoPreviewStore(),
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      evault: {
+        inspectBoundStream: () => ({ fileUri: 'w3ds://file?id=@owner.w3id/shared-stream' }),
+        inspectPlayableStream,
+        resolveMediaUrl: async () => 'https://media.example/private.mp4',
+      },
+    });
+
+    const preview = service.openEVaultPreview({ eName: '@viewer.w3id' }, 'shared-stream');
+    await started;
+    reserveInteractivePlayback(30_000);
+
+    await expect(preview).resolves.toEqual({ status: 'processing' });
+    expect(authorizationSignal?.aborted).toBe(true);
+    expect(inspectPlayableStream).toHaveBeenCalledWith(
+      { eName: '@viewer.w3id' },
+      'shared-stream',
+      expect.objectContaining({ priority: 'background' }),
+    );
+  });
+
+  it('does not remotely authorize a cached eVault preview during catalogue backfill', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    const storage = new MemoryMediaStorage();
+    const storageKey = storage.createStorageKey();
+    await storage.write(storageKey, jpeg);
+    await store.create({
+      id: 'cached-preview-backfill',
+      sourceKind: 'evault-file',
+      sourceKey: 'w3ds://file?id=@owner.w3id/cached-stream',
+      storageKey,
+      status: 'ready',
+      contentType: 'image/jpeg',
+      byteSize: jpeg.byteLength,
+    });
+    const inspectBoundStream = vi.fn().mockReturnValue({
+      fileUri: 'w3ds://file?id=@owner.w3id/cached-stream',
+    });
+    const inspectPlayableStream = vi.fn();
+    const resolveMediaUrl = vi.fn();
+    const service = new VideoPreviewService({
+      store,
+      storage,
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      evault: { inspectBoundStream, inspectPlayableStream, resolveMediaUrl },
+    });
+
+    await service.scheduleLibraryBackfill({ eName: '@viewer.w3id' }, [
+      { streamIds: ['cached-stream'] },
+    ]);
+    await vi.waitFor(() => expect(inspectBoundStream).toHaveBeenCalledTimes(1));
+    expect(inspectPlayableStream).not.toHaveBeenCalled();
+    expect(resolveMediaUrl).not.toHaveBeenCalled();
+  });
+
+  it('queues uncached shared poster requests behind one background worker', async () => {
+    let active = 0;
+    let highestActive = 0;
+    let release: (() => void) | undefined;
+    const unblock = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { service, store } = createService({
+      extract: async () => {
+        active += 1;
+        highestActive = Math.max(highestActive, active);
+        await unblock;
+        active -= 1;
+        return { jpeg, captureSeconds: 3 };
+      },
+    });
+
+    await expect(
+      Promise.all(
+        ['one', 'two', 'three'].map((streamId) =>
+          service.openEVaultPreview({ eName: '@viewer.w3id' }, streamId),
+        ),
+      ),
+    ).resolves.toEqual([
+      { status: 'processing' },
+      { status: 'processing' },
+      { status: 'processing' },
+    ]);
+    await vi.waitFor(() => expect(active).toBe(1));
+    expect(highestActive).toBe(1);
+
+    release?.();
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/three'),
+      ).resolves.toMatchObject({ status: 'ready' });
+    });
+    expect(highestActive).toBe(1);
   });
 
   it('uses an existing valid poster when a ready thumbnail asset is present', async () => {
@@ -350,9 +575,57 @@ describe('VideoPreviewService', () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
-  it('uses a neutral poster when a valid eVault stream has no decodable frame', async () => {
-    const { service } = createService({ extract: async () => undefined });
+  it('does not serve a cached eVault poster after its live source access is revoked', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    const storage = new MemoryMediaStorage();
+    const storageKey = storage.createStorageKey();
+    await storage.write(storageKey, jpeg);
+    await store.create({
+      id: 'cached-preview',
+      sourceKind: 'evault-file',
+      sourceKey: 'w3ds://file?id=@owner.w3id/cached-stream',
+      storageKey,
+      status: 'ready',
+      contentType: 'image/jpeg',
+      byteSize: jpeg.byteLength,
+    });
+    const accessRevoked = Object.assign(new Error('source access is revoked'), { status: 403 });
+    const inspectPlayableStream = vi.fn().mockRejectedValue(accessRevoked);
+    const service = new VideoPreviewService({
+      store,
+      storage,
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      evault: {
+        inspectBoundStream: () => ({
+          fileUri: 'w3ds://file?id=@owner.w3id/cached-stream',
+        }),
+        inspectPlayableStream,
+        resolveMediaUrl: async () => 'https://media.example/private.mp4',
+      },
+    });
 
+    await expect(service.openEVaultPreview({ eName: '@owner.w3id' }, 'cached-stream')).rejects.toBe(
+      accessRevoked,
+    );
+    expect(inspectPlayableStream).toHaveBeenCalledWith(
+      { eName: '@owner.w3id' },
+      'cached-stream',
+      expect.objectContaining({ priority: 'background', signal: expect.anything() }),
+    );
+  });
+
+  it('uses a neutral poster when a queued eVault preview has no decodable frame', async () => {
+    const { service, store } = createService({ extract: async () => undefined });
+
+    await expect(
+      service.openEVaultPreview({ eName: '@owner.w3id' }, 'frame-less'),
+    ).resolves.toEqual({ status: 'processing' });
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/frame-less'),
+      ).resolves.toMatchObject({ status: 'failed' });
+    });
     const download = await service.openEVaultPreview({ eName: '@owner.w3id' }, 'frame-less');
 
     expect(download).toMatchObject({ status: 'ready', contentType: 'image/svg+xml' });
@@ -416,7 +689,10 @@ describe('VideoPreviewService', () => {
         extractUsefulFrame: async () => ({ jpeg, captureSeconds: 3 }),
       },
       evault: {
-        inspectStream: (_user, streamId) => ({
+        inspectBoundStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        inspectPlayableStream: async (_user, streamId) => ({
           fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
         }),
         resolveMediaUrl: async () => 'https://media.example/private.mp4',
@@ -436,7 +712,7 @@ describe('VideoPreviewService', () => {
     expect(record?.status).toBe('ready');
   });
 
-  it('limits scheduled private-library preview work to two concurrent jobs', async () => {
+  it('limits scheduled private-library preview work to one concurrent job', async () => {
     const store = new InMemoryVideoPreviewStore();
     let active = 0;
     let highestActive = 0;
@@ -459,7 +735,10 @@ describe('VideoPreviewService', () => {
         },
       },
       evault: {
-        inspectStream: (_user, streamId) => ({
+        inspectBoundStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        inspectPlayableStream: async (_user, streamId) => ({
           fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
         }),
         resolveMediaUrl: async (user, streamId) =>
@@ -473,15 +752,15 @@ describe('VideoPreviewService', () => {
       { streamIds: ['three'] },
     ]);
 
-    await vi.waitFor(() => expect(active).toBe(2));
-    expect(highestActive).toBe(2);
+    await vi.waitFor(() => expect(active).toBe(1));
+    expect(highestActive).toBe(1);
     release?.();
     await vi.waitFor(async () => {
       await expect(
         store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/three'),
       ).resolves.toMatchObject({ status: 'ready' });
     });
-    expect(highestActive).toBe(2);
+    expect(highestActive).toBe(1);
   });
 
   it('uses a fallback poster until scheduled retry can repair a rate-limited eVault preview', async () => {
@@ -493,7 +772,10 @@ describe('VideoPreviewService', () => {
       media: new InMemoryMediaAssetStore(),
       extractor: { extractUsefulFrame: async () => ({ jpeg, captureSeconds: 3 }) },
       evault: {
-        inspectStream: (_user, streamId) => ({
+        inspectBoundStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        inspectPlayableStream: async (_user, streamId) => ({
           fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
         }),
         resolveMediaUrl: async () => {
@@ -534,7 +816,10 @@ describe('VideoPreviewService', () => {
       media: new InMemoryMediaAssetStore(),
       extractor: { extractUsefulFrame: async () => ({ jpeg, captureSeconds: 3 }) },
       evault: {
-        inspectStream: (_user, streamId) => ({
+        inspectBoundStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        inspectPlayableStream: async (_user, streamId) => ({
           fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
         }),
         resolveMediaUrl: async () => {

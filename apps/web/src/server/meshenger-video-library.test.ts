@@ -7,18 +7,24 @@ import {
   compactMediaSourceMetadata,
   createMeshengerVideoLibrary,
   createMeshengerVideoStreamId,
+  type MediaAuthorizationTimingContext,
   resetMeshengerVideoLibraryCachesForTests,
   verifyMeshengerVideoStreamId,
 } from './meshenger-video-library';
+import { backgroundWorkDelayMs, beginBackgroundWork } from './video-space/background-work-priority';
 import { VIDEO_SPACE_CATALOGUE_VERSION } from './video-space/catalogue-version';
 import { emptyInventoryCoverage, emptyInventoryMediaCounts } from './video-space/completeness';
-import { documentedAuthorizationOntologies } from './video-space/documented-sources';
+import {
+  documentedAuthorizationOntologies,
+  documentedOntologyId,
+} from './video-space/documented-sources';
 import { createMemoryInventoryJobStore } from './video-space/job-store';
 import {
   rememberVerifiedSharedAccess,
   resetSharedAccessCacheForTests,
 } from './video-space/shared-access-cache';
 import { titleFromFilename } from './video-space/titles';
+import { InMemoryViewerChatGrantPointerStore } from './video-space/viewer-chat-grant-pointer-store';
 
 const t = (filename: string) => titleFromFilename(filename) ?? filename;
 
@@ -52,8 +58,127 @@ function configuredLibrary() {
   });
 }
 
+function historySharedStream(fileId: string): string {
+  return createMeshengerVideoStreamId(
+    {
+      ...grant,
+      fileUri: `w3ds://file?id=@friend.w3id/${fileId}`,
+      accessScope: 'shared',
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'history-chat',
+      accessBasis: 'history',
+    },
+    secret,
+  );
+}
+
+function stubInteractivePlatformToken(): void {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: URL) => {
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    }),
+  );
+}
+
+type SharedAccessResult = {
+  access: 'ok' | 'denied' | 'missing' | 'retry';
+  member: boolean;
+};
+
+type DirectProbeInternals = {
+  probeDirectSourceChatAccess: (
+    user: unknown,
+    space: unknown,
+    rateLimit: unknown,
+    signal?: AbortSignal,
+    chatSignal?: AbortSignal,
+  ) => Promise<SharedAccessResult>;
+  probeViewerChatGrantAccess: (
+    user: unknown,
+    source: unknown,
+    rateLimit: unknown,
+    signal?: AbortSignal,
+    chatSignal?: AbortSignal,
+  ) => Promise<SharedAccessResult>;
+  findInteractiveViewerChatGrantAuthorizationEnvelopes: (
+    owner: string,
+    eVaultUri: string,
+    source: { eName: string; chatId: string; viewerChatGrantId: string },
+    viewerEName: string,
+    rateLimit: unknown,
+    signal?: AbortSignal,
+  ) => Promise<unknown[]>;
+};
+
+type ExactCallProofInternals = {
+  resolveExactSharedCallAuthorization: (
+    user: { eName: string; eVaultUri?: string },
+    grant: unknown,
+    priority: 'interactive' | 'warmup' | 'background',
+    signal?: AbortSignal,
+  ) => Promise<'not_eligible' | 'verified' | 'denied' | 'retry'>;
+  resolveViewerEVault: (
+    user: unknown,
+    rateLimit: unknown,
+    signal?: AbortSignal,
+  ) => Promise<{ ownerEName: string; eVaultUri: string }>;
+  resolveEVault: (
+    eName: string,
+    rateLimit: unknown,
+    signal?: AbortSignal,
+  ) => Promise<{ ownerEName: string; eVaultUri: string }>;
+  resolveEVaultLookup: (
+    eName: string,
+    rateLimit: unknown,
+    signal?: AbortSignal,
+  ) => Promise<{ vault: { ownerEName: string; eVaultUri: string }; cacheHit: boolean }>;
+  readEnvelope: (
+    owner: string,
+    eVaultUri: string,
+    id: string,
+    rateLimit?: unknown,
+    actingEName?: string,
+    signal?: AbortSignal,
+  ) => Promise<{ id: string; ontology: string; parsed: Record<string, unknown> }>;
+  resolveExactUserParticipant: (
+    participantId: string,
+    expectedEName: string,
+    expectedVault: { ownerEName: string; eVaultUri: string },
+    rateLimit: unknown,
+    signal?: AbortSignal,
+  ) => Promise<boolean>;
+  graphql: (
+    owner: string,
+    eVaultUri: string,
+    query: string,
+    variables: Record<string, unknown>,
+    rateLimit?: unknown,
+    actingEName?: string,
+    signal?: AbortSignal,
+  ) => Promise<Record<string, unknown>>;
+  tryDereferenceFileMediaUrl: (
+    vault: unknown,
+    metaEnvelopeId: string,
+    policy: unknown,
+    signal?: AbortSignal,
+  ) => Promise<string | undefined>;
+};
+
+function directProbeInternals(library: ReturnType<typeof configuredLibrary>): DirectProbeInternals {
+  return library as unknown as DirectProbeInternals;
+}
+
+function exactCallProofInternals(
+  library: ReturnType<typeof configuredLibrary>,
+): ExactCallProofInternals {
+  return library as unknown as ExactCallProofInternals;
+}
+
 describe('Meshenger video library', () => {
   afterEach(() => {
+    vi.restoreAllMocks();
     resetSharedAccessCacheForTests();
     resetMeshengerVideoLibraryCachesForTests();
   });
@@ -89,6 +214,718 @@ describe('Meshenger video library', () => {
     expect(streamId).not.toContain('@person.w3id');
     expect(streamId.split('.')).toHaveLength(4);
     expect(verifyMeshengerVideoStreamId(streamId, secret)).toEqual(grant);
+  });
+
+  it('seals a viewer Chat-grant hint inside a shared stream without exposing it', () => {
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@friend.w3id/shared-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-1',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@friend.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const streamId = createMeshengerVideoStreamId(sharedGrant, secret);
+
+    expect(streamId).not.toContain('viewer-chat-grant');
+    expect(streamId).not.toContain('call-session-1');
+    expect(verifyMeshengerVideoStreamId(streamId, secret)).toEqual(sharedGrant);
+  });
+
+  it('uses exactly three records for a fully-addressed direct shared CallSession', async () => {
+    const viewer = { eName: '@person.w3id', eVaultUri: 'https://viewer-vault.example' };
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@media.w3id/full-recording',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-1',
+      // The CallSession/Chat live in the friend's vault while the recording
+      // bytes live in a different vault. This must remain a supported shape.
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@media.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = configuredLibrary();
+    const internals = exactCallProofInternals(library);
+    vi.spyOn(internals, 'resolveViewerEVault').mockResolvedValue({
+      ownerEName: viewer.eName,
+      eVaultUri: viewer.eVaultUri,
+    });
+    vi.spyOn(internals, 'resolveEVault').mockResolvedValue({
+      ownerEName: '@friend.w3id',
+      eVaultUri: 'https://friend-vault.example',
+    });
+    vi.spyOn(internals, 'resolveEVaultLookup').mockResolvedValue({
+      vault: { ownerEName: '@media.w3id', eVaultUri: 'https://media-vault.example' },
+      cacheHit: false,
+    });
+    const readEnvelope = vi
+      .spyOn(internals, 'readEnvelope')
+      .mockImplementation(async (_owner, _vault, id) => {
+        if (id === 'viewer-chat-grant') {
+          return {
+            id,
+            ontology: documentedAuthorizationOntologies.chat,
+            parsed: {
+              isReference: true,
+              type: 'direct',
+              canonicalOwnerEName: '@friend.w3id',
+              canonicalChatId: 'chat-1',
+            },
+          };
+        }
+        if (id === 'chat-1') {
+          return {
+            id,
+            ontology: documentedAuthorizationOntologies.chat,
+            parsed: {
+              type: 'direct',
+              participantIds: [viewer.eName, '@friend.w3id'],
+            },
+          };
+        }
+        if (id === 'call-session-1') {
+          return {
+            id,
+            ontology: documentedOntologyId('call-recording'),
+            parsed: {
+              chatId: 'chat-1',
+              participants: [viewer.eName, '@friend.w3id'],
+              recording: {
+                mediaIsVideo: true,
+                recordingVault: '@media.w3id',
+                mediaUri: sharedGrant.fileUri,
+              },
+            },
+          };
+        }
+        throw new Error(`Unexpected envelope read: ${id}`);
+      });
+    const dereference = vi
+      .spyOn(internals, 'tryDereferenceFileMediaUrl')
+      .mockResolvedValue('https://media.example/full-recording.mp4');
+    const legacyProbe = vi.spyOn(library, 'probeSharedSpaceAccess');
+
+    await expect(
+      library.resolveMediaUrl(viewer, createMeshengerVideoStreamId(sharedGrant, secret)),
+    ).resolves.toBe('https://media.example/full-recording.mp4');
+
+    expect(readEnvelope).toHaveBeenCalledTimes(3);
+    expect(readEnvelope.mock.calls.map((call) => call[2]).sort()).toEqual([
+      'call-session-1',
+      'chat-1',
+      'viewer-chat-grant',
+    ]);
+    expect(legacyProbe).not.toHaveBeenCalled();
+    expect(dereference).toHaveBeenCalledTimes(1);
+  });
+
+  it('proves opaque legacy direct participants with only exact User-envelope reads', async () => {
+    const viewer = { eName: '@person.w3id', eVaultUri: 'https://viewer-vault.example' };
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@media.w3id/legacy-identity-recording',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-1',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@media.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = configuredLibrary();
+    const internals = exactCallProofInternals(library);
+    vi.spyOn(internals, 'resolveViewerEVault').mockResolvedValue({
+      ownerEName: viewer.eName,
+      eVaultUri: viewer.eVaultUri,
+    });
+    vi.spyOn(internals, 'resolveEVault').mockResolvedValue({
+      ownerEName: '@friend.w3id',
+      eVaultUri: 'https://friend-vault.example',
+    });
+    const readEnvelope = vi
+      .spyOn(internals, 'readEnvelope')
+      .mockImplementation(async (_owner, _vault, id) => {
+        if (id === 'viewer-chat-grant') {
+          return {
+            id,
+            ontology: documentedAuthorizationOntologies.chat,
+            parsed: {
+              isReference: true,
+              type: 'direct',
+              canonicalOwnerEName: '@friend.w3id',
+              canonicalChatId: 'chat-1',
+            },
+          };
+        }
+        if (id === 'chat-1') {
+          return {
+            id,
+            ontology: documentedAuthorizationOntologies.chat,
+            parsed: {
+              type: 'direct',
+              participantIds: ['viewer-user-envelope', 'friend-user-envelope'],
+            },
+          };
+        }
+        if (id === 'call-session-1') {
+          return {
+            id,
+            ontology: documentedOntologyId('call-recording'),
+            parsed: {
+              chatId: 'chat-1',
+              participants: [viewer.eName, '@friend.w3id'],
+              recording: {
+                mediaIsVideo: true,
+                recordingVault: '@media.w3id',
+                mediaUri: sharedGrant.fileUri,
+              },
+            },
+          };
+        }
+        if (id === 'viewer-user-envelope') {
+          return {
+            id,
+            ontology: '550e8400-e29b-41d4-a716-446655440000',
+            parsed: { id, eName: viewer.eName },
+          };
+        }
+        if (id === 'friend-user-envelope') {
+          return {
+            id,
+            ontology: '550e8400-e29b-41d4-a716-446655440000',
+            parsed: { id, eName: '@friend.w3id' },
+          };
+        }
+        throw new Error(`Unexpected envelope read: ${id}`);
+      });
+    const legacyProbe = vi.spyOn(library, 'probeSharedSpaceAccess');
+
+    await expect(
+      internals.resolveExactSharedCallAuthorization(viewer, sharedGrant, 'interactive'),
+    ).resolves.toBe('verified');
+
+    // Three authorization records plus both possible participant-order
+    // assignments: all reads are named exact records, never a Chat history.
+    expect(readEnvelope).toHaveBeenCalledTimes(7);
+    expect(legacyProbe).not.toHaveBeenCalled();
+  });
+
+  it('maps an opaque User envelope id only from the expected owner vault', async () => {
+    const library = configuredLibrary();
+    const internals = exactCallProofInternals(library);
+    const readEnvelope = vi.spyOn(internals, 'readEnvelope').mockResolvedValue({
+      id: 'viewer-user-envelope',
+      ontology: '550e8400-e29b-41d4-a716-446655440000',
+      parsed: { id: 'viewer-user-envelope' },
+    });
+    const graphql = vi.spyOn(internals, 'graphql');
+
+    await expect(
+      internals.resolveExactUserParticipant(
+        'viewer-user-envelope',
+        '@person.w3id',
+        { ownerEName: '@person.w3id', eVaultUri: 'https://viewer-vault.example' },
+        'interactive',
+      ),
+    ).resolves.toBe(true);
+
+    expect(readEnvelope).toHaveBeenCalledOnce();
+    expect(readEnvelope).toHaveBeenCalledWith(
+      '@person.w3id',
+      'https://viewer-vault.example',
+      'viewer-user-envelope',
+      'interactive',
+      undefined,
+      undefined,
+    );
+    expect(graphql).not.toHaveBeenCalled();
+  });
+
+  it('uses one exact User.id lookup when a legacy chat stores the User body id', async () => {
+    const library = configuredLibrary();
+    const internals = exactCallProofInternals(library);
+    vi.spyOn(internals, 'readEnvelope').mockRejectedValue(new Error('not an envelope id'));
+    const graphql = vi.spyOn(internals, 'graphql').mockResolvedValue({
+      metaEnvelopes: {
+        edges: [
+          {
+            node: {
+              id: 'viewer-user-envelope',
+              ontology: '550e8400-e29b-41d4-a716-446655440000',
+              parsed: JSON.stringify({ id: 'viewer-user-body-id', eName: '@person.w3id' }),
+              envelopes: [],
+            },
+          },
+        ],
+      },
+    });
+
+    await expect(
+      internals.resolveExactUserParticipant(
+        'viewer-user-body-id',
+        '@person.w3id',
+        { ownerEName: '@person.w3id', eVaultUri: 'https://viewer-vault.example' },
+        'interactive',
+      ),
+    ).resolves.toBe(true);
+
+    expect(graphql).toHaveBeenCalledOnce();
+    expect(graphql.mock.calls[0]?.[2]).toContain('ExactUserParticipantIdentity');
+    expect(graphql.mock.calls[0]?.[3]).toEqual({
+      ontologyId: '550e8400-e29b-41d4-a716-446655440000',
+      participantId: 'viewer-user-body-id',
+      first: 4,
+    });
+  });
+
+  it('does not trust a User extension that contradicts the owner eName', async () => {
+    const library = configuredLibrary();
+    const internals = exactCallProofInternals(library);
+    vi.spyOn(internals, 'readEnvelope').mockResolvedValue({
+      id: 'viewer-user-envelope',
+      ontology: '550e8400-e29b-41d4-a716-446655440000',
+      parsed: { id: 'viewer-user-envelope', eName: '@other.w3id' },
+    });
+    const graphql = vi.spyOn(internals, 'graphql');
+
+    await expect(
+      internals.resolveExactUserParticipant(
+        'viewer-user-envelope',
+        '@person.w3id',
+        { ownerEName: '@person.w3id', eVaultUri: 'https://viewer-vault.example' },
+        'interactive',
+      ),
+    ).resolves.toBe(false);
+
+    expect(graphql).not.toHaveBeenCalled();
+  });
+
+  it('keeps opaque legacy direct-chat participant ids on the compatibility path', async () => {
+    const viewer = { eName: '@person.w3id', eVaultUri: 'https://viewer-vault.example' };
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@media.w3id/legacy-identity-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-1',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@media.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = configuredLibrary();
+    const internals = exactCallProofInternals(library);
+    vi.spyOn(internals, 'resolveViewerEVault').mockResolvedValue({
+      ownerEName: viewer.eName,
+      eVaultUri: viewer.eVaultUri,
+    });
+    vi.spyOn(internals, 'resolveEVault').mockResolvedValue({
+      ownerEName: '@friend.w3id',
+      eVaultUri: 'https://friend-vault.example',
+    });
+    vi.spyOn(internals, 'readEnvelope').mockImplementation(async (_owner, _vault, id) => {
+      if (id === 'viewer-chat-grant') {
+        return {
+          id,
+          ontology: documentedAuthorizationOntologies.chat,
+          parsed: {
+            isReference: true,
+            type: 'direct',
+            canonicalOwnerEName: '@friend.w3id',
+            canonicalChatId: 'chat-1',
+          },
+        };
+      }
+      if (id === 'chat-1') {
+        // A User metaId cannot be compared to an eName locally. It is not
+        // evidence that the viewer was removed; the legacy proof owns it.
+        return {
+          id,
+          ontology: documentedAuthorizationOntologies.chat,
+          parsed: {
+            type: 'direct',
+            participantIds: ['viewer-user-meta-id', 'friend-user-meta-id'],
+          },
+        };
+      }
+      return {
+        id,
+        ontology: documentedOntologyId('call-recording'),
+        parsed: {
+          chatId: 'chat-1',
+          participants: [viewer.eName, '@friend.w3id'],
+          recording: {
+            mediaIsVideo: true,
+            recordingVault: '@media.w3id',
+            mediaUri: sharedGrant.fileUri,
+          },
+        },
+      };
+    });
+    vi.spyOn(internals, 'resolveExactUserParticipant').mockResolvedValue(false);
+
+    await expect(
+      internals.resolveExactSharedCallAuthorization(viewer, sharedGrant, 'interactive'),
+    ).resolves.toBe('not_eligible');
+  });
+
+  it('fails closed on a forged viewer Chat pointer without starting a history scan', async () => {
+    const viewer = { eName: '@person.w3id', eVaultUri: 'https://viewer-vault.example' };
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@media.w3id/forged-pointer-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-1',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@media.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = configuredLibrary();
+    const internals = exactCallProofInternals(library);
+    vi.spyOn(internals, 'resolveViewerEVault').mockResolvedValue({
+      ownerEName: viewer.eName,
+      eVaultUri: viewer.eVaultUri,
+    });
+    vi.spyOn(internals, 'resolveEVault').mockResolvedValue({
+      ownerEName: '@friend.w3id',
+      eVaultUri: 'https://friend-vault.example',
+    });
+    vi.spyOn(internals, 'readEnvelope').mockImplementation(async (_owner, _vault, id) => {
+      if (id === 'viewer-chat-grant') {
+        return {
+          id,
+          ontology: documentedAuthorizationOntologies.chat,
+          parsed: {
+            isReference: true,
+            type: 'direct',
+            canonicalOwnerEName: '@friend.w3id',
+            canonicalChatId: 'chat-1',
+          },
+        };
+      }
+      if (id === 'chat-1') {
+        // A viewer can point at this Chat, but the source has not granted the
+        // viewer access. The source record is the decisive evidence.
+        return {
+          id,
+          ontology: documentedAuthorizationOntologies.chat,
+          parsed: { type: 'direct', participantIds: ['@friend.w3id', '@other.w3id'] },
+        };
+      }
+      return {
+        id,
+        ontology: documentedOntologyId('call-recording'),
+        parsed: {
+          chatId: 'chat-1',
+          participants: [viewer.eName, '@friend.w3id'],
+          recording: {
+            mediaIsVideo: true,
+            recordingVault: '@media.w3id',
+            mediaUri: sharedGrant.fileUri,
+          },
+        },
+      };
+    });
+    const dereference = vi.spyOn(internals, 'tryDereferenceFileMediaUrl');
+    const legacyProbe = vi.spyOn(library, 'probeSharedSpaceAccess');
+
+    await expect(
+      library.resolveMediaUrl(viewer, createMeshengerVideoStreamId(sharedGrant, secret)),
+    ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied', status: 403 }));
+
+    expect(legacyProbe).not.toHaveBeenCalled();
+    expect(dereference).not.toHaveBeenCalled();
+  });
+
+  it('returns a retryable error on an exact-proof transport failure without a history scan', async () => {
+    const viewer = { eName: '@person.w3id', eVaultUri: 'https://viewer-vault.example' };
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@media.w3id/retry-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-1',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = configuredLibrary();
+    const internals = exactCallProofInternals(library);
+    vi.spyOn(internals, 'resolveViewerEVault').mockResolvedValue({
+      ownerEName: viewer.eName,
+      eVaultUri: viewer.eVaultUri,
+    });
+    vi.spyOn(internals, 'resolveEVault').mockResolvedValue({
+      ownerEName: '@friend.w3id',
+      eVaultUri: 'https://friend-vault.example',
+    });
+    vi.spyOn(internals, 'readEnvelope').mockRejectedValue(
+      new (class extends Error {})('source timeout'),
+    );
+    const legacyProbe = vi.spyOn(library, 'probeSharedSpaceAccess');
+
+    await expect(
+      library.resolveMediaUrl(viewer, createMeshengerVideoStreamId(sharedGrant, secret)),
+    ).rejects.toThrow(expect.objectContaining({ code: 'remote_unavailable', status: 503 }));
+    expect(legacyProbe).not.toHaveBeenCalled();
+  });
+
+  it('uses the source-issued CallSession bridge before local exact proof work', async () => {
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@friend.w3id/source-bridge-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-envelope',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@friend.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = createMeshengerVideoLibrary({
+      W3DS_AUTH_PLATFORM_NAME: 'vidak',
+      W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+      W3DS_AUTH_JWT_SECRET: secret,
+      MESHENGER_PLAYBACK_GRANT_URL:
+        'https://meshenger.example/api/integrations/vidak/recording-playback-grant',
+      VIDAK_PLAYBACK_BRIDGE_SECRET: 'bridge-secret-0123456789abcdef012345',
+    });
+    const sourceFetch = vi.fn().mockResolvedValue(
+      json({
+        version: 1,
+        status: 'granted',
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        mediaUrl: 'https://media.example/source-bridge-file.mp4?private=kept-server-side',
+      }),
+    );
+    vi.stubGlobal('fetch', sourceFetch);
+    const exactProof = vi.spyOn(
+      exactCallProofInternals(library),
+      'resolveExactSharedCallAuthorization',
+    );
+    const probe = vi.spyOn(library, 'probeSharedSpaceAccess');
+
+    try {
+      await expect(
+        library.resolveMediaUrl(
+          { eName: sharedGrant.eName },
+          createMeshengerVideoStreamId(sharedGrant, secret),
+        ),
+      ).resolves.toBe('https://media.example/source-bridge-file.mp4?private=kept-server-side');
+      expect(sourceFetch).toHaveBeenCalledTimes(1);
+      expect(exactProof).not.toHaveBeenCalled();
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('falls back to Vidak exact proof when the source bridge has no matching record', async () => {
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@friend.w3id/bridge-fallback-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-envelope',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@friend.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = createMeshengerVideoLibrary({
+      W3DS_AUTH_PLATFORM_NAME: 'vidak',
+      W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+      W3DS_AUTH_JWT_SECRET: secret,
+      MESHENGER_PLAYBACK_GRANT_URL:
+        'https://meshenger.example/api/integrations/vidak/recording-playback-grant',
+      VIDAK_PLAYBACK_BRIDGE_SECRET: 'bridge-secret-0123456789abcdef012345',
+    });
+    const internals = exactCallProofInternals(library);
+    const exactProof = vi
+      .spyOn(internals, 'resolveExactSharedCallAuthorization')
+      .mockResolvedValue('verified');
+    vi.spyOn(internals, 'resolveEVaultLookup').mockResolvedValue({
+      vault: { ownerEName: '@friend.w3id', eVaultUri: 'https://friend-vault.example' },
+      cacheHit: false,
+    });
+    vi.spyOn(internals, 'tryDereferenceFileMediaUrl').mockResolvedValue(
+      'https://media.example/bridge-fallback-file.mp4',
+    );
+    const sourceFetch = vi.fn().mockResolvedValue(new Response(null, { status: 404 }));
+    vi.stubGlobal('fetch', sourceFetch);
+
+    try {
+      await expect(
+        library.resolveMediaUrl(
+          { eName: sharedGrant.eName },
+          createMeshengerVideoStreamId(sharedGrant, secret),
+        ),
+      ).resolves.toBe('https://media.example/bridge-fallback-file.mp4');
+      expect(sourceFetch).toHaveBeenCalledTimes(1);
+      expect(exactProof).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reuses a verified cross-replica shared receipt without repeating source proof work', async () => {
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@friend.w3id/receipt-shared-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      accessBasis: 'membership' as const,
+    };
+    const library = configuredLibrary();
+    const exactProof = vi.spyOn(
+      exactCallProofInternals(library),
+      'resolveExactSharedCallAuthorization',
+    );
+    const legacyProof = vi.spyOn(library, 'probeSharedSpaceAccess');
+    const sourceFetch = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+      }
+      if (
+        url.hostname === 'friend-vault.example' &&
+        url.pathname === '/files/receipt-shared-file'
+      ) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/receipt-shared-file.mp4' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', sourceFetch);
+
+    try {
+      await expect(
+        library.resolveMediaUrl(
+          { eName: sharedGrant.eName },
+          createMeshengerVideoStreamId(sharedGrant, secret),
+          { hasRecentSharedAuthorizationReceipt: true },
+        ),
+      ).resolves.toBe('https://media.example/receipt-shared-file.mp4');
+
+      // The receipt only replaces the immediately preceding access proof.
+      // The signed stream grant and its canonical File dereference still run.
+      expect(exactProof).not.toHaveBeenCalled();
+      expect(legacyProof).not.toHaveBeenCalled();
+      expect(sourceFetch).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not hide an unavailable exact source grant behind the slow legacy history scan', async () => {
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@friend.w3id/unavailable-bridge-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-envelope',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@friend.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = createMeshengerVideoLibrary({
+      W3DS_AUTH_PLATFORM_NAME: 'vidak',
+      W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+      W3DS_AUTH_JWT_SECRET: secret,
+      MESHENGER_PLAYBACK_GRANT_URL:
+        'https://meshenger.example/api/integrations/vidak/recording-playback-grant',
+      VIDAK_PLAYBACK_BRIDGE_SECRET: 'bridge-secret-0123456789abcdef012345',
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response('private source error', { status: 503 })),
+    );
+    vi.spyOn(
+      exactCallProofInternals(library),
+      'resolveExactSharedCallAuthorization',
+    ).mockResolvedValue('not_eligible');
+    const probe = vi.spyOn(library, 'probeSharedSpaceAccess');
+
+    try {
+      await expect(
+        library.resolveMediaUrl(
+          { eName: sharedGrant.eName },
+          createMeshengerVideoStreamId(sharedGrant, secret),
+        ),
+      ).rejects.toThrow(expect.objectContaining({ code: 'remote_unavailable', status: 503 }));
+      expect(probe).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('falls back to the established verifier when an exact source record is briefly missing', async () => {
+    const sharedGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@friend.w3id/missing-bridge-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-session-envelope',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@friend.w3id',
+      sourceChatKind: 'direct' as const,
+      accessBasis: 'history' as const,
+    };
+    const library = createMeshengerVideoLibrary({
+      W3DS_AUTH_PLATFORM_NAME: 'vidak',
+      W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+      W3DS_AUTH_JWT_SECRET: secret,
+      MESHENGER_PLAYBACK_GRANT_URL:
+        'https://meshenger.example/api/integrations/vidak/recording-playback-grant',
+      VIDAK_PLAYBACK_BRIDGE_SECRET: 'bridge-secret-0123456789abcdef012345',
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 404 })));
+
+    try {
+      await expect(
+        (
+          library as unknown as {
+            resolveFastSharedCallPlayback: (
+              value: typeof sharedGrant,
+              cacheKey: string,
+              priority: 'interactive',
+            ) => Promise<unknown>;
+          }
+        ).resolveFastSharedCallPlayback(sharedGrant, 'missing-bridge', 'interactive'),
+      ).resolves.toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('continues to verify a valid legacy personal stream while outstanding links expire', () => {
@@ -168,7 +1005,7 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('opens an authorized shared stream after checking its current conversation access', async () => {
+  it('opens a shared stream after checking its current conversation access', async () => {
     const library = configuredLibrary();
     const playbackHeaders: Headers[] = [];
     const probe = vi
@@ -209,10 +1046,10 @@ describe('Meshenger video library', () => {
       expect(probe).toHaveBeenCalledWith(
         { eName: grant.eName },
         { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
-        'backoff',
+        'interactive',
+        { signal: expect.any(AbortSignal) },
       );
       expect(playbackHeaders).toHaveLength(1);
-      expect(playbackHeaders[0]?.get('X-ON-BEHALF-OF')).toBe(grant.eName);
       expect(playbackHeaders[0]?.get('X-ENAME')).toBe('@friend.w3id');
     } finally {
       vi.unstubAllGlobals();
@@ -224,21 +1061,20 @@ describe('Meshenger video library', () => {
     const probe = vi
       .spyOn(library, 'probeSharedSpaceAccess')
       .mockResolvedValue({ access: 'ok', member: true });
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (url: URL) => {
-        if (url.pathname === '/resolve') {
-          return json({ ename: '@cache-friend.w3id', uri: 'https://cache-friend-vault.example' });
-        }
-        if (url.pathname === '/files/cache-file') {
-          return new Response(null, {
-            status: 302,
-            headers: { location: 'https://media.example/cache-shared-video.mp4' },
-          });
-        }
-        throw new Error(`Unexpected request: ${url.pathname}`);
-      }),
-    );
+    const fetcher = vi.fn(async (url: URL, _init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@cache-friend.w3id', uri: 'https://cache-friend-vault.example' });
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.pathname === '/files/cache-file') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/cache-shared-video.mp4' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
     const streamId = createMeshengerVideoStreamId(
       {
         ...grant,
@@ -262,8 +1098,845 @@ describe('Meshenger video library', () => {
         'https://media.example/cache-shared-video.mp4',
         'https://media.example/cache-shared-video.mp4',
       ]);
-      expect(probe).toHaveBeenCalledTimes(1);
+      // Interactive historic grants now start both the exact Chat and
+      // GroupManifest proofs; the byte-range media resolution itself is still
+      // coalesced into one authorization pass.
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname === '/resolve'),
+      ).toHaveLength(1);
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname === '/files/cache-file'),
+      ).toHaveLength(1);
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname === '/platforms/certification'),
+      ).toHaveLength(1);
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens a historic share when its GroupManifest proof wins a slow direct proof', async () => {
+    const library = configuredLibrary();
+    let releaseDirect: (access: SharedAccessResult) => void = () => undefined;
+    const direct = new Promise<SharedAccessResult>((resolve) => {
+      releaseDirect = resolve;
+    });
+    let directSettled = false;
+    void direct.then(() => {
+      directSettled = true;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation((_user, source) =>
+        source.kind === 'direct'
+          ? direct
+          : Promise.resolve({ access: 'ok', member: true } as const),
+      );
+    stubInteractivePlatformToken();
+
+    try {
+      const pending = library.inspectPlayableStream(
+        { eName: '@person.w3id' },
+        historySharedStream('history-group-wins'),
+        { priority: 'interactive' },
+      );
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+
+      await expect(pending).resolves.toEqual({
+        fileUri: 'w3ds://file?id=@friend.w3id/history-group-wins',
+      });
+      expect(directSettled).toBe(false);
+      expect(probe).toHaveBeenCalledWith(
+        { eName: '@person.w3id' },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'history-chat' },
+        'interactive',
+        { signal: expect.any(AbortSignal) },
+      );
+    } finally {
+      releaseDirect({ access: 'missing', member: false });
+      await direct;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens a historic share when its direct proof wins a slow GroupManifest proof', async () => {
+    const library = configuredLibrary();
+    let releaseGroup: (access: SharedAccessResult) => void = () => undefined;
+    const group = new Promise<SharedAccessResult>((resolve) => {
+      releaseGroup = resolve;
+    });
+    let groupSettled = false;
+    void group.then(() => {
+      groupSettled = true;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation((_user, source) =>
+        source.kind === 'direct' ? Promise.resolve({ access: 'ok', member: true } as const) : group,
+      );
+    stubInteractivePlatformToken();
+
+    try {
+      const pending = library.inspectPlayableStream(
+        { eName: '@person.w3id' },
+        historySharedStream('history-direct-wins'),
+        { priority: 'interactive' },
+      );
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+
+      await expect(pending).resolves.toEqual({
+        fileUri: 'w3ds://file?id=@friend.w3id/history-direct-wins',
+      });
+      expect(groupSettled).toBe(false);
+      expect(probe).toHaveBeenCalledWith(
+        { eName: '@person.w3id' },
+        { eName: '@friend.w3id', kind: 'group' },
+        'interactive',
+        { signal: expect.any(AbortSignal) },
+      );
+    } finally {
+      releaseGroup({ access: 'missing', member: false });
+      await group;
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('denies a historic share when both concurrent source proofs are non-positive', async () => {
+    const library = configuredLibrary();
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation((_user, source) =>
+        Promise.resolve(
+          source.kind === 'direct'
+            ? ({ access: 'missing', member: false } as const)
+            : ({ access: 'denied', member: false } as const),
+        ),
+      );
+    stubInteractivePlatformToken();
+
+    try {
+      await expect(
+        library.inspectPlayableStream(
+          { eName: '@person.w3id' },
+          historySharedStream('history-both-negative'),
+          { priority: 'interactive' },
+        ),
+      ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied', status: 403 }));
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps a historic share retryable when one concurrent source proof must retry', async () => {
+    const library = configuredLibrary();
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation((_user, source) =>
+        Promise.resolve(
+          source.kind === 'direct'
+            ? ({ access: 'retry', member: false } as const)
+            : ({ access: 'missing', member: false } as const),
+        ),
+      );
+    stubInteractivePlatformToken();
+
+    try {
+      await expect(
+        library.inspectPlayableStream(
+          { eName: '@person.w3id' },
+          historySharedStream('history-retry'),
+          { priority: 'interactive' },
+        ),
+      ).rejects.toThrow(expect.objectContaining({ code: 'remote_unavailable', status: 503 }));
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('bounds a slow historic Chat proof without denying a concurrent GroupManifest proof', async () => {
+    const library = configuredLibrary();
+    const directDeadline = new AbortController();
+    const groupDeadline = new AbortController();
+    const proofDeadlines = [directDeadline, groupDeadline];
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockImplementation((milliseconds) => {
+      if (milliseconds === 8_000) {
+        const next = proofDeadlines.shift();
+        if (!next) throw new Error('Unexpected extra interactive shared-proof deadline.');
+        return next.signal;
+      }
+      // The speculative platform-token request retains its ordinary request
+      // timeout; it is unrelated to the proof deadline under test.
+      return new AbortController().signal;
+    });
+    let directSignal: AbortSignal | undefined;
+    let releaseGroup: (access: SharedAccessResult) => void = () => undefined;
+    const group = new Promise<SharedAccessResult>((resolve) => {
+      releaseGroup = resolve;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation((_user, source, _rateLimit, options) => {
+        if (source.kind !== 'direct') return group;
+        directSignal = options?.signal;
+        return new Promise<SharedAccessResult>((resolve) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => resolve({ access: 'retry', member: false }),
+            { once: true },
+          );
+        });
+      });
+    stubInteractivePlatformToken();
+
+    try {
+      const pending = library.inspectPlayableStream(
+        { eName: '@person.w3id' },
+        historySharedStream('history-proof-deadline'),
+        { priority: 'interactive' },
+      );
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+
+      directDeadline.abort();
+      await vi.waitFor(() => expect(directSignal?.aborted).toBe(true));
+      // A deadline is only an inconclusive source read. The independent
+      // current GroupManifest proof still authorizes the same stream.
+      releaseGroup({ access: 'ok', member: true });
+
+      await expect(pending).resolves.toEqual({
+        fileUri: 'w3ds://file?id=@friend.w3id/history-proof-deadline',
+      });
+      expect(timeout.mock.calls.filter(([milliseconds]) => milliseconds === 8_000)).toHaveLength(2);
+      expect(groupDeadline.signal.aborted).toBe(false);
+    } finally {
+      releaseGroup({ access: 'missing', member: false });
+      await group;
+      timeout.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('aborts an overdue interactive shared-source request and returns a retryable failure', async () => {
+    const deadline = new AbortController();
+    const originalTimeout = AbortSignal.timeout;
+    const timeout = vi
+      .spyOn(AbortSignal, 'timeout')
+      .mockImplementation((milliseconds) =>
+        milliseconds === 8_000 ? deadline.signal : originalTimeout(milliseconds),
+      );
+    let graphQlAborted = false;
+    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return Promise.resolve(
+          json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }),
+        );
+      }
+      if (url.pathname === '/platforms/certification') {
+        return Promise.resolve(json({ token: 'platform-token' }));
+      }
+      if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => {
+              graphQlAborted = true;
+              reject(new Error('request aborted'));
+            },
+            { once: true },
+          );
+        });
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/overdue-shared-proof',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+
+    try {
+      const pending = configuredLibrary().inspectPlayableStream(
+        { eName: '@person.w3id' },
+        streamId,
+        { priority: 'interactive' },
+      );
+      await vi.waitFor(() =>
+        expect(
+          fetcher.mock.calls.some(
+            ([url]) =>
+              (url as URL).hostname === 'friend-vault.example' &&
+              (url as URL).pathname === '/graphql',
+          ),
+        ).toBe(true),
+      );
+
+      deadline.abort();
+      await expect(pending).rejects.toThrow(
+        expect.objectContaining({ code: 'remote_unavailable', status: 503 }),
+      );
+      expect(graphQlAborted).toBe(true);
+      expect(timeout).toHaveBeenCalledWith(8_000);
+    } finally {
+      deadline.abort();
+      timeout.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('preserves caller cancellation instead of turning it into a retryable proof deadline', async () => {
+    const library = configuredLibrary();
+    const caller = new AbortController();
+    let observedSignal: AbortSignal | undefined;
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation(async (_user, _source, _rateLimit, options) => {
+        observedSignal = options?.signal;
+        return new Promise<SharedAccessResult>((resolve) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => resolve({ access: 'retry', member: false }),
+            { once: true },
+          );
+        });
+      });
+    stubInteractivePlatformToken();
+
+    try {
+      const pending = library.inspectPlayableStream(
+        { eName: '@person.w3id' },
+        historySharedStream('history-proof-cancellation'),
+        { priority: 'interactive', signal: caller.signal },
+      );
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+
+      caller.abort();
+      await expect(pending).rejects.toThrow('Background media resolution was cancelled.');
+      expect(observedSignal?.aborted).toBe(true);
+    } finally {
+      caller.abort();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('coalesces each concurrent historic source proof across independent authorization checks', async () => {
+    const library = configuredLibrary();
+    let releaseDirect: (access: SharedAccessResult) => void = () => undefined;
+    const direct = new Promise<SharedAccessResult>((resolve) => {
+      releaseDirect = resolve;
+    });
+    let releaseGroup: (access: SharedAccessResult) => void = () => undefined;
+    const group = new Promise<SharedAccessResult>((resolve) => {
+      releaseGroup = resolve;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation((_user, source) => (source.kind === 'direct' ? direct : group));
+    stubInteractivePlatformToken();
+    const streamId = historySharedStream('history-coalesced');
+
+    try {
+      const first = library.inspectPlayableStream({ eName: '@person.w3id' }, streamId, {
+        priority: 'interactive',
+      });
+      const second = library.inspectPlayableStream({ eName: '@person.w3id' }, streamId, {
+        priority: 'interactive',
+      });
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+
+      releaseGroup({ access: 'ok', member: true });
+      await expect(Promise.all([first, second])).resolves.toEqual([
+        { fileUri: 'w3ds://file?id=@friend.w3id/history-coalesced' },
+        { fileUri: 'w3ds://file?id=@friend.w3id/history-coalesced' },
+      ]);
+    } finally {
+      releaseDirect({ access: 'missing', member: false });
+      releaseGroup({ access: 'missing', member: false });
+      await Promise.all([direct, group]);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('shares the interactive owner registry lookup with a viewer-side Chat proof', async () => {
+    const library = configuredLibrary();
+    let releaseFriendResolve: () => void = () => undefined;
+    const friendResolve = new Promise<Response>((resolve) => {
+      releaseFriendResolve = () =>
+        resolve(json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }));
+    });
+    let markViewerProof: () => void = () => undefined;
+    const viewerProofStarted = new Promise<void>((resolve) => {
+      markViewerProof = resolve;
+    });
+    let registryRequests = 0;
+    let groupManifestReads = 0;
+    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        registryRequests += 1;
+        return friendResolve;
+      }
+      if (url.pathname === '/platforms/certification') {
+        return Promise.resolve(json({ token: 'platform-token' }));
+      }
+      if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          variables?: { chatId?: string };
+        };
+        if (body.variables?.chatId === 'shared-chat') {
+          markViewerProof();
+          return Promise.resolve(
+            json({
+              data: {
+                metaEnvelopes: {
+                  edges: [
+                    {
+                      node: {
+                        id: 'viewer-chat-reference',
+                        ontology: documentedAuthorizationOntologies.chat,
+                        parsed: {
+                          isReference: true,
+                          canonicalOwnerEName: '@friend.w3id',
+                          canonicalChatId: 'shared-chat',
+                          type: 'direct',
+                        },
+                        envelopes: [],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            }),
+          );
+        }
+      }
+      if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          variables?: { ontologyId?: string };
+        };
+        if (body.variables?.ontologyId === documentedAuthorizationOntologies.groupManifest) {
+          groupManifestReads += 1;
+          return Promise.resolve(
+            json({
+              data: {
+                metaEnvelopes: {
+                  edges: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            }),
+          );
+        }
+      }
+      if (url.pathname === '/files/interactive-registry') {
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/interactive-registry.mp4' },
+          }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/interactive-registry',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'shared-chat',
+        accessBasis: 'history',
+      },
+      secret,
+    );
+
+    try {
+      const pending = library.resolveMediaUrl(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        streamId,
+        { priority: 'interactive' },
+      );
+      await viewerProofStarted;
+      // Before the directory response is released, a viewer-side proof has
+      // already won. The File path must reuse the same foreground registry
+      // request rather than opening a second one under a different policy.
+      expect(registryRequests).toBe(1);
+
+      releaseFriendResolve();
+      await expect(pending).resolves.toBe('https://media.example/interactive-registry.mp4');
+      expect(registryRequests).toBe(1);
+      // The GroupManifest fallback was deliberately started concurrently;
+      // let its negative result finish before replacing this test's fetch
+      // stub so it cannot leak into the following request fixture.
+      await vi.waitFor(() => expect(groupManifestReads).toBe(1));
+    } finally {
+      releaseFriendResolve();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('overlaps a shared authorization proof with directory resolution without dereferencing early', async () => {
+    const library = configuredLibrary();
+    const authorizationContexts: MediaAuthorizationTimingContext[] = [];
+    let approve: (access: SharedAccessResult) => void = () => undefined;
+    const authorization = new Promise<SharedAccessResult>((resolve) => {
+      approve = resolve;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation(async () => authorization);
+    let registryRequests = 0;
+    let fileRequests = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          registryRequests += 1;
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/files/overlap-file') {
+          fileRequests += 1;
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/overlap-file.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/overlap-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+
+    try {
+      const pending = library.resolveMediaUrl({ eName: grant.eName }, streamId, {
+        priority: 'interactive',
+        onAuthorizationContext: (context) => authorizationContexts.push(context),
+      });
+      await vi.waitFor(() => expect(registryRequests).toBe(1));
+      expect(fileRequests).toBe(0);
+      expect(authorizationContexts).toEqual([
+        {
+          accessBasis: 'membership',
+          proofKind: 'group',
+          sharedProofDeadlineMs: 8_000,
+          viewerChatGrantHint: false,
+        },
+      ]);
+
+      approve({ access: 'ok', member: true });
+      await expect(pending).resolves.toBe('https://media.example/overlap-file.mp4');
+      expect(fileRequests).toBe(1);
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        { eName: '@friend.w3id', kind: 'group' },
+        'interactive',
+        { signal: expect.any(AbortSignal) },
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('prefetches a shared platform token during directory resolution without dereferencing early', async () => {
+    const library = configuredLibrary();
+    let releaseRegistry: () => void = () => undefined;
+    const registry = new Promise<Response>((resolve) => {
+      releaseRegistry = () =>
+        resolve(json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }));
+    });
+    let approveMembership: () => void = () => undefined;
+    const membership = new Promise<Response>((resolve) => {
+      approveMembership = () =>
+        resolve(
+          json({
+            data: {
+              metaEnvelopes: {
+                edges: [
+                  {
+                    node: {
+                      id: 'group-manifest',
+                      ontology: documentedAuthorizationOntologies.groupManifest,
+                      parsed: { members: ['@person.w3id'] },
+                      envelopes: [],
+                    },
+                  },
+                ],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+        );
+    });
+    let registryRequests = 0;
+    let platformTokenRequests = 0;
+    let groupAuthorizationRequests = 0;
+    let fileRequests = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL) => {
+        if (url.pathname === '/resolve') {
+          registryRequests += 1;
+          return registry;
+        }
+        if (url.pathname === '/platforms/certification') {
+          platformTokenRequests += 1;
+          return Promise.resolve(json({ token: 'platform-token' }));
+        }
+        if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+          groupAuthorizationRequests += 1;
+          return membership;
+        }
+        if (url.hostname === 'friend-vault.example' && url.pathname === '/files/prefetch-file') {
+          fileRequests += 1;
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/prefetch-file.mp4' },
+            }),
+          );
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/prefetch-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+
+    try {
+      const pending = library.resolveMediaUrl({ eName: grant.eName }, streamId, {
+        priority: 'interactive',
+      });
+
+      // The credential starts while the mandatory source directory lookup is
+      // still unresolved. The GroupManifest and File requests remain blocked.
+      await vi.waitFor(() => expect(platformTokenRequests).toBe(1));
+      expect(registryRequests).toBe(1);
+      expect(groupAuthorizationRequests).toBe(0);
+      expect(fileRequests).toBe(0);
+
+      releaseRegistry();
+      await vi.waitFor(() => expect(groupAuthorizationRequests).toBe(1));
+      expect(fileRequests).toBe(0);
+
+      approveMembership();
+      await expect(pending).resolves.toBe('https://media.example/prefetch-file.mp4');
+      expect(fileRequests).toBe(1);
+    } finally {
+      releaseRegistry();
+      approveMembership();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it.each(['background', 'warmup'] as const)(
+    'does not prefetch a platform token for cancellable %s shared work',
+    async (priority) => {
+      const library = configuredLibrary();
+      const controller = new AbortController();
+      let registryRequests = 0;
+      let platformTokenRequests = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: URL, init?: RequestInit) => {
+          if (url.pathname === '/resolve') {
+            registryRequests += 1;
+            return new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                'abort',
+                () => reject(new Error('background source read aborted')),
+                { once: true },
+              );
+            });
+          }
+          if (url.pathname === '/platforms/certification') {
+            platformTokenRequests += 1;
+            return Promise.resolve(json({ token: 'platform-token' }));
+          }
+          throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+        }),
+      );
+      const streamId = createMeshengerVideoStreamId(
+        {
+          ...grant,
+          fileUri: 'w3ds://file?id=@friend.w3id/background-prefetch-file',
+          accessScope: 'shared',
+          sourceSpaceKey: '@friend.w3id',
+          accessBasis: 'membership',
+        },
+        secret,
+      );
+
+      try {
+        const pending = library.resolveMediaUrl({ eName: grant.eName }, streamId, {
+          priority,
+          signal: controller.signal,
+        });
+        await vi.waitFor(() => expect(registryRequests).toBe(1));
+        expect(platformTokenRequests).toBe(0);
+
+        controller.abort();
+        await expect(pending).rejects.toThrow('Background media resolution was cancelled.');
+      } finally {
+        controller.abort();
+        vi.unstubAllGlobals();
+      }
+    },
+  );
+
+  it('rechecks a cached shared redirect after its short source proof expires', async () => {
+    vi.useFakeTimers();
+    const library = configuredLibrary();
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValueOnce({ access: 'ok', member: true })
+      .mockResolvedValue({ access: 'denied', member: false });
+    let directRequests = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/files/cached-shared-file') {
+          directRequests += 1;
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/cached-shared.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/cached-shared-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+        // Keep the signed grant valid beyond the short exact-file proof.
+        expiresAt: Date.now() + 5 * 60_000,
+      },
+      secret,
+    );
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/cached-shared.mp4',
+      );
+      // The successful source verification is cached for one minute. Once it
+      // expires, a revoked source must be checked again before the cached
+      // redirect can be reused.
+      await vi.advanceTimersByTimeAsync(60_001);
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).rejects.toThrow(
+        expect.objectContaining({ code: 'authorization_denied', status: 403 }),
+      );
+      expect(probe).toHaveBeenCalledTimes(2);
+      expect(directRequests).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('yields resumable work before rechecking an unverified cached shared redirect', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-11T12:00:00.000Z'));
+    const library = configuredLibrary();
+    let releaseProof: (access: SharedAccessResult) => void = () => undefined;
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValueOnce({ access: 'ok', member: true })
+      .mockImplementationOnce(
+        () =>
+          new Promise<SharedAccessResult>((resolve) => {
+            releaseProof = resolve;
+          }),
+      );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.pathname === '/files/cached-priority-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/cached-priority.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/cached-priority-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+        expiresAt: Date.now() + 5 * 60_000,
+      },
+      secret,
+    );
+    let inventory: ReturnType<typeof beginBackgroundWork> | undefined;
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/cached-priority.mp4',
+      );
+      // The first cold start has already taken its short global head start.
+      // A verified cached Range request should remain transparent to inventory.
+      await vi.advanceTimersByTimeAsync(5_001);
+      const verifiedRange = beginBackgroundWork();
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/cached-priority.mp4',
+      );
+      expect(verifiedRange.signal.aborted).toBe(false);
+      verifiedRange.release();
+
+      // Keep the URL cache, but make its current source proof unavailable so
+      // the next cached request must perform the authoritative recheck.
+      resetSharedAccessCacheForTests();
+      inventory = beginBackgroundWork();
+      const pending = library.resolveMediaUrl({ eName: grant.eName }, streamId, {
+        priority: 'interactive',
+      });
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(2));
+
+      expect(inventory.signal.aborted).toBe(true);
+      expect(backgroundWorkDelayMs()).toBeGreaterThan(8_000);
+
+      releaseProof({ access: 'ok', member: true });
+      await expect(pending).resolves.toBe('https://media.example/cached-priority.mp4');
+    } finally {
+      releaseProof({ access: 'retry', member: false });
+      inventory?.release();
+      vi.useRealTimers();
       vi.unstubAllGlobals();
     }
   });
@@ -321,7 +1994,236 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('warms shared authorization before Watch without dereferencing media', async () => {
+  it('reuses current viewer Chat grants read by both fresh catalogue paths', async () => {
+    const viewer = '@person.w3id';
+    const source = '@friend.w3id';
+    const chatId = 'chat-current';
+    const fileUri = 'w3ds://file?id=@friend.w3id/current-chat-file';
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        eName: viewer,
+        fileUri,
+        accessScope: 'shared',
+        sourceSpaceKey: source,
+        sourceChatId: chatId,
+        accessBasis: 'history',
+      },
+      secret,
+    );
+    const fetcher = vi.fn(async (url: URL, init?: RequestInit) => {
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.pathname === '/resolve') {
+        return json({ ename: source, uri: 'https://friend-vault.example' });
+      }
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        variables?: { ontologyId?: string };
+      };
+      if (
+        url.hostname === 'person-vault.example' &&
+        body.variables?.ontologyId === documentedAuthorizationOntologies.chat
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'viewer-current-chat',
+                    ontology: documentedAuthorizationOntologies.chat,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: source,
+                      canonicalChatId: chatId,
+                      type: 'direct',
+                    },
+                    envelopes: [],
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const freshLibrary = configuredLibrary();
+      const freshProbe = vi.spyOn(freshLibrary, 'probeSharedSpaceAccess');
+      await freshLibrary.listWithContext(
+        { eName: viewer, eVaultUri: 'https://person-vault.example' },
+        { scope: 'shared' },
+      );
+      await expect(
+        freshLibrary.inspectPlayableStream(
+          { eName: viewer, eVaultUri: 'https://person-vault.example' },
+          streamId,
+          { priority: 'interactive' },
+        ),
+      ).resolves.toEqual({ fileUri });
+      expect(freshProbe).not.toHaveBeenCalled();
+
+      // The production grid consumes the durable scan path. Clear only the
+      // process-local proof result before exercising that independently.
+      resetSharedAccessCacheForTests();
+      const durableLibrary = createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: createMemoryInventoryJobStore() },
+      );
+      const durableProbe = vi.spyOn(durableLibrary, 'probeSharedSpaceAccess');
+      await durableLibrary.scanLibrary(
+        { eName: viewer, eVaultUri: 'https://person-vault.example' },
+        { scope: 'shared', onSnapshot: () => undefined },
+      );
+      await expect(
+        durableLibrary.inspectPlayableStream(
+          { eName: viewer, eVaultUri: 'https://person-vault.example' },
+          streamId,
+          { priority: 'interactive' },
+        ),
+      ).resolves.toEqual({ fileUri });
+      expect(durableProbe).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('seeds a GroupManifest proof only from the matching bounded group-open read', async () => {
+    const viewer = '@person.w3id';
+    const group = '@current-group.w3id';
+    const chatId = 'group-current';
+    const fileUri = 'w3ds://file?id=@current-group.w3id/current-group-file';
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        eName: viewer,
+        fileUri,
+        accessScope: 'shared',
+        sourceSpaceKey: group,
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+    const fetcher = vi.fn(async (url: URL, init?: RequestInit) => {
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.pathname === '/resolve') {
+        return json({ ename: group, uri: 'https://current-group-vault.example' });
+      }
+      const body = JSON.parse(String(init?.body ?? '{}')) as {
+        variables?: { ontologyId?: string };
+      };
+      if (
+        url.hostname === 'person-vault.example' &&
+        body.variables?.ontologyId === documentedAuthorizationOntologies.chat
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'viewer-current-group-chat',
+                    ontology: documentedAuthorizationOntologies.chat,
+                    parsed: {
+                      isReference: true,
+                      canonicalOwnerEName: group,
+                      canonicalChatId: chatId,
+                      type: 'group',
+                    },
+                    envelopes: [],
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      if (
+        url.hostname === 'current-group-vault.example' &&
+        body.variables?.ontologyId === documentedAuthorizationOntologies.groupManifest
+      ) {
+        return json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'current-group-manifest',
+                    ontology: documentedAuthorizationOntologies.groupManifest,
+                    parsed: { owner: group, members: [viewer] },
+                    envelopes: [],
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        });
+      }
+      return json({
+        data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+      });
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const freshLibrary = configuredLibrary();
+      const freshProbe = vi
+        .spyOn(freshLibrary, 'probeSharedSpaceAccess')
+        .mockResolvedValue({ access: 'ok', member: true });
+      await freshLibrary.listWithContext(
+        { eName: viewer, eVaultUri: 'https://person-vault.example' },
+        { scope: 'shared' },
+      );
+      // The full discovery path may page further than the verifier's first
+      // GroupManifest read, so it must not seed a playback proof.
+      await expect(
+        freshLibrary.inspectPlayableStream(
+          { eName: viewer, eVaultUri: 'https://person-vault.example' },
+          streamId,
+          { priority: 'interactive' },
+        ),
+      ).resolves.toEqual({ fileUri });
+      expect(freshProbe).toHaveBeenCalledTimes(1);
+
+      resetSharedAccessCacheForTests();
+      const durableLibrary = createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore: createMemoryInventoryJobStore() },
+      );
+      const durableProbe = vi.spyOn(durableLibrary, 'probeSharedSpaceAccess');
+      await durableLibrary.scanLibrary(
+        { eName: viewer, eVaultUri: 'https://person-vault.example' },
+        { scope: 'shared', onSnapshot: () => undefined },
+      );
+      await expect(
+        durableLibrary.inspectPlayableStream(
+          { eName: viewer, eVaultUri: 'https://person-vault.example' },
+          streamId,
+          { priority: 'interactive' },
+        ),
+      ).resolves.toEqual({ fileUri });
+      expect(durableProbe).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('warms a shared source before Watch without streaming media bytes', async () => {
     const library = configuredLibrary();
     const probe = vi
       .spyOn(library, 'probeSharedSpaceAccess')
@@ -339,30 +2241,128 @@ describe('Meshenger video library', () => {
     );
 
     try {
-      await expect(
-        library.authorizePlayableStream({ eName: grant.eName }, streamId),
-      ).resolves.toBeUndefined();
-      expect(probe).toHaveBeenCalledTimes(1);
-
-      vi.stubGlobal(
-        'fetch',
-        vi.fn(async (url: URL) => {
-          if (url.pathname === '/resolve') {
-            return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
-          }
-          if (url.pathname === '/files/warm-file') {
-            return new Response(null, {
-              status: 302,
-              headers: { location: 'https://media.example/warm-video.mp4' },
-            });
-          }
-          throw new Error(`Unexpected request: ${url.pathname}`);
-        }),
+      const fetcher = vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.pathname === '/files/warm-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/warm-video.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      });
+      vi.stubGlobal('fetch', fetcher);
+      await expect(library.authorizePlayableStream({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/warm-video.mp4',
       );
+      expect(probe).toHaveBeenCalledTimes(2);
       await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
         'https://media.example/warm-video.mp4',
       );
-      expect(probe).toHaveBeenCalledTimes(1);
+      expect(fetcher).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reuses the registry platform credential across request-scoped libraries', async () => {
+    const fetcher = vi.fn(async (url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@person.w3id', uri: 'https://person-vault.example' });
+      }
+      if (url.pathname === '/files/file-a' || url.pathname === '/files/file-b') {
+        // A 404 can describe one stale File, not an endpoint-wide capability.
+        // Each record falls back independently while the registry credential
+        // remains reusable across request-scoped libraries.
+        return new Response(null, { status: 404 });
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+        const variables = JSON.parse(String(init?.body ?? '{}')).variables as { id?: string };
+        return json({
+          data: {
+            metaEnvelope: {
+              id: variables.id,
+              ontology: 'w3ds-file',
+              parsed: { url: `https://media.example/${variables.id}.mp4` },
+              envelopes: [],
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const stream = (fileId: string) =>
+      createMeshengerVideoStreamId(
+        { ...grant, fileUri: `w3ds://file?id=@person.w3id/${fileId}` },
+        secret,
+      );
+
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl({ eName: grant.eName }, stream('file-a')),
+      ).resolves.toBe('https://media.example/file-a.mp4');
+      await expect(
+        configuredLibrary().resolveMediaUrl({ eName: grant.eName }, stream('file-b')),
+      ).resolves.toBe('https://media.example/file-b.mp4');
+
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname === '/platforms/certification'),
+      ).toHaveLength(1);
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname.startsWith('/files/')),
+      ).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('briefly skips a timing-out optional File redirect instead of paying for it on every video', async () => {
+    const fetcher = vi.fn(async (url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@person.w3id', uri: 'https://person-vault.example' });
+      }
+      if (url.pathname.startsWith('/files/')) {
+        throw new TypeError('direct File endpoint timed out');
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+        const variables = JSON.parse(String(init?.body ?? '{}')).variables as { id?: string };
+        return json({
+          data: {
+            metaEnvelope: {
+              id: variables.id,
+              ontology: 'w3ds-file',
+              parsed: { url: `https://media.example/${variables.id}.mp4` },
+              envelopes: [],
+            },
+          },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const stream = (fileId: string) =>
+      createMeshengerVideoStreamId(
+        { ...grant, fileUri: `w3ds://file?id=@person.w3id/${fileId}` },
+        secret,
+      );
+
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl({ eName: grant.eName }, stream('slow-file-a')),
+      ).resolves.toBe('https://media.example/slow-file-a.mp4');
+      await expect(
+        configuredLibrary().resolveMediaUrl({ eName: grant.eName }, stream('slow-file-b')),
+      ).resolves.toBe('https://media.example/slow-file-b.mp4');
+
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname.startsWith('/files/')),
+      ).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -370,6 +2370,7 @@ describe('Meshenger video library', () => {
 
   it('falls back to the viewer’s current Chat grant when a source mirror omits the viewer', async () => {
     const library = configuredLibrary();
+    let groupManifestReads = 0;
     vi.stubGlobal(
       'fetch',
       vi.fn(async (url: URL, init?: RequestInit) => {
@@ -415,6 +2416,17 @@ describe('Meshenger video library', () => {
           const body = JSON.parse(String(init?.body ?? '{}')) as {
             variables?: { ontologyId?: string };
           };
+          if (body.variables?.ontologyId === documentedAuthorizationOntologies.groupManifest) {
+            groupManifestReads += 1;
+            return json({
+              data: {
+                metaEnvelopes: {
+                  edges: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            });
+          }
           if (body.variables?.ontologyId === documentedAuthorizationOntologies.chat) {
             return json({
               data: {
@@ -460,6 +2472,10 @@ describe('Meshenger video library', () => {
       await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
         'https://media.example/shared-video.mp4',
       );
+      // Interactive history opens the independent GroupManifest fallback at
+      // the same time as the direct proof. Let its negative result settle
+      // before this test replaces the global fetch stub.
+      await vi.waitFor(() => expect(groupManifestReads).toBe(1));
     } finally {
       vi.unstubAllGlobals();
     }
@@ -536,7 +2552,1361 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('opens a shared File reference after checking the viewer-owned reference proof', async () => {
+  it('uses the current viewer Chat-grant hint before searching legacy Chat history for Watch and hover warmup', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let hintedReads = 0;
+    let indexedLookups = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            query?: string;
+            variables?: { id?: string };
+          };
+          if (body.query?.includes('MeshengerVideoEnvelope')) {
+            hintedReads += 1;
+            expect(body.variables?.id).toBe('viewer-chat-grant');
+            return json({
+              data: {
+                metaEnvelope: {
+                  id: 'viewer-chat-grant',
+                  ontology: documentedAuthorizationOntologies.chat,
+                  parsed: {
+                    isReference: true,
+                    canonicalOwnerEName: '@friend.w3id',
+                    canonicalChatId: 'chat-1',
+                  },
+                  envelopes: [],
+                },
+              },
+            });
+          }
+          if (body.query?.includes('ExactChatAuthorization')) indexedLookups += 1;
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    try {
+      for (const rateLimit of ['interactive', 'warmup-cancellable'] as const) {
+        await expect(
+          internals.probeViewerChatGrantAccess(
+            { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+            {
+              eName: '@friend.w3id',
+              chatId: 'chat-1',
+              viewerChatGrantId: 'viewer-chat-grant',
+            },
+            rateLimit,
+          ),
+        ).resolves.toEqual({ access: 'ok', member: true });
+      }
+      expect(hintedReads).toBe(2);
+      expect(indexedLookups).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses a durable viewer Chat pointer before searching legacy shared history for Watch and hover warmup', async () => {
+    const pointers = new InMemoryViewerChatGrantPointerStore();
+    await pointers.upsert({
+      viewerEName: '@person.w3id',
+      sourceEName: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      viewerEnvelopeId: 'durable-viewer-chat-grant',
+    });
+    const library = createMeshengerVideoLibrary(
+      {
+        W3DS_AUTH_PLATFORM_NAME: 'vidak',
+        W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        W3DS_AUTH_JWT_SECRET: secret,
+      },
+      { viewerChatGrantPointerStore: pointers },
+    );
+    const internals = directProbeInternals(library);
+    let exactPointerReads = 0;
+    let legacyLookups = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            query?: string;
+            variables?: { id?: string };
+          };
+          if (body.query?.includes('MeshengerVideoEnvelope')) {
+            exactPointerReads += 1;
+            expect(body.variables?.id).toBe('durable-viewer-chat-grant');
+            return json({
+              data: {
+                metaEnvelope: {
+                  id: 'durable-viewer-chat-grant',
+                  ontology: documentedAuthorizationOntologies.chat,
+                  parsed: {
+                    isReference: true,
+                    canonicalOwnerEName: '@friend.w3id',
+                    canonicalChatId: 'chat-1',
+                  },
+                  envelopes: [],
+                },
+              },
+            });
+          }
+          if (body.query?.includes('ExactChatAuthorization')) legacyLookups += 1;
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    try {
+      for (const rateLimit of ['interactive', 'warmup-cancellable'] as const) {
+        await expect(
+          internals.probeViewerChatGrantAccess(
+            { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+            { eName: '@friend.w3id', chatId: 'chat-1' },
+            rateLimit,
+          ),
+        ).resolves.toEqual({ access: 'ok', member: true });
+      }
+      expect(exactPointerReads).toBe(2);
+      expect(legacyLookups).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses a durable viewer Chat pointer when a sealed Chat hint is stale', async () => {
+    const pointers = new InMemoryViewerChatGrantPointerStore();
+    await pointers.upsert({
+      viewerEName: '@person.w3id',
+      sourceEName: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      viewerEnvelopeId: 'durable-viewer-chat-grant',
+    });
+    const library = createMeshengerVideoLibrary(
+      {
+        W3DS_AUTH_PLATFORM_NAME: 'vidak',
+        W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        W3DS_AUTH_JWT_SECRET: secret,
+      },
+      { viewerChatGrantPointerStore: pointers },
+    );
+    const internals = directProbeInternals(library);
+    const exactReads: string[] = [];
+    let legacyLookups = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            query?: string;
+            variables?: { id?: string };
+          };
+          if (body.query?.includes('MeshengerVideoEnvelope')) {
+            const id = body.variables?.id;
+            if (id) exactReads.push(id);
+            return json({
+              data: {
+                metaEnvelope: {
+                  id,
+                  ontology: documentedAuthorizationOntologies.chat,
+                  parsed:
+                    id === 'durable-viewer-chat-grant'
+                      ? {
+                          isReference: true,
+                          canonicalOwnerEName: '@friend.w3id',
+                          canonicalChatId: 'chat-1',
+                        }
+                      : {
+                          isReference: true,
+                          canonicalOwnerEName: '@different-friend.w3id',
+                          canonicalChatId: 'chat-1',
+                        },
+                  envelopes: [],
+                },
+              },
+            });
+          }
+          if (body.query?.includes('ExactChatAuthorization')) legacyLookups += 1;
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    try {
+      await expect(
+        internals.probeViewerChatGrantAccess(
+          { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+          {
+            eName: '@friend.w3id',
+            chatId: 'chat-1',
+            viewerChatGrantId: 'stale-viewer-chat-grant',
+          },
+          'interactive',
+        ),
+      ).resolves.toEqual({ access: 'ok', member: true });
+      expect(exactReads.sort()).toEqual(['durable-viewer-chat-grant', 'stale-viewer-chat-grant']);
+      expect(legacyLookups).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('invalidates only a stale durable pointer and learns the replacement current grant', async () => {
+    const pointers = new InMemoryViewerChatGrantPointerStore();
+    const pointerScope = {
+      viewerEName: '@person.w3id',
+      sourceEName: '@friend.w3id',
+      sourceChatId: 'chat-1',
+    };
+    await pointers.upsert({ ...pointerScope, viewerEnvelopeId: 'stale-viewer-chat-grant' });
+    const library = createMeshengerVideoLibrary(
+      {
+        W3DS_AUTH_PLATFORM_NAME: 'vidak',
+        W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        W3DS_AUTH_JWT_SECRET: secret,
+      },
+      { viewerChatGrantPointerStore: pointers },
+    );
+    const internals = directProbeInternals(library);
+    let exactPointerReads = 0;
+    let legacyLookups = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            query?: string;
+            variables?: { id?: string };
+          };
+          if (body.query?.includes('MeshengerVideoEnvelope')) {
+            exactPointerReads += 1;
+            return json({
+              data: {
+                metaEnvelope: {
+                  id: body.variables?.id,
+                  ontology: documentedAuthorizationOntologies.chat,
+                  parsed: {
+                    isReference: true,
+                    canonicalOwnerEName: '@different-friend.w3id',
+                    canonicalChatId: 'chat-1',
+                  },
+                  envelopes: [],
+                },
+              },
+            });
+          }
+          if (body.query?.includes('ExactChatAuthorization')) {
+            legacyLookups += 1;
+            return json({
+              data: {
+                metaEnvelopes: {
+                  edges: [
+                    {
+                      node: {
+                        id: 'replacement-viewer-chat-grant',
+                        ontology: documentedAuthorizationOntologies.chat,
+                        parsed: {
+                          isReference: true,
+                          canonicalOwnerEName: '@friend.w3id',
+                          canonicalChatId: 'chat-1',
+                        },
+                        envelopes: [],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            });
+          }
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    try {
+      await expect(
+        internals.probeViewerChatGrantAccess(
+          { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+          { eName: '@friend.w3id', chatId: 'chat-1' },
+          'interactive',
+        ),
+      ).resolves.toEqual({ access: 'ok', member: true });
+      expect(exactPointerReads).toBe(1);
+      expect(legacyLookups).toBe(1);
+      await vi.waitFor(async () => {
+        await expect(
+          pointers.listCandidates({ ...pointerScope, includeInactive: true, limit: 3 }),
+        ).resolves.toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              viewerEnvelopeId: 'stale-viewer-chat-grant',
+              state: 'invalid',
+            }),
+            expect.objectContaining({
+              viewerEnvelopeId: 'replacement-viewer-chat-grant',
+              state: 'active',
+            }),
+          ]),
+        );
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('falls back when a viewer Chat-grant hint no longer matches the direct share', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let hintedReads = 0;
+    let indexedLookups = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+        if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            query?: string;
+            variables?: { id?: string };
+          };
+          if (body.query?.includes('MeshengerVideoEnvelope')) {
+            hintedReads += 1;
+            return json({
+              data: {
+                metaEnvelope: {
+                  id: body.variables?.id,
+                  ontology: documentedAuthorizationOntologies.chat,
+                  parsed: {
+                    isReference: true,
+                    canonicalOwnerEName: '@different-friend.w3id',
+                    canonicalChatId: 'chat-1',
+                  },
+                  envelopes: [],
+                },
+              },
+            });
+          }
+          if (body.query?.includes('ExactChatAuthorization')) {
+            indexedLookups += 1;
+            return json({
+              data: {
+                metaEnvelopes: {
+                  edges: [
+                    {
+                      node: {
+                        id: 'replacement-chat-grant',
+                        ontology: documentedAuthorizationOntologies.chat,
+                        parsed: {
+                          isReference: true,
+                          canonicalOwnerEName: '@friend.w3id',
+                          canonicalChatId: 'chat-1',
+                        },
+                        envelopes: [],
+                      },
+                    },
+                  ],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            });
+          }
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    try {
+      await expect(
+        internals.probeViewerChatGrantAccess(
+          { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+          {
+            eName: '@friend.w3id',
+            chatId: 'chat-1',
+            viewerChatGrantId: 'stale-chat-grant',
+          },
+          'interactive',
+        ),
+      ).resolves.toEqual({ access: 'ok', member: true });
+      expect(hintedReads).toBe(1);
+      expect(indexedLookups).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps an exact viewer Chat hint alive when an empty legacy lookup finishes first', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let releaseExact: (response: Response) => void = () => undefined;
+    const exactResponse = new Promise<Response>((resolve) => {
+      releaseExact = resolve;
+    });
+    let legacyLookupFinished: () => void = () => undefined;
+    const legacyLookup = new Promise<void>((resolve) => {
+      legacyLookupFinished = resolve;
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') {
+          return Promise.resolve(json({ token: 'platform-token' }));
+        }
+        if (url.hostname !== 'person-vault.example' || url.pathname !== '/graphql') {
+          throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+        }
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          query?: string;
+          variables?: { id?: string };
+        };
+        if (
+          body.query?.includes('MeshengerVideoEnvelope') &&
+          body.variables?.id === 'viewer-chat-grant'
+        ) {
+          return exactResponse;
+        }
+        if (body.query?.includes('ExactChatAuthorization')) {
+          return Promise.resolve(
+            json({
+              data: {
+                metaEnvelopes: {
+                  edges: [],
+                  pageInfo: { hasNextPage: false, endCursor: null },
+                },
+              },
+            }),
+          );
+        }
+        legacyLookupFinished();
+        return Promise.resolve(
+          json({
+            data: {
+              metaEnvelopes: {
+                edges: [],
+                pageInfo: { hasNextPage: false, endCursor: null },
+              },
+            },
+          }),
+        );
+      }),
+    );
+
+    try {
+      const pending = internals.findInteractiveViewerChatGrantAuthorizationEnvelopes(
+        '@person.w3id',
+        'https://person-vault.example',
+        {
+          eName: '@friend.w3id',
+          chatId: 'chat-1',
+          viewerChatGrantId: 'viewer-chat-grant',
+        },
+        '@person.w3id',
+        'interactive',
+      );
+      await legacyLookup;
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      releaseExact(
+        json({
+          data: {
+            metaEnvelope: {
+              id: 'viewer-chat-grant',
+              ontology: documentedAuthorizationOntologies.chat,
+              parsed: {
+                isReference: true,
+                canonicalOwnerEName: '@friend.w3id',
+                canonicalChatId: 'chat-1',
+              },
+              envelopes: [],
+            },
+          },
+        }),
+      );
+
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({ id: 'viewer-chat-grant' }),
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps an exact viewer Chat hint alive when the legacy lookup fails first', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let releaseExact: (response: Response) => void = () => undefined;
+    const exactResponse = new Promise<Response>((resolve) => {
+      releaseExact = resolve;
+    });
+    let legacyLookupStarted: () => void = () => undefined;
+    const legacyLookup = new Promise<void>((resolve) => {
+      legacyLookupStarted = resolve;
+    });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') {
+          return Promise.resolve(json({ token: 'platform-token' }));
+        }
+        if (url.hostname !== 'person-vault.example' || url.pathname !== '/graphql') {
+          throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+        }
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          query?: string;
+          variables?: { id?: string };
+        };
+        if (
+          body.query?.includes('MeshengerVideoEnvelope') &&
+          body.variables?.id === 'viewer-chat-grant'
+        ) {
+          return exactResponse;
+        }
+        if (body.query?.includes('ExactChatAuthorization')) {
+          legacyLookupStarted();
+          return Promise.resolve(new Response('temporary source failure', { status: 503 }));
+        }
+        throw new Error(`Unexpected GraphQL query: ${body.query}`);
+      }),
+    );
+
+    try {
+      const pending = internals.findInteractiveViewerChatGrantAuthorizationEnvelopes(
+        '@person.w3id',
+        'https://person-vault.example',
+        {
+          eName: '@friend.w3id',
+          chatId: 'chat-1',
+          viewerChatGrantId: 'viewer-chat-grant',
+        },
+        '@person.w3id',
+        'interactive',
+      );
+      await legacyLookup;
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await Promise.resolve();
+      expect(settled).toBe(false);
+
+      releaseExact(
+        json({
+          data: {
+            metaEnvelope: {
+              id: 'viewer-chat-grant',
+              ontology: documentedAuthorizationOntologies.chat,
+              parsed: {
+                isReference: true,
+                canonicalOwnerEName: '@friend.w3id',
+                canonicalChatId: 'chat-1',
+              },
+              envelopes: [],
+            },
+          },
+        }),
+      );
+
+      await expect(pending).resolves.toEqual([
+        expect.objectContaining({ id: 'viewer-chat-grant' }),
+      ]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses a positive source-envelope hedge before a slow legacy Chat page', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let legacyStarted = false;
+    let legacyAborted = false;
+    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return Promise.resolve(
+          json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }),
+        );
+      }
+      if (url.pathname === '/platforms/certification') {
+        return Promise.resolve(json({ token: 'platform-token' }));
+      }
+      if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          query?: string;
+          variables?: { id?: string };
+        };
+        if (body.query?.includes('ExactChatAuthorization')) {
+          return Promise.resolve(
+            json({
+              data: {
+                metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              },
+            }),
+          );
+        }
+        if (body.query?.includes('AuthorizedMedia')) {
+          legacyStarted = true;
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => {
+                legacyAborted = true;
+                reject(new Error('legacy Chat read aborted'));
+              },
+              { once: true },
+            );
+          });
+        }
+        if (body.query?.includes('MeshengerVideoEnvelope') && body.variables?.id === 'chat-1') {
+          return Promise.resolve(
+            json({
+              data: {
+                metaEnvelope: {
+                  id: 'chat-1',
+                  ontology: documentedAuthorizationOntologies.chat,
+                  parsed: { id: 'chat-1', participantIds: ['@person.w3id'] },
+                  envelopes: [],
+                },
+              },
+            }),
+          );
+        }
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      await expect(
+        internals.probeDirectSourceChatAccess(
+          { eName: '@person.w3id' },
+          { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+          'interactive',
+        ),
+      ).resolves.toEqual({ access: 'ok', member: true });
+      expect(legacyStarted).toBe(true);
+      await vi.waitFor(() => expect(legacyAborted).toBe(true));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the indexed and legacy Chat lookup authoritative after a non-member hedge', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let releaseLegacy: (response: Response) => void = () => undefined;
+    const legacyResponse = new Promise<Response>((resolve) => {
+      releaseLegacy = resolve;
+    });
+    let legacySignal: AbortSignal | undefined;
+    let hedgeReadStarted: () => void = () => undefined;
+    const hedgeRead = new Promise<void>((resolve) => {
+      hedgeReadStarted = resolve;
+    });
+    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return Promise.resolve(
+          json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }),
+        );
+      }
+      if (url.pathname === '/platforms/certification') {
+        return Promise.resolve(json({ token: 'platform-token' }));
+      }
+      if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as {
+          query?: string;
+          variables?: { id?: string };
+        };
+        if (body.query?.includes('ExactChatAuthorization')) {
+          return Promise.resolve(
+            json({
+              data: {
+                metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } },
+              },
+            }),
+          );
+        }
+        if (body.query?.includes('AuthorizedMedia')) {
+          legacySignal = init?.signal ?? undefined;
+          return legacyResponse;
+        }
+        if (body.query?.includes('MeshengerVideoEnvelope') && body.variables?.id === 'chat-1') {
+          hedgeReadStarted();
+          return Promise.resolve(
+            json({
+              data: {
+                metaEnvelope: {
+                  id: 'chat-1',
+                  ontology: documentedAuthorizationOntologies.chat,
+                  parsed: { id: 'chat-1', participantIds: ['@someone-else.w3id'] },
+                  envelopes: [],
+                },
+              },
+            }),
+          );
+        }
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const pending = internals.probeDirectSourceChatAccess(
+        { eName: '@person.w3id' },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+        'interactive',
+      );
+      await hedgeRead;
+      expect(legacySignal?.aborted).toBe(false);
+      releaseLegacy(
+        json({
+          data: {
+            metaEnvelopes: {
+              edges: [
+                {
+                  node: {
+                    id: 'chat-1',
+                    ontology: documentedAuthorizationOntologies.chat,
+                    parsed: { id: 'chat-1', participantIds: ['@person.w3id'] },
+                    envelopes: [],
+                  },
+                },
+              ],
+              pageInfo: { hasNextPage: false, endCursor: null },
+            },
+          },
+        }),
+      );
+
+      await expect(pending).resolves.toEqual({ access: 'ok', member: true });
+      expect(legacySignal?.aborted).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('cancels the delayed source-envelope hedge with its direct Chat branch', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    const controller = new AbortController();
+    let exactSignal: AbortSignal | undefined;
+    let sourceEnvelopeReads = 0;
+    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return Promise.resolve(
+          json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }),
+        );
+      }
+      if (url.pathname === '/platforms/certification') {
+        return Promise.resolve(json({ token: 'platform-token' }));
+      }
+      if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { query?: string };
+        if (body.query?.includes('ExactChatAuthorization')) {
+          exactSignal = init?.signal ?? undefined;
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => reject(new Error('Chat read aborted')), {
+              once: true,
+            });
+          });
+        }
+        if (body.query?.includes('MeshengerVideoEnvelope')) {
+          sourceEnvelopeReads += 1;
+          return Promise.resolve(json({ data: { metaEnvelope: null } }));
+        }
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const pending = internals.probeDirectSourceChatAccess(
+        { eName: '@person.w3id' },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+        'interactive',
+        controller.signal,
+        controller.signal,
+      );
+      await vi.waitFor(() => expect(exactSignal).toBeDefined());
+      controller.abort();
+
+      await expect(pending).resolves.toEqual({ access: 'retry', member: false });
+      expect(exactSignal?.aborted).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(sourceEnvelopeReads).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('stops the losing viewer Chat probe after the source proves a direct share', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let viewerChatSignal: AbortSignal | undefined;
+    const source = vi
+      .spyOn(internals, 'probeDirectSourceChatAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    const viewer = vi
+      .spyOn(internals, 'probeViewerChatGrantAccess')
+      .mockImplementation(async (_user, _space, _rateLimit, _parentSignal, chatSignal) => {
+        viewerChatSignal = chatSignal;
+        return new Promise<SharedAccessResult>((resolve) => {
+          chatSignal?.addEventListener('abort', () => resolve({ access: 'retry', member: false }), {
+            once: true,
+          });
+        });
+      });
+
+    await expect(
+      library.probeSharedSpaceAccess(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+        'backoff',
+      ),
+    ).resolves.toEqual({ access: 'ok', member: true });
+
+    expect(source).toHaveBeenCalledWith(
+      { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+      { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+      'backoff',
+      undefined,
+      expect.any(AbortSignal),
+    );
+    expect(viewer).toHaveBeenCalledWith(
+      { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+      { eName: '@friend.w3id', chatId: 'chat-1' },
+      'backoff',
+      undefined,
+      expect.any(AbortSignal),
+    );
+    expect(viewerChatSignal?.aborted).toBe(true);
+  });
+
+  it('stops the losing source Chat probe after the viewer proves a direct share', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let sourceChatSignal: AbortSignal | undefined;
+    vi.spyOn(internals, 'probeDirectSourceChatAccess').mockImplementation(
+      async (_user, _space, _rateLimit, _parentSignal, chatSignal) => {
+        sourceChatSignal = chatSignal;
+        return new Promise<SharedAccessResult>((resolve) => {
+          chatSignal?.addEventListener('abort', () => resolve({ access: 'retry', member: false }), {
+            once: true,
+          });
+        });
+      },
+    );
+    vi.spyOn(internals, 'probeViewerChatGrantAccess').mockResolvedValue({
+      access: 'ok',
+      member: true,
+    });
+
+    await expect(
+      library.probeSharedSpaceAccess(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+        'backoff',
+      ),
+    ).resolves.toEqual({ access: 'ok', member: true });
+
+    expect(sourceChatSignal?.aborted).toBe(true);
+  });
+
+  it('keeps the alternate direct Chat probe running after a non-proof result', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    let viewerChatSignal: AbortSignal | undefined;
+    let resolveViewer: (access: SharedAccessResult) => void = () => undefined;
+    vi.spyOn(internals, 'probeDirectSourceChatAccess').mockResolvedValue({
+      access: 'ok',
+      member: false,
+    });
+    vi.spyOn(internals, 'probeViewerChatGrantAccess').mockImplementation(
+      async (_user, _space, _rateLimit, _parentSignal, chatSignal) => {
+        viewerChatSignal = chatSignal;
+        return new Promise<SharedAccessResult>((resolve) => {
+          resolveViewer = resolve;
+        });
+      },
+    );
+
+    const pending = library.probeSharedSpaceAccess(
+      { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+      { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+      'backoff',
+    );
+    await vi.waitFor(() => expect(viewerChatSignal).toBeDefined());
+    expect(viewerChatSignal?.aborted).toBe(false);
+    resolveViewer({ access: 'ok', member: true });
+
+    await expect(pending).resolves.toEqual({ access: 'ok', member: true });
+    expect(viewerChatSignal?.aborted).toBe(false);
+  });
+
+  it('propagates parent cancellation to both direct Chat probes', async () => {
+    const library = configuredLibrary();
+    const internals = directProbeInternals(library);
+    const controller = new AbortController();
+    let sourceChatSignal: AbortSignal | undefined;
+    let viewerChatSignal: AbortSignal | undefined;
+    vi.spyOn(internals, 'probeDirectSourceChatAccess').mockImplementation(
+      async (_user, _space, _rateLimit, _parentSignal, chatSignal) => {
+        sourceChatSignal = chatSignal;
+        return new Promise<SharedAccessResult>((resolve) => {
+          chatSignal?.addEventListener('abort', () => resolve({ access: 'retry', member: false }), {
+            once: true,
+          });
+        });
+      },
+    );
+    vi.spyOn(internals, 'probeViewerChatGrantAccess').mockImplementation(
+      async (_user, _space, _rateLimit, _parentSignal, chatSignal) => {
+        viewerChatSignal = chatSignal;
+        return new Promise<SharedAccessResult>((resolve) => {
+          chatSignal?.addEventListener('abort', () => resolve({ access: 'retry', member: false }), {
+            once: true,
+          });
+        });
+      },
+    );
+
+    const pending = library.probeSharedSpaceAccess(
+      { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+      { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+      'backoff',
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(sourceChatSignal).toBeDefined());
+    await vi.waitFor(() => expect(viewerChatSignal).toBeDefined());
+    controller.abort();
+
+    await expect(pending).resolves.toEqual({ access: 'retry', member: false });
+    expect(sourceChatSignal?.aborted).toBe(true);
+    expect(viewerChatSignal?.aborted).toBe(true);
+  });
+
+  it('does not cancel a shared source vault resolution when the other direct Chat probe wins', async () => {
+    const library = configuredLibrary();
+    let releaseFriendResolve: () => void = () => undefined;
+    let friendResolveSignal: AbortSignal | undefined;
+    const delayedFriendResolve = new Promise<Response>((resolve) => {
+      releaseFriendResolve = () =>
+        resolve(json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }));
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL, init?: RequestInit) => {
+        if (url.pathname === '/resolve' && url.searchParams.get('w3id') === '@friend.w3id') {
+          friendResolveSignal = init?.signal ?? undefined;
+          return delayedFriendResolve;
+        }
+        if (url.pathname === '/platforms/certification') {
+          return Promise.resolve(json({ token: 'platform-token' }));
+        }
+        if (url.hostname === 'person-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            variables?: { chatId?: string };
+          };
+          if (body.variables?.chatId === 'chat-1') {
+            return Promise.resolve(
+              json({
+                data: {
+                  metaEnvelopes: {
+                    edges: [
+                      {
+                        node: {
+                          id: 'viewer-chat-reference',
+                          ontology: documentedAuthorizationOntologies.chat,
+                          parsed: {
+                            isReference: true,
+                            canonicalOwnerEName: '@friend.w3id',
+                            canonicalChatId: 'chat-1',
+                            type: 'direct',
+                          },
+                          envelopes: [],
+                        },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              }),
+            );
+          }
+          if (body.variables?.chatId === 'chat-2') {
+            return new Promise<Response>((_resolve, reject) => {
+              init?.signal?.addEventListener(
+                'abort',
+                () => reject(new Error('viewer chat request aborted')),
+                { once: true },
+              );
+            });
+          }
+        }
+        if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+          const body = JSON.parse(String(init?.body ?? '{}')) as {
+            variables?: { chatId?: string };
+          };
+          if (body.variables?.chatId === 'chat-2') {
+            return Promise.resolve(
+              json({
+                data: {
+                  metaEnvelopes: {
+                    edges: [
+                      {
+                        node: {
+                          id: 'chat-2',
+                          ontology: documentedAuthorizationOntologies.chat,
+                          parsed: { id: 'chat-2', participantIds: ['@person.w3id'] },
+                          envelopes: [],
+                        },
+                      },
+                    ],
+                    pageInfo: { hasNextPage: false, endCursor: null },
+                  },
+                },
+              }),
+            );
+          }
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    try {
+      const first = library.probeSharedSpaceAccess(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+        'backoff',
+      );
+      await vi.waitFor(() => expect(friendResolveSignal).toBeDefined());
+      await expect(first).resolves.toEqual({ access: 'ok', member: true });
+      expect(friendResolveSignal?.aborted).toBe(false);
+
+      const second = library.probeSharedSpaceAccess(
+        { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-2' },
+        'backoff',
+      );
+      releaseFriendResolve();
+
+      await expect(second).resolves.toEqual({ access: 'ok', member: true });
+    } finally {
+      releaseFriendResolve();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('aborts a background shared-access probe at its in-flight eVault read', async () => {
+    const controller = new AbortController();
+    let graphQlAborted = false;
+    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return Promise.resolve(
+          json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }),
+        );
+      }
+      if (url.pathname === '/platforms/certification') {
+        return Promise.resolve(json({ token: 'platform-token' }));
+      }
+      if (url.hostname === 'friend-vault.example' && url.pathname === '/graphql') {
+        return new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => {
+              graphQlAborted = true;
+              reject(new Error('request aborted'));
+            },
+            { once: true },
+          );
+        });
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      const pending = configuredLibrary().probeSharedSpaceAccess(
+        { eName: '@person.w3id' },
+        { eName: '@friend.w3id', kind: 'direct', chatId: 'chat-1' },
+        'fail-fast',
+        { signal: controller.signal },
+      );
+
+      await vi.waitFor(() =>
+        expect(
+          fetcher.mock.calls.some(
+            ([url]) =>
+              (url as URL).hostname === 'friend-vault.example' &&
+              (url as URL).pathname === '/graphql',
+          ),
+        ).toBe(true),
+      );
+      controller.abort();
+
+      await expect(pending).resolves.toEqual({ access: 'retry', member: false });
+      expect(graphQlAborted).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not let a cancellable shared preview block an interactive Watch request', async () => {
+    const library = configuredLibrary();
+    const controller = new AbortController();
+    let markBackgroundStarted: () => void = () => undefined;
+    const backgroundStarted = new Promise<void>((resolve) => {
+      markBackgroundStarted = resolve;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation(async (_user, _space, rateLimit, options) => {
+        if (rateLimit === 'background-cancellable') {
+          markBackgroundStarted();
+          return new Promise<{ access: 'retry'; member: false }>((resolve) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => resolve({ access: 'retry', member: false }),
+              { once: true },
+            );
+          });
+        }
+        return { access: 'ok', member: true };
+      });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/files/shared-preview-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/shared-preview.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/shared-preview-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+
+    try {
+      const preview = library.resolveMediaUrl({ eName: grant.eName }, streamId, {
+        priority: 'background',
+        signal: controller.signal,
+      });
+      await backgroundStarted;
+
+      await expect(
+        library.resolveMediaUrl({ eName: grant.eName }, streamId, { priority: 'interactive' }),
+      ).resolves.toBe('https://media.example/shared-preview.mp4');
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        { eName: '@friend.w3id', kind: 'group' },
+        'background-cancellable',
+        { signal: controller.signal },
+      );
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        { eName: '@friend.w3id', kind: 'group' },
+        'interactive',
+        { signal: expect.any(AbortSignal) },
+      );
+
+      controller.abort();
+      await expect(preview).rejects.toThrow('Background media resolution was cancelled.');
+    } finally {
+      controller.abort();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not let a cancellable shared hover warmup block an interactive Watch request', async () => {
+    const library = configuredLibrary();
+    const controller = new AbortController();
+    let markWarmupStarted: () => void = () => undefined;
+    const warmupStarted = new Promise<void>((resolve) => {
+      markWarmupStarted = resolve;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation(async (_user, _space, rateLimit, options) => {
+        if (rateLimit === 'warmup-cancellable') {
+          markWarmupStarted();
+          return new Promise<{ access: 'retry'; member: false }>((resolve) => {
+            options?.signal?.addEventListener(
+              'abort',
+              () => resolve({ access: 'retry', member: false }),
+              { once: true },
+            );
+          });
+        }
+        return { access: 'ok', member: true };
+      });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/files/shared-hover-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/shared-hover.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/shared-hover-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+
+    try {
+      const warmup = library.resolveMediaUrl({ eName: grant.eName }, streamId, {
+        priority: 'warmup',
+        signal: controller.signal,
+      });
+      await warmupStarted;
+
+      await expect(
+        library.resolveMediaUrl({ eName: grant.eName }, streamId, { priority: 'interactive' }),
+      ).resolves.toBe('https://media.example/shared-hover.mp4');
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        { eName: '@friend.w3id', kind: 'group' },
+        'warmup-cancellable',
+        { signal: controller.signal },
+      );
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        { eName: '@friend.w3id', kind: 'group' },
+        'interactive',
+        { signal: expect.any(AbortSignal) },
+      );
+
+      controller.abort();
+      await expect(warmup).rejects.toThrow('Background media resolution was cancelled.');
+    } finally {
+      controller.abort();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('cancels a shared hover directory lookup without poisoning the next Watch', async () => {
+    const library = configuredLibrary();
+    const controller = new AbortController();
+    let markRegistryStarted: () => void = () => undefined;
+    const registryStarted = new Promise<void>((resolve) => {
+      markRegistryStarted = resolve;
+    });
+    let registryAborted = false;
+    let registryRequests = 0;
+    vi.spyOn(library, 'probeSharedSpaceAccess').mockImplementation(
+      async (_user, _space, rateLimit, options) => {
+        if (rateLimit !== 'warmup-cancellable') return { access: 'ok', member: true };
+        return new Promise<SharedAccessResult>((resolve) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => resolve({ access: 'retry', member: false }),
+            { once: true },
+          );
+        });
+      },
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL, init?: RequestInit) => {
+        if (url.pathname === '/resolve') {
+          registryRequests += 1;
+          if (registryRequests > 1) {
+            return Promise.resolve(
+              json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }),
+            );
+          }
+          markRegistryStarted();
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              'abort',
+              () => {
+                registryAborted = true;
+                reject(new Error('hover directory lookup aborted'));
+              },
+              { once: true },
+            );
+          });
+        }
+        if (url.pathname === '/files/cancelled-hover') {
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/cancelled-hover.mp4' },
+            }),
+          );
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/cancelled-hover',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+
+    try {
+      const hover = library.resolveMediaUrl({ eName: grant.eName }, streamId, {
+        priority: 'warmup',
+        signal: controller.signal,
+      });
+      await registryStarted;
+      controller.abort();
+      await expect(hover).rejects.toThrow('Background media resolution was cancelled.');
+      expect(registryAborted).toBe(true);
+
+      await expect(
+        library.resolveMediaUrl({ eName: grant.eName }, streamId, { priority: 'interactive' }),
+      ).resolves.toBe('https://media.example/cancelled-hover.mp4');
+      expect(registryRequests).toBe(2);
+    } finally {
+      controller.abort();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('opens a shared File reference after checking its viewer-owned reference proof', async () => {
     const library = configuredLibrary();
     const probe = vi
       .spyOn(library, 'probeSharedSpaceAccess')
@@ -581,7 +3951,8 @@ describe('Meshenger video library', () => {
           referenceId: 'local-reference',
           fileId: 'shared-file',
         },
-        'backoff',
+        'interactive',
+        { signal: expect.any(AbortSignal) },
       );
     } finally {
       vi.unstubAllGlobals();
@@ -640,13 +4011,24 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('refuses a shared stream when its current source access is gone', async () => {
+  it('rejects a shared stream when its current source access is gone even if File would redirect', async () => {
     const library = configuredLibrary();
-    vi.spyOn(library, 'probeSharedSpaceAccess').mockResolvedValue({
+    const probe = vi.spyOn(library, 'probeSharedSpaceAccess').mockResolvedValue({
       access: 'denied',
       member: false,
     });
-    const fetcher = vi.fn();
+    const fetcher = vi.fn(async (url: URL, _init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+      }
+      if (url.pathname === '/files/shared-file') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/shared-file.mp4' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
     vi.stubGlobal('fetch', fetcher);
     const streamId = createMeshengerVideoStreamId(
       {
@@ -663,7 +4045,287 @@ describe('Meshenger video library', () => {
       await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).rejects.toThrow(
         expect.objectContaining({ code: 'authorization_denied', status: 403 }),
       );
-      expect(fetcher).not.toHaveBeenCalled();
+      expect(probe).toHaveBeenCalledTimes(1);
+      // The owner directory may be resolved speculatively, but a denied
+      // share must never reach the File/media endpoint.
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname.startsWith('/files/')),
+      ).toHaveLength(0);
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname === '/resolve'),
+      ).toHaveLength(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps an interactive source read retryable when the source briefly rate limits', async () => {
+    let resolveAttempts = 0;
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        resolveAttempts += 1;
+        if (resolveAttempts === 1) return rateLimited('0');
+        return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+      }
+      if (url.pathname === '/files/interactive-rate-limit') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/interactive-rate-limit.mp4' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl(
+          { eName: '@person.w3id' },
+          createMeshengerVideoStreamId(
+            { ...grant, fileUri: 'w3ds://file?id=@person.w3id/interactive-rate-limit' },
+            secret,
+          ),
+          { priority: 'interactive' },
+        ),
+      ).resolves.toBe('https://media.example/interactive-rate-limit.mp4');
+      expect(resolveAttempts).toBe(2);
+      expect(
+        fetcher.mock.calls.filter(([url]) => (url as URL).pathname === '/resolve'),
+      ).toHaveLength(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps the longer retry budget for background source repair', async () => {
+    let resolveAttempts = 0;
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        resolveAttempts += 1;
+        if (resolveAttempts < 4) return rateLimited('0');
+        return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+      }
+      if (url.pathname === '/files/background-repair') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/background-repair.mp4' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl(
+          { eName: '@person.w3id' },
+          createMeshengerVideoStreamId(
+            { ...grant, fileUri: 'w3ds://file?id=@person.w3id/background-repair' },
+            secret,
+          ),
+          { priority: 'background' },
+        ),
+      ).resolves.toBe('https://media.example/background-repair.mp4');
+      expect(resolveAttempts).toBe(4);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not make an interactive Watch request inherit a background source resolution', async () => {
+    let resolveAttempts = 0;
+    let releaseBackgroundResolve!: () => void;
+    let markBackgroundStarted!: () => void;
+    const backgroundStarted = new Promise<void>((resolve) => {
+      markBackgroundStarted = resolve;
+    });
+    const delayedBackgroundResolve = new Promise<Response>((resolve) => {
+      releaseBackgroundResolve = () =>
+        resolve(json({ ename: '@person.w3id', uri: 'https://vault.example' }));
+    });
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        resolveAttempts += 1;
+        if (resolveAttempts === 1) {
+          markBackgroundStarted();
+          return delayedBackgroundResolve;
+        }
+        return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+      }
+      if (url.pathname === '/files/priority-file') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/priority-file.mp4' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const streamId = createMeshengerVideoStreamId(
+      { ...grant, fileUri: 'w3ds://file?id=@person.w3id/priority-file' },
+      secret,
+    );
+
+    try {
+      const background = configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
+        priority: 'background',
+      });
+      await backgroundStarted;
+      await expect(
+        configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
+          priority: 'interactive',
+        }),
+      ).resolves.toBe('https://media.example/priority-file.mp4');
+      expect(resolveAttempts).toBe(2);
+
+      releaseBackgroundResolve();
+      await expect(background).resolves.toBe('https://media.example/priority-file.mp4');
+    } finally {
+      releaseBackgroundResolve();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('cancels a preview File resolution without poisoning the next interactive redirect', async () => {
+    const controller = new AbortController();
+    let markDirectRequestStarted: () => void = () => undefined;
+    const directRequestStarted = new Promise<void>((resolve) => {
+      markDirectRequestStarted = resolve;
+    });
+    let directRequests = 0;
+    const fetcher = vi.fn((url: URL, init?: RequestInit) => {
+      if (url.pathname === '/resolve') {
+        return Promise.resolve(json({ ename: '@person.w3id', uri: 'https://vault.example' }));
+      }
+      if (url.pathname === '/files/cancellable-preview') {
+        directRequests += 1;
+        if (directRequests > 1) {
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/cancellable-preview.mp4' },
+            }),
+          );
+        }
+        return new Promise<Response>((_resolve, reject) => {
+          const signal = init?.signal;
+          markDirectRequestStarted();
+          signal?.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const streamId = createMeshengerVideoStreamId(
+      { ...grant, fileUri: 'w3ds://file?id=@person.w3id/cancellable-preview' },
+      secret,
+    );
+
+    try {
+      const preview = configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
+        priority: 'background',
+        signal: controller.signal,
+      });
+      await directRequestStarted;
+      controller.abort();
+      await expect(preview).rejects.toThrow('Background media resolution was cancelled.');
+
+      await expect(
+        configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
+          priority: 'interactive',
+        }),
+      ).resolves.toBe('https://media.example/cancellable-preview.mp4');
+      expect(directRequests).toBe(2);
+      expect(fetcher.mock.calls.some(([url]) => (url as URL).pathname === '/graphql')).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('stops a cancelled preview during Retry-After instead of issuing another source retry', async () => {
+    const controller = new AbortController();
+    let resolveAttempts = 0;
+    const fetcher = vi.fn((url: URL) => {
+      if (url.pathname === '/resolve') {
+        resolveAttempts += 1;
+        return Promise.resolve(rateLimited('120'));
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const streamId = createMeshengerVideoStreamId(
+      { ...grant, fileUri: 'w3ds://file?id=@person.w3id/cancel-retry' },
+      secret,
+    );
+
+    try {
+      const preview = configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
+        priority: 'background',
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(resolveAttempts).toBe(1));
+      controller.abort();
+      await expect(preview).rejects.toThrow('Background media resolution was cancelled.');
+      expect(resolveAttempts).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reports fixed resolution phase timings without exposing a source', async () => {
+    const timing: Array<{
+      mediaUrlCacheHit: boolean;
+      sharedAccessVerificationMs: number;
+      eVaultResolutionMs: number;
+      directFileDereferenceMs: number;
+      platformTokenMs: number;
+      metadataReadMs: number;
+    }> = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL) => {
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+        }
+        if (url.pathname === '/files/timed-file') {
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/timed-file.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      { ...grant, fileUri: 'w3ds://file?id=@person.w3id/timed-file' },
+      secret,
+    );
+
+    try {
+      await configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
+        onTiming: (entry) => timing.push(entry),
+      });
+      await configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
+        onTiming: (entry) => timing.push(entry),
+      });
+
+      expect(timing).toHaveLength(2);
+      expect(timing[0]).toMatchObject({
+        mediaUrlCacheHit: false,
+        sharedAccessVerificationMs: 0,
+        eVaultResolutionMs: expect.any(Number),
+        directFileDereferenceMs: expect.any(Number),
+        platformTokenMs: 0,
+        metadataReadMs: 0,
+      });
+      expect(timing[1]).toMatchObject({
+        mediaUrlCacheHit: true,
+        sharedAccessVerificationMs: 0,
+        eVaultResolutionMs: 0,
+        directFileDereferenceMs: 0,
+        platformTokenMs: 0,
+        metadataReadMs: 0,
+      });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -815,10 +4477,79 @@ describe('Meshenger video library', () => {
           secret,
         ),
       );
-      expect(await jobStore.vaultNotBefore('@person.w3id', now)).toBe(now + 30_000);
-      now += 30_000;
+      expect(await jobStore.vaultNotBefore('@person.w3id', now)).toBe(now + 90_000);
+      now += 90_000;
       expect(await jobStore.vaultNotBefore('@person.w3id', now)).toBe(now);
     } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('pauses the next same-vault inventory wave before its durable playback gate is written', async () => {
+    let now = 1_000;
+    const durableStore = createMemoryInventoryJobStore();
+    let releaseDurableGate: () => void = () => {};
+    const delayedSetVaultGate = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseDurableGate = resolve;
+        }),
+    );
+    const jobStore = { ...durableStore, setVaultGate: delayedSetVaultGate };
+    let inventoryReads = 0;
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@person.w3id', uri: 'https://vault.example' });
+      }
+      if (url.pathname === '/files/local-gate-file') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/local-gate.mp4' },
+        });
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      if (url.pathname === '/graphql') {
+        inventoryReads += 1;
+        return json({
+          data: { metaEnvelopes: { edges: [], pageInfo: { hasNextPage: false, endCursor: null } } },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    try {
+      const library = createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+          W3DS_AUTH_JWT_SECRET: secret,
+        },
+        { jobStore, now: () => now },
+      );
+      await library.resolveMediaUrl(
+        { eName: '@person.w3id' },
+        createMeshengerVideoStreamId(
+          { ...grant, fileUri: 'w3ds://file?id=@person.w3id/local-gate-file' },
+          secret,
+        ),
+      );
+
+      await library.scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'shared', maxWaves: 1, onSnapshot: () => undefined },
+      );
+
+      expect(delayedSetVaultGate).toHaveBeenCalledWith('@person.w3id', now + 90_000);
+      expect(inventoryReads).toBe(0);
+
+      now += 90_000;
+      await library.scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        { scope: 'shared', maxWaves: 1, onSnapshot: () => undefined },
+      );
+      expect(inventoryReads).toBeGreaterThan(0);
+    } finally {
+      releaseDurableGate();
       vi.unstubAllGlobals();
     }
   });
@@ -961,7 +4692,8 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('discovers group-vault calls through chat references and keeps recording segments ordered', async () => {
+  it('discovers group-vault calls through chat references and prefers their complete recording', async () => {
+    const completeRecording = 'w3ds://file?id=@group.w3id/call-complete';
     const firstSegment = 'w3ds://file?id=@group.w3id/call-part-1';
     const secondSegment = 'w3ds://file?id=@group.w3id/call-part-2';
     const groupCircle = 'w3ds://file?id=@group.w3id/circle-1';
@@ -1043,7 +4775,7 @@ describe('Meshenger video library', () => {
                       durationSec: 90,
                       recording: {
                         mediaIsVideo: true,
-                        mediaUri: firstSegment,
+                        mediaUri: completeRecording,
                         mediaSegments: [firstSegment, secondSegment],
                       },
                     },
@@ -1178,7 +4910,7 @@ describe('Meshenger video library', () => {
         }),
       );
       expect(call?.accessScope).toBe('shared');
-      expect(call?.streamIds).toHaveLength(2);
+      expect(call?.streamIds).toHaveLength(1);
       expect(videos).toEqual(
         expect.arrayContaining([
           expect.objectContaining({
@@ -1321,7 +5053,78 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('refreshes a cached media URL after the source rejects an expired signed URL', async () => {
+  it('refreshes a cached eVault directory once when its old File location is missing', async () => {
+    vi.useFakeTimers();
+    let registryReads = 0;
+    let oldMovedFileReads = 0;
+    let freshMovedFileReads = 0;
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        registryReads += 1;
+        return json({
+          ename: '@person.w3id',
+          uri: registryReads === 1 ? 'https://old-vault.example' : 'https://new-vault.example',
+        });
+      }
+      if (url.hostname === 'old-vault.example' && url.pathname === '/files/cache-seed') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/cache-seed.mp4' },
+        });
+      }
+      if (url.hostname === 'old-vault.example' && url.pathname === '/files/moved-file') {
+        oldMovedFileReads += 1;
+        return new Response(null, { status: 404 });
+      }
+      if (url.hostname === 'old-vault.example' && url.pathname === '/graphql') {
+        return new Response(null, { status: 404 });
+      }
+      if (url.hostname === 'new-vault.example' && url.pathname === '/files/moved-file') {
+        freshMovedFileReads += 1;
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/moved-file.mp4' },
+        });
+      }
+      if (url.pathname === '/platforms/certification') return json({ token: 'platform-token' });
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const stream = (fileId: string) =>
+      createMeshengerVideoStreamId(
+        {
+          ...grant,
+          fileUri: `w3ds://file?id=@person.w3id/${fileId}`,
+          expiresAt: Date.now() + 10 * 60_000,
+        },
+        secret,
+      );
+
+    try {
+      const library = configuredLibrary();
+      // Seed only non-authorizing directory metadata. The next stream shares
+      // the old mapping, then the File/metadata source proves it is stale.
+      await expect(
+        library.resolveMediaUrl({ eName: grant.eName }, stream('cache-seed')),
+      ).resolves.toBe('https://media.example/cache-seed.mp4');
+      // The previous one-minute directory cache would be cold by now. Keep
+      // the non-authorizing mapping warm through normal browsing, then prove
+      // that a moved source still forces one fresh registry lookup.
+      await vi.advanceTimersByTimeAsync(60_001);
+      await expect(
+        library.resolveMediaUrl({ eName: grant.eName }, stream('moved-file')),
+      ).resolves.toBe('https://media.example/moved-file.mp4');
+
+      expect(registryReads).toBe(2);
+      expect(oldMovedFileReads).toBe(1);
+      expect(freshMovedFileReads).toBe(1);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('retries a transient File redirect after upstream invalidation instead of retaining its stale GraphQL fallback', async () => {
     const staleGrant = {
       eName: '@cache-reset.w3id',
       fileUri: 'w3ds://file?id=@cache-reset.w3id/reset-file',
@@ -1329,10 +5132,21 @@ describe('Meshenger video library', () => {
       expiresAt: Date.now() + 60_000,
     };
     let readCount = 0;
+    let registryReads = 0;
+    let directFileReads = 0;
     const fetcher = vi.fn(async (url: URL) => {
-      if (url.pathname === '/resolve')
+      if (url.pathname === '/resolve') {
+        registryReads += 1;
         return json({ ename: '@vault.w3id', uri: 'https://vault.example' });
-      if (url.pathname.startsWith('/files/')) return new Response(null, { status: 404 });
+      }
+      if (url.pathname.startsWith('/files/')) {
+        directFileReads += 1;
+        if (directFileReads === 1) return new Response(null, { status: 503 });
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/refreshed.mp4' },
+        });
+      }
       if (url.pathname === '/platforms/certification')
         return json({ token: 'registry-platform-token' });
       readCount += 1;
@@ -1342,10 +5156,7 @@ describe('Meshenger video library', () => {
             id: 'reset-file',
             ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
             parsed: {
-              publicUrl:
-                readCount === 1
-                  ? 'https://media.example/expired.mp4'
-                  : 'https://media.example/refreshed.mp4',
+              publicUrl: 'https://media.example/expired.mp4',
             },
           },
         },
@@ -1363,7 +5174,9 @@ describe('Meshenger video library', () => {
       await expect(library.resolveMediaUrl({ eName: staleGrant.eName }, streamId)).resolves.toBe(
         'https://media.example/refreshed.mp4',
       );
-      expect(readCount).toBe(2);
+      expect(directFileReads).toBe(2);
+      expect(readCount).toBe(1);
+      expect(registryReads).toBe(2);
     } finally {
       vi.unstubAllGlobals();
     }
@@ -3779,6 +7592,7 @@ describe('Meshenger video library', () => {
     expect(result.items.map((item) => item.title)).toContain('Verified shared clip');
     expect(saved?.id).toBe(job.id);
     expect(saved?.status).toBe('running');
+    expect(saved?.ledger.catalogueVersion).toBe(VIDEO_SPACE_CATALOGUE_VERSION);
     expect(saved?.ledger.drainFinished).toBe(false);
     expect(saved?.ledger.queue).toEqual(
       expect.arrayContaining([expect.objectContaining({ type: 'messages', after: null })]),
@@ -3905,14 +7719,16 @@ describe('Meshenger video library', () => {
       }),
     );
     try {
-      const result = await createMeshengerVideoLibrary(
+      const library = createMeshengerVideoLibrary(
         {
           W3DS_AUTH_PLATFORM_NAME: 'vidak',
           W3DS_REGISTRY_BASE_URL: 'https://registry.example',
           W3DS_AUTH_JWT_SECRET: secret,
         },
         { jobStore: store },
-      ).scanLibrary(
+      );
+      const probe = vi.spyOn(library, 'probeSharedSpaceAccess');
+      const result = await library.scanLibrary(
         { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
         { scope: 'all', onSnapshot: () => undefined },
       );
@@ -3925,6 +7741,14 @@ describe('Meshenger video library', () => {
       expect(card?.sourceReferenceFileId).toBe('canonical-clip');
       expect(card?.accessBasis).toBe('reference');
       expect(card?.streamIds).toHaveLength(1);
+      await expect(
+        library.inspectPlayableStream(
+          { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+          card?.streamIds[0] ?? '',
+          { priority: 'interactive' },
+        ),
+      ).resolves.toEqual({ fileUri: 'w3ds://file?id=@friend.w3id/canonical-clip' });
+      expect(probe).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -4567,6 +8391,111 @@ describe('Meshenger video library', () => {
       );
       const open = await store.loadOpenTasks(job.id);
       expect(open).toHaveLength(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('checkpoints every selected durable cursor when playback cancels two source reads', async () => {
+    const store = createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'running',
+      ledger: {
+        queue: [
+          {
+            type: 'group-chats',
+            spaceKey: '@group-a.w3id',
+            groupEName: '@group-a.w3id',
+            owner: '@group-a.w3id',
+            eVaultUri: 'https://group-a-vault.example',
+            after: 'cursor-a',
+            attempts: 0,
+          },
+          {
+            type: 'group-chats',
+            spaceKey: '@group-b.w3id',
+            groupEName: '@group-b.w3id',
+            owner: '@group-b.w3id',
+            eVaultUri: 'https://group-b-vault.example',
+            after: 'cursor-b',
+            attempts: 0,
+          },
+        ],
+        drainFinished: false,
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
+      },
+    });
+    const controller = new AbortController();
+    let sourceReads = 0;
+    let notifyBothStarted: () => void = () => undefined;
+    const bothStarted = new Promise<void>((resolve) => {
+      notifyBothStarted = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification')
+          return Promise.resolve(json({ token: 'registry-platform-token' }));
+        if (url.host === 'group-a-vault.example' || url.host === 'group-b-vault.example') {
+          sourceReads += 1;
+          if (sourceReads === 2) notifyBothStarted();
+          return new Promise<Response>((_resolve, reject) => {
+            const abort = () => reject(new DOMException('aborted', 'AbortError'));
+            if (init?.signal?.aborted) abort();
+            else init?.signal?.addEventListener('abort', abort, { once: true });
+          });
+        }
+        throw new Error(`Unexpected request: ${url.toString()}`);
+      }),
+    );
+    try {
+      const phases: string[] = [];
+      const pending = createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_AUTH_JWT_SECRET: secret,
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        {
+          scope: 'all',
+          drain: true,
+          maxVaultsPerWave: 2,
+          onSnapshot: (_library, phase) => phases.push(phase),
+          signal: controller.signal,
+        },
+      );
+
+      await bothStarted;
+      controller.abort();
+      await pending;
+      const saved = await store.getByOwner('@person.w3id');
+      const open = saved ? await store.loadOpenTasks(saved.id) : [];
+      const resumed = Array.isArray(saved?.ledger.queue) ? saved.ledger.queue : [];
+
+      expect(phases.at(-1)).toBe('batch');
+      expect(saved?.status).toBe('running');
+      expect(saved?.ledger.drainFinished).toBe(false);
+      expect(saved?.completeness.retryNeeded).toBe(false);
+      expect(resumed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'group-chats', after: 'cursor-a', attempts: 0 }),
+          expect.objectContaining({ type: 'group-chats', after: 'cursor-b', attempts: 0 }),
+        ]),
+      );
+      expect(open.map((task) => task.payload)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ type: 'group-chats', after: 'cursor-a', attempts: 0 }),
+          expect.objectContaining({ type: 'group-chats', after: 'cursor-b', attempts: 0 }),
+        ]),
+      );
     } finally {
       vi.unstubAllGlobals();
     }

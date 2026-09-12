@@ -37,6 +37,10 @@ const requiredTables = [
   'video_space_inventory_tasks',
   'video_space_inventory_items',
   'video_space_vault_gates',
+  'viewer_chat_grant_pointers',
+  'recording_concat_tickets',
+  'recording_concat_ticket_locks',
+  'playback_resolution_cache',
 ] as const;
 
 const requiredIndexes = [
@@ -114,6 +118,11 @@ const requiredIndexes = [
   'video_space_inventory_tasks_vault_idx',
   'video_space_inventory_items_job_key_uidx',
   'video_space_inventory_items_job_idx',
+  'viewer_chat_grant_pointers_identity_uidx',
+  'viewer_chat_grant_pointers_candidates_idx',
+  'recording_concat_tickets_expires_idx',
+  'recording_concat_tickets_viewer_expires_idx',
+  'playback_resolution_cache_expires_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -155,7 +164,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(25);
+    expect(applied.rows).toHaveLength(28);
 
     await client.query(
       `insert into video_preview_assets (
@@ -226,6 +235,60 @@ describe('database migrations (empty database → current set)', () => {
         'byte_size',
         'upload_state',
       ]),
+    );
+
+    const viewerChatGrantPointerColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'viewer_chat_grant_pointers'
+       order by 1`,
+    );
+    expect(viewerChatGrantPointerColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'viewer_e_name',
+        'source_e_name',
+        'source_chat_id',
+        'viewer_envelope_id',
+        'envelope_hash',
+        'state',
+        'observed_at',
+        'invalidated_at',
+        'revoked_at',
+      ]),
+    );
+    expect(viewerChatGrantPointerColumns.rows.map((row) => row.column_name)).not.toContain(
+      'media_url',
+    );
+
+    const recordingConcatTicketColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'recording_concat_tickets'
+       order by 1`,
+    );
+    expect(recordingConcatTicketColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'id',
+        'viewer_e_name',
+        'viewer_e_name_key',
+        'encrypted_payload',
+        'claimed',
+        'active_lease_expires_at',
+        'expires_at',
+      ]),
+    );
+    expect(recordingConcatTicketColumns.rows.map((row) => row.column_name)).not.toEqual(
+      expect.arrayContaining(['segment_key', 'stream_ids', 'media_url']),
+    );
+
+    const playbackResolutionCacheColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'playback_resolution_cache'
+       order by 1`,
+    );
+    expect(playbackResolutionCacheColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining(['receipt_hash', 'encrypted_payload', 'expires_at']),
+    );
+    expect(playbackResolutionCacheColumns.rows.map((row) => row.column_name)).not.toEqual(
+      expect.arrayContaining(['viewer_e_name', 'stream_id', 'receipt', 'media_url']),
     );
 
     const syncColumns = await client.query<{ column_name: string }>(
@@ -413,6 +476,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(25);
+    expect(Number(applied.rows[0]?.count)).toBe(28);
   });
 });

@@ -25,7 +25,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
     }
     const session = await getW3dsAuthService().getSession(accessToken);
     const { streamId } = await context.params;
-    const result = await getVideoPreviewService().openEVaultPreview(session.user, streamId);
+    const result = await getVideoPreviewService().openEVaultPreview(session.user, streamId, {
+      signal: request.signal,
+    });
     return buildPreviewRouteResponse(request, result);
   } catch (error) {
     return previewError(error);

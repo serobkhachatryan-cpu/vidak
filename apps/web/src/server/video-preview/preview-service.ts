@@ -11,6 +11,11 @@ import {
   resolveLocalMediaStorageRoot,
 } from '../media-storage';
 import { reportOperationalEvent } from '../ops-observability';
+import {
+  backgroundWorkDelayMs,
+  beginBackgroundWork,
+} from '../video-space/background-work-priority';
+import { parseW3dsFileUri } from '../w3ds-official-file-client';
 import { evaultVideoPreviewPath, ownedVideoPreviewPath } from './capture-time';
 import {
   FfmpegVideoFrameExtractor,
@@ -54,8 +59,27 @@ export class VideoPreviewError extends Error {
 }
 
 export interface AuthorizedEVaultPreviewSource {
-  inspectStream(user: Pick<AuthUser, 'eName'>, streamId: string): { fileUri: string };
-  resolveMediaUrl(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string>;
+  /**
+   * Validates that a stream token is bound to the current viewer without
+   * reaching the remote source. Cached posters use this short-lived grant so
+   * a grid can render without starting a remote source check for every card.
+   */
+  inspectBoundStream(user: Pick<AuthUser, 'eName'>, streamId: string): { fileUri: string };
+  /**
+   * Rechecks that this viewer can currently open the stream before returning
+   * the internal cache key. This is intentionally asynchronous: shared grants
+   * must verify their source access every time a private preview is requested.
+   */
+  inspectPlayableStream(
+    user: Pick<AuthUser, 'eName'>,
+    streamId: string,
+    options?: { priority?: 'background' | 'interactive'; signal?: AbortSignal },
+  ): Promise<{ fileUri: string }>;
+  resolveMediaUrl(
+    user: Pick<AuthUser, 'eName'>,
+    streamId: string,
+    options?: { priority?: 'background' | 'interactive'; signal?: AbortSignal },
+  ): Promise<string>;
 }
 
 export interface VideoPreviewServiceOptions {
@@ -76,7 +100,10 @@ export interface VideoPreviewServiceOptions {
 const inFlight = new Set<string>();
 const stalePendingMs = 2 * 60 * 1000;
 const staleFailedMs = 60 * 60 * 1000;
-const maxConcurrentBackfillPreviews = 2;
+// Preview extraction can download and decode remote video. One worker keeps
+// the service responsive on the production host and leaves headroom for a
+// viewer's actual playback request.
+const maxConcurrentBackfillPreviews = 1;
 const backfillRetryDelayMs = 15_000;
 type BackfillTask = {
   key: string;
@@ -110,6 +137,7 @@ export class VideoPreviewService {
   private readonly backfillQueue: BackfillTask[] = [];
   private readonly pendingBackfillRetries = new Map<string, number>();
   private activeBackfills = 0;
+  private delayedBackfillDrain: ReturnType<typeof setTimeout> | undefined;
 
   constructor(options: VideoPreviewServiceOptions) {
     this.store = options.store;
@@ -146,10 +174,26 @@ export class VideoPreviewService {
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
   ): Promise<VideoPreviewState> {
-    const fileUri = this.requireEVaultSource().inspectStream(user, streamId).fileUri;
+    const { fileUri } = await this.requireEVaultSource().inspectPlayableStream(user, streamId);
     const record = await this.store.getBySource('evault-file', fileUri);
     // A failed record receives a neutral poster. This keeps a valid video card
     // usable even when its source has no decodable frame.
+    if (record?.status === 'failed') return 'ready';
+    return statusToState(record?.status);
+  }
+
+  /**
+   * Reads the local poster state after verifying the signed, viewer-bound
+   * stream token. This deliberately does not dereference the shared source:
+   * status alone contains no media, and openEVaultPreview rechecks live
+   * access before returning even an already-cached image.
+   */
+  async peekCachedLibraryPreview(
+    user: Pick<AuthUser, 'eName'>,
+    streamId: string,
+  ): Promise<VideoPreviewState> {
+    const { fileUri } = this.requireEVaultSource().inspectBoundStream(user, streamId);
+    const record = await this.store.getBySource('evault-file', fileUri);
     if (record?.status === 'failed') return 'ready';
     return statusToState(record?.status);
   }
@@ -192,12 +236,7 @@ export class VideoPreviewService {
     for (const item of items) {
       const streamId = item.streamIds?.[0];
       if (!streamId) continue;
-      this.enqueueBackfill({
-        key: `evault:${user.eName}:${streamId}`,
-        run: () => this.ensureEVaultPreview(user, streamId, { retryFailed: true }),
-        retryPending: () =>
-          this.ensureEVaultPreview(user, streamId, { retryFailed: true, retryPending: true }),
-      });
+      this.enqueueEVaultBackfill(user, streamId);
     }
   }
 
@@ -213,7 +252,32 @@ export class VideoPreviewService {
     this.drainBackfillQueue();
   }
 
+  /**
+   * Shared eVault previews are always background work. Keeping this one
+   * construction path prevents a card-image request from bypassing the
+   * one-at-a-time worker and competing with real video playback.
+   */
+  private enqueueEVaultBackfill(user: Pick<AuthUser, 'eName'>, streamId: string): void {
+    this.enqueueBackfill({
+      key: `evault:${user.eName}:${streamId}`,
+      run: () => this.ensureEVaultPreview(user, streamId, { retryFailed: true }),
+      retryPending: () =>
+        this.ensureEVaultPreview(user, streamId, { retryFailed: true, retryPending: true }),
+    });
+  }
+
   private drainBackfillQueue(): void {
+    const delay = backgroundWorkDelayMs();
+    if (delay > 0) {
+      if (!this.delayedBackfillDrain) {
+        this.delayedBackfillDrain = setTimeout(() => {
+          this.delayedBackfillDrain = undefined;
+          this.drainBackfillQueue();
+        }, delay);
+        this.delayedBackfillDrain.unref?.();
+      }
+      return;
+    }
     while (this.activeBackfills < maxConcurrentBackfillPreviews && this.backfillQueue.length > 0) {
       const next = this.backfillQueue.shift();
       if (!next) return;
@@ -276,18 +340,56 @@ export class VideoPreviewService {
   async openEVaultPreview(
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
+    options?: { signal?: AbortSignal },
   ): Promise<PreviewDownload | { status: 'processing' } | { status: 'unavailable' }> {
-    const fileUri = this.requireEVaultSource().inspectStream(user, streamId).fileUri;
-    const existing = await this.store.getBySource('evault-file', fileUri);
-    if (existing?.status === 'failed' && !isStaleFailed(existing)) {
-      return unavailableEVaultPosterDownload();
+    const evault = this.requireEVaultSource();
+    // Reading the sealed viewer-bound grant is local. It lets this ordinary
+    // image request join the same preemptible background lane as frame
+    // extraction before it starts a remote shared-source authorization.
+    const bound = evault.inspectBoundStream(user, streamId);
+    const backgroundLease = beginBackgroundWork(parseW3dsFileUri(bound.fileUri)?.ownerEName);
+    const signal = options?.signal
+      ? AbortSignal.any([options.signal, backgroundLease.signal])
+      : backgroundLease.signal;
+    // A poster is a cached derivative, not a media redirect. Its viewer-bound
+    // grant alone is not enough to serve it after a user has been removed
+    // from a shared source. Recheck current access before returning cached
+    // private image bytes; the library coalesces and briefly caches positive
+    // source proofs so a card grid does not create duplicate probes.
+    try {
+      // A Watch request may have reserved playback before this card route
+      // reaches its first remote read. Do not make that request wait for an
+      // unnecessary poster authorization; the client retries this 202 later.
+      if (backgroundLease.signal.aborted) return { status: 'processing' };
+      const { fileUri } = await evault.inspectPlayableStream(user, streamId, {
+        priority: 'background',
+        signal,
+      });
+      if (backgroundLease.signal.aborted) return { status: 'processing' };
+      const existing = await this.store.getBySource('evault-file', fileUri);
+      if (existing?.status === 'ready' && existing.storageKey) {
+        return this.openRecord(existing);
+      }
+      if (existing?.status === 'failed' && !isStaleFailed(existing)) {
+        return unavailableEVaultPosterDownload();
+      }
+      if (existing?.status === 'pending' && !isStale(existing)) {
+        return { status: 'processing' };
+      }
+      // A preview route serves an image request, not a user-selected playback
+      // action. Never keep it open while it resolves a private source or runs
+      // ffmpeg; enqueue one resumable job and let the card poll the local state.
+      this.enqueueEVaultBackfill(user, streamId);
+      return { status: 'processing' };
+    } catch (error) {
+      // Preemption is not a source failure. Keep the card's state retryable;
+      // this preserves both its preview and the authoritative access check
+      // once the foreground playback reservation has ended.
+      if (backgroundLease.signal.aborted) return { status: 'processing' };
+      throw error;
+    } finally {
+      backgroundLease.release();
     }
-    const record = await this.ensureEVaultPreview(user, streamId, { retryFailed: true });
-    // Some upstream File records are valid streams but have no decodable video
-    // frame at any capture point. Keep the card useful instead of exposing an
-    // error state for that non-actionable source condition.
-    if (record.status === 'failed') return unavailableEVaultPosterDownload();
-    return this.openRecord(record);
   }
 
   private async ensureOwnedPreview(
@@ -379,12 +481,26 @@ export class VideoPreviewService {
     options?: { retryFailed?: boolean; retryPending?: boolean },
   ): Promise<VideoPreviewRecord> {
     const evault = this.requireEVaultSource();
-    const { fileUri } = evault.inspectStream(user, streamId);
+    // Reading the bound grant is local and gives us a stable cache key. Do it
+    // before generating any remote eVault work so the dozens of already-ready
+    // cards in a shared catalogue never contend with the video a viewer chose
+    // to play.
+    const { fileUri } = evault.inspectBoundStream(user, streamId);
     return this.generate(
       'evault-file',
       fileUri,
-      async () => {
-        const mediaUrl = await evault.resolveMediaUrl(user, streamId);
+      async (signal) => {
+        // `generate` has registered the background lease before it invokes
+        // this resolver. A foreground playback reservation can therefore stop
+        // a queued preview before it starts a remote authorization request.
+        if (signal?.aborted) return undefined;
+        // `resolveMediaUrl` is the authoritative File access check already.
+        // Do not issue a second remote shared-source authorization here: that
+        // redundant read competes with a viewer opening the same eVault.
+        const mediaUrl = await evault.resolveMediaUrl(user, streamId, {
+          priority: 'background',
+          ...(signal ? { signal } : {}),
+        });
         return { kind: 'url', url: mediaUrl };
       },
       options,
@@ -394,7 +510,7 @@ export class VideoPreviewService {
   private async generate(
     sourceKind: VideoPreviewSourceKind,
     sourceKey: string,
-    resolveSource: () => Promise<PreviewFrameSource | undefined>,
+    resolveSource: (signal?: AbortSignal) => Promise<PreviewFrameSource | undefined>,
     options?: { retryFailed?: boolean; retryPending?: boolean },
   ): Promise<VideoPreviewRecord> {
     const existing = await this.store.getBySource(sourceKind, sourceKey);
@@ -435,14 +551,26 @@ export class VideoPreviewService {
       await this.store.update(record.id, { status: 'pending' });
     }
 
+    // Scope the lease to the source eVault. A Watch action for one shared
+    // video can stop its competing preview extraction without postponing
+    // previews for every other shared source.
+    const backgroundLease =
+      sourceKind === 'evault-file'
+        ? beginBackgroundWork(parseW3dsFileUri(sourceKey)?.ownerEName)
+        : undefined;
     try {
-      const source = await resolveSource();
+      const source = await resolveSource(backgroundLease?.signal);
+      if (backgroundLease?.signal.aborted) return this.leavePending(record);
       if (!source) {
         reportOperationalEvent({ category: 'video_preview', code: 'preview_source_unavailable' });
         const failed = await this.store.update(record.id, { status: 'failed' });
         return failed ?? { ...record, status: 'failed' };
       }
-      const extracted = await this.extractor.extractUsefulFrame(source);
+      const extracted = await this.extractor.extractUsefulFrame(
+        source,
+        backgroundLease ? { signal: backgroundLease.signal } : undefined,
+      );
+      if (backgroundLease?.signal.aborted) return this.leavePending(record);
       if (!extracted) {
         reportOperationalEvent({ category: 'video_preview', code: 'preview_frame_unavailable' });
         const failed = await this.store.update(record.id, { status: 'failed' });
@@ -459,6 +587,7 @@ export class VideoPreviewService {
       });
       return ready ?? { ...record, status: 'ready', storageKey };
     } catch (error) {
+      if (backgroundLease?.signal.aborted) return this.leavePending(record);
       if (isRetryablePreviewSourceError(error)) {
         reportOperationalEvent({ category: 'video_preview', code: 'preview_source_retryable' });
         const pending = await this.store.update(record.id, { status: 'pending' });
@@ -468,8 +597,14 @@ export class VideoPreviewService {
       const failed = await this.store.update(record.id, { status: 'failed' });
       return failed ?? { ...record, status: 'failed' };
     } finally {
+      backgroundLease?.release();
       inFlight.delete(lock);
     }
+  }
+
+  private async leavePending(record: VideoPreviewRecord): Promise<VideoPreviewRecord> {
+    const pending = await this.store.update(record.id, { status: 'pending' });
+    return pending ?? { ...record, status: 'pending' };
   }
 
   private async sourceFromAsset(storageKey: string): Promise<PreviewFrameSource | undefined> {

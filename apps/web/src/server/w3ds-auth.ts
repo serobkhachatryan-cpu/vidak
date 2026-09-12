@@ -332,7 +332,12 @@ export class W3dsAuthService {
 
   async getSession(accessToken: string): Promise<AuthSession> {
     const platformSession = await this.getActiveSession(accessToken, 'access');
-    return toBrowserAuthSession(await this.toAuthSession(platformSession, false));
+    // This is the hot path for authenticated media ranges. `getActiveSession`
+    // has already verified the supplied JWT and checked the durable session's
+    // revocation, subject, and JTI. Re-signing fresh access/refresh JWTs only
+    // to remove them from the browser-safe response adds two crypto operations
+    // to every range request without strengthening that validation.
+    return this.toBrowserSession(platformSession);
   }
 
   /**
@@ -706,6 +711,22 @@ export class W3dsAuthService {
       tokens: {
         accessToken,
         ...(includeRefreshToken ? { refreshToken } : {}),
+        expiresAt: new Date(platformSession.accessExpiresAt).toISOString(),
+      },
+    };
+  }
+
+  /**
+   * Projects an already-validated stored session for routes that must never
+   * return credentials to browser code. Keep this separate from
+   * {@link toAuthSession}: callers that establish or rotate cookies still need
+   * freshly signed tokens.
+   */
+  private toBrowserSession(platformSession: StoredPlatformSession): AuthSession {
+    return {
+      user: platformSession.user,
+      provider: 'w3ds',
+      tokens: {
         expiresAt: new Date(platformSession.accessExpiresAt).toISOString(),
       },
     };

@@ -6,6 +6,8 @@ vi.mock('server-only', () => ({}));
 const mocks = vi.hoisted(() => ({
   createLibrary: vi.fn(),
   getAuthService: vi.fn(),
+  getPlaybackResolutionCache: vi.fn(),
+  deletePlaybackResolutionCache: vi.fn(),
 }));
 
 vi.mock('../../../../../server/meshenger-video-library', async (importOriginal) => ({
@@ -18,20 +20,207 @@ vi.mock('../../../../../server/w3ds-auth', async (importOriginal) => ({
   getW3dsAuthService: mocks.getAuthService,
 }));
 
+vi.mock('../../../../../server/playback-resolution-cache', () => ({
+  getPlaybackResolutionCache: mocks.getPlaybackResolutionCache,
+  deletePlaybackResolutionCache: mocks.deletePlaybackResolutionCache,
+}));
+
 import { MeshengerVideoLibraryError } from '../../../../../server/meshenger-video-library';
+import {
+  mintSharedVideoAuthorizationReceipt,
+  sharedVideoAuthorizationReceiptCookieName,
+} from '../../../../../server/shared-video-authorization-receipt';
 import { GET } from './route';
 
 const viewer = { eName: '@viewer.w3id' };
+const receiptSecret = 'shared-video-receipt-route-test-secret-0123456789';
 
 describe('Meshenger video stream route', () => {
   beforeEach(() => {
     mocks.createLibrary.mockReset();
     mocks.getAuthService.mockReset();
+    mocks.getPlaybackResolutionCache.mockReset();
+    mocks.getPlaybackResolutionCache.mockResolvedValue(undefined);
+    mocks.deletePlaybackResolutionCache.mockReset();
+    mocks.deletePlaybackResolutionCache.mockResolvedValue(false);
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: viewer }),
+    });
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it('passes a verified authorization receipt through the legacy player route', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
+    const receipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'stream-1',
+      env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
+    });
+    const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/recording.mp4');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: viewer }),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('segment', { status: 206 })));
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: {
+          authorization: 'Bearer access-token',
+          cookie: `${sharedVideoAuthorizationReceiptCookieName}=${receipt}`,
+        },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(206);
+    expect(resolveMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1', {
+      hasRecentSharedAuthorizationReceipt: true,
+    });
+  });
+
+  it('uses a receipt-bound cache only after locally validating the signed stream', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
+    const receipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'stream-1',
+      env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
+    });
+    const inspectBoundStream = vi.fn();
+    const resolveMediaUrl = vi.fn();
+    mocks.createLibrary.mockReturnValue({ inspectBoundStream, resolveMediaUrl });
+    mocks.getPlaybackResolutionCache.mockResolvedValue(
+      'https://media.example/cached-private.mp4?source-token=server-only',
+    );
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('cached', { status: 206 })));
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: {
+          authorization: 'Bearer access-token',
+          cookie: `${sharedVideoAuthorizationReceiptCookieName}=${receipt}`,
+        },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(206);
+    await expect(response.text()).resolves.toBe('cached');
+    expect(mocks.getPlaybackResolutionCache).toHaveBeenCalledWith({
+      receipt,
+      viewerEName: viewer.eName,
+      streamId: 'stream-1',
+    });
+    expect(inspectBoundStream).toHaveBeenCalledWith(viewer, 'stream-1');
+    expect(resolveMediaUrl).not.toHaveBeenCalled();
+  });
+
+  it('deletes a rejected receipt-bound URL and resolves once without rereading it', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
+    const receipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'stream-1',
+      env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
+    });
+    const inspectBoundStream = vi.fn();
+    const invalidateMediaUrl = vi.fn();
+    const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/refreshed.mp4');
+    mocks.createLibrary.mockReturnValue({
+      inspectBoundStream,
+      invalidateMediaUrl,
+      resolveMediaUrl,
+    });
+    mocks.getPlaybackResolutionCache.mockResolvedValue(
+      'https://media.example/rejected.mp4?source-token=server-only',
+    );
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 403 }))
+        .mockResolvedValueOnce(new Response('fresh', { status: 206 })),
+    );
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: {
+          authorization: 'Bearer access-token',
+          cookie: `${sharedVideoAuthorizationReceiptCookieName}=${receipt}`,
+        },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(206);
+    await expect(response.text()).resolves.toBe('fresh');
+    expect(mocks.deletePlaybackResolutionCache).toHaveBeenCalledWith({
+      receipt,
+      viewerEName: viewer.eName,
+      streamId: 'stream-1',
+    });
+    expect(mocks.getPlaybackResolutionCache).toHaveBeenCalledTimes(1);
+    expect(inspectBoundStream).toHaveBeenCalledWith(viewer, 'stream-1');
+    expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
+    expect(resolveMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1', {
+      hasRecentSharedAuthorizationReceipt: true,
+    });
+  });
+
+  it('falls back to normal resolution when the receipt cache cannot be read', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
+    const receipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'stream-1',
+      env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
+    });
+    const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/recording.mp4');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
+    mocks.getPlaybackResolutionCache.mockRejectedValue(new Error('cache unavailable'));
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('segment', { status: 206 })));
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: {
+          authorization: 'Bearer access-token',
+          cookie: `${sharedVideoAuthorizationReceiptCookieName}=${receipt}`,
+        },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(206);
+    expect(resolveMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1', {
+      hasRecentSharedAuthorizationReceipt: true,
+    });
+  });
+
+  it('keeps the legacy library call unchanged for a malformed authorization receipt', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
+    const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/recording.mp4');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: viewer }),
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('segment', { status: 206 })));
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: {
+          authorization: 'Bearer access-token',
+          cookie: `${sharedVideoAuthorizationReceiptCookieName}=not-a-valid-receipt`,
+        },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(206);
+    expect(resolveMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
   });
 
   it('clears the connection timeout once the upstream video response starts streaming', async () => {
@@ -81,6 +270,50 @@ describe('Meshenger video stream route', () => {
     expect(invalidateMediaUrl).not.toHaveBeenCalled();
   });
 
+  it('follows one validated source redirect server-side while preserving the byte range', async () => {
+    const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/recording.mp4');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: viewer }),
+    });
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { Location: 'https://cdn.example/recording.mp4?delivery-token=server-only' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response('redirected media', {
+          status: 206,
+          headers: { 'Content-Range': 'bytes 0-15/16', 'Content-Type': 'video/mp4' },
+        }),
+      );
+    vi.stubGlobal('fetch', fetcher);
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: { authorization: 'Bearer access-token', range: 'bytes=0-15' },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(206);
+    expect(response.headers.get('location')).toBeNull();
+    await expect(response.text()).resolves.toBe('redirected media');
+    expect(fetcher).toHaveBeenNthCalledWith(
+      1,
+      'https://media.example/recording.mp4',
+      expect.objectContaining({ redirect: 'manual', headers: { Range: 'bytes=0-15' } }),
+    );
+    expect(fetcher).toHaveBeenNthCalledWith(
+      2,
+      'https://cdn.example/recording.mp4?delivery-token=server-only',
+      expect.objectContaining({ redirect: 'manual', headers: { Range: 'bytes=0-15' } }),
+    );
+  });
+
   it('refreshes a cached source URL once when Meshenger rejects an expired media link', async () => {
     const resolveMediaUrl = vi
       .fn()
@@ -110,6 +343,119 @@ describe('Meshenger video stream route', () => {
     await expect(response.text()).resolves.toBe('recovered');
     expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
     expect(resolveMediaUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes a stale 410 source URL once', async () => {
+    const resolveMediaUrl = vi
+      .fn()
+      .mockResolvedValueOnce('https://media.example/gone.mp4')
+      .mockResolvedValueOnce('https://media.example/refreshed.mp4');
+    const invalidateMediaUrl = vi.fn();
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl, invalidateMediaUrl });
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: viewer }),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 410 }))
+        .mockResolvedValueOnce(new Response('recovered', { status: 206 })),
+    );
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: { authorization: 'Bearer access-token' },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(206);
+    await expect(response.text()).resolves.toBe('recovered');
+    expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
+    expect(resolveMediaUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes once after a pre-header source network failure without exposing it', async () => {
+    const resolveMediaUrl = vi
+      .fn()
+      .mockResolvedValueOnce('https://media.example/failed.mp4')
+      .mockResolvedValueOnce('https://media.example/refreshed.mp4');
+    const invalidateMediaUrl = vi.fn();
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl, invalidateMediaUrl });
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: viewer }),
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockRejectedValueOnce(new Error('https://source.example/private.mp4?token=secret'))
+        .mockResolvedValueOnce(new Response('recovered', { status: 206 })),
+    );
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: { authorization: 'Bearer access-token' },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(206);
+    const body = await response.text();
+    expect(body).toBe('recovered');
+    expect(body).not.toContain('source.example');
+    expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
+    expect(resolveMediaUrl).toHaveBeenCalledTimes(2);
+  });
+
+  it('refreshes once after a source-header timeout', async () => {
+    vi.useFakeTimers();
+    const resolveMediaUrl = vi
+      .fn()
+      .mockResolvedValueOnce('https://media.example/timed-out.mp4')
+      .mockResolvedValueOnce('https://media.example/refreshed.mp4');
+    const invalidateMediaUrl = vi.fn();
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl, invalidateMediaUrl });
+    mocks.getAuthService.mockReturnValue({
+      getSession: vi.fn().mockResolvedValue({ user: viewer }),
+    });
+    let releaseFirstRequest!: () => void;
+    const firstRequestStarted = new Promise<void>((resolve) => {
+      releaseFirstRequest = resolve;
+    });
+    let requestCount = 0;
+    const fetcher = vi.fn((_: string, init?: RequestInit): Promise<Response> => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        releaseFirstRequest();
+        return new Promise((_, reject) => {
+          init?.signal?.addEventListener(
+            'abort',
+            () => reject(new Error('private source did not return headers')),
+            { once: true },
+          );
+        });
+      }
+      return Promise.resolve(new Response('recovered', { status: 206 }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const pending = GET(
+      new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
+        headers: { authorization: 'Bearer access-token' },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+    await firstRequestStarted;
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    const response = await pending;
+    expect(response.status).toBe(206);
+    await expect(response.text()).resolves.toBe('recovered');
+    expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
+    expect(resolveMediaUrl).toHaveBeenCalledTimes(2);
+    expect(fetcher).toHaveBeenCalledTimes(2);
   });
 
   it('renews an expired Meshenger stream before opening the upstream video', async () => {

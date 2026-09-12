@@ -20,6 +20,7 @@ import {
   MediaAssetService,
   resetMediaAssetServiceForTests,
 } from '../../../server/media-asset';
+import * as videoPreview from '../../../server/video-preview';
 import * as w3dsAuth from '../../../server/w3ds-auth';
 import {
   InMemoryW3dsAuthStore,
@@ -732,6 +733,12 @@ describe('video publishing and public discovery routes', () => {
 
   it('clears blob thumbnail URLs and returns durable public thumbnail URLs', async () => {
     const ctx = await createPublishingContext({ withMedia: true });
+    // This route test exercises the durable uploaded-thumbnail fallback, not
+    // ffmpeg frame extraction. Keep its outcome independent of host binaries
+    // or the private preview database while still proving public fallback.
+    vi.spyOn(videoPreview, 'getVideoPreviewService').mockReturnValue({
+      openPublishedPreview: vi.fn().mockResolvedValue({ status: 'unavailable' }),
+    } as never);
     const payload = new TextEncoder().encode('video-bytes');
     const thumbBytes = new TextEncoder().encode('jpeg-thumb-bytes');
 
@@ -778,7 +785,7 @@ describe('video publishing and public discovery routes', () => {
       mediaContentUrl?: string;
     };
     expect(detailBody.title).toBe('IMG 1589');
-    expect(detailBody.thumbnailUrl).toBe(`/api/videos/public/${published.publicVideoId}/thumbnail`);
+    expectVersionedPublicThumbnailUrl(detailBody.thumbnailUrl, published.publicVideoId);
     expect(detailBody.thumbnailUrl).not.toMatch(/^blob:|^data:/);
     expect(detailBody.mediaContentUrl).toBe(`/api/videos/public/${published.publicVideoId}/media`);
 
@@ -799,9 +806,16 @@ describe('video publishing and public discovery routes', () => {
       items: Array<{ title: string; thumbnailUrl: string }>;
     };
     const listed = discoveryBody.items.find((item) => item.title === 'IMG 1589');
-    expect(listed?.thumbnailUrl).toBe(`/api/videos/public/${published.publicVideoId}/thumbnail`);
+    expectVersionedPublicThumbnailUrl(listed?.thumbnailUrl, published.publicVideoId);
   });
 });
+
+function expectVersionedPublicThumbnailUrl(value: string | undefined, publicVideoId: string): void {
+  expect(value).toBeDefined();
+  const url = new URL(value ?? '', 'https://vidak.example');
+  expect(url.pathname).toBe(`/api/videos/public/${publicVideoId}/thumbnail`);
+  expect(url.searchParams.get('v')).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+}
 
 async function createPublishingContext(options?: { withMedia?: boolean }) {
   const authStore = new InMemoryW3dsAuthStore();

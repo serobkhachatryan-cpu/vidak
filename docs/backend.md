@@ -650,6 +650,53 @@ command.
 6. **Confirm probes**: liveness then readiness (see below).
 7. **Only after readiness is healthy**, send user traffic to the new revision.
 
+### Shared-call recording playback rollout
+
+Shared Meshenger recordings have a separate source-side authorization boundary.
+The browser never receives a Meshenger media URL and Vidak never copies the
+recording bytes. To avoid the legacy multi-query source scan on the first
+playback request, deploy the two ends as one release sequence:
+
+1. Apply Vidak migrations, including the durable continuous-recording ticket
+   tables **and** the `playback_resolution_cache` table, before routing any new
+   Vidak instance. The latter is an encrypted, receipt-bound, maximum-45-second
+   handoff: it lets a player request landing on another replica reuse a just
+   completed authorization without persisting a viewer identity, stream grant,
+   media URL in plaintext, or media bytes.
+2. Deploy the Meshenger endpoint
+   `POST /api/integrations/vidak/recording-playback-grant`. It must validate the
+   dedicated HMAC request, perform only exact viewer/Chat/CallSession/File
+   checks, return a short-lived source URL only to Vidak, and reject a signed
+   empty `{}` with `400` plus `Cache-Control: no-store`.
+3. Configure the same dedicated 32+ character
+   `VIDAK_PLAYBACK_BRIDGE_SECRET` in both services and set Vidak's
+   `MESHENGER_PLAYBACK_GRANT_URL` to that exact HTTPS endpoint. Do not use a
+   W3DS session secret or a browser-visible variable for this capability.
+4. Start Vidak with the new configuration and require
+   `GET /api/health/ready` to return `200`. A configured endpoint that is
+   missing, unauthenticated, cacheable, or otherwise incompatible makes
+   readiness fail with the internal `playback_bridge` dependency rather than
+   silently falling back to the slow path.
+5. With an authorized test account, open a shared short video and a long call
+   recording. Confirm that the first media request receives bytes, that the
+   recording remains one continuous stream across every source segment, and
+   that no source URL appears in browser devtools, page HTML, or logs.
+
+   The private proxy treats a source as started only once headers and a
+   non-empty first media byte have arrived; a source that stalls after headers
+   is discarded and receives the existing one bounded authorization/source
+   refresh rather than leaving the browser on a permanently loading response.
+   A continuous recording is joined through one opaque ticket and ffmpeg
+   stream (up to 512 ordered source files), never a browser-visible sequence
+   of 20-minute video elements. Confirm that `ffmpeg -version` succeeds in
+   every deployed Vidak image and that the native player can seek/play through
+   at least one source boundary.
+
+The endpoint is intentionally optional for a staged rollout. Leaving both
+variables absent preserves the existing exact authorization fallback; setting
+only one, or configuring an undeployed endpoint, is treated as a deployment
+failure instead of a hidden latency regression.
+
 ### Environment validation
 
 | Variable | Production W3DS | Notes |

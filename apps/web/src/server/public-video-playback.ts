@@ -54,8 +54,10 @@ export async function withPublicMediaContentUrls(videos: readonly Video[]): Prom
 /**
  * Resolves a durable same-origin thumbnail URL for public responses.
  * Clears ephemeral `blob:` / `data:` values. A published video with playable
- * media always points to the public thumbnail route: that route serves an
- * uploaded poster when present and otherwise derives a durable still frame.
+ * media always points to the public thumbnail route: that route derives a
+ * durable still frame and retains an uploaded poster only as a fallback. The
+ * revision prevents a browser from retaining an old generic poster after a
+ * video frame has been repaired.
  */
 export async function withPublicThumbnailUrl(video: Video): Promise<Video> {
   if (
@@ -68,7 +70,7 @@ export async function withPublicThumbnailUrl(video: Video): Promise<Video> {
     if (hasThumbnail || hasPlayableMedia) {
       return {
         ...video,
-        thumbnailUrl: publicThumbnailPath(video.publicVideoId),
+        thumbnailUrl: versionedPublicThumbnailPath(video.publicVideoId, video.updatedAt),
       };
     }
   }
@@ -87,6 +89,12 @@ export function sanitizePublicThumbnailUrl(video: Video): Video {
 /** Durable draft thumbnail path used after a successful thumbnail upload. */
 export function durableDraftThumbnailUrl(videoId: string): string {
   return draftThumbnailPath(videoId);
+}
+
+export function versionedPublicThumbnailPath(publicVideoId: string, updatedAt: string): string {
+  const path = publicThumbnailPath(publicVideoId);
+  const revision = updatedAt.trim();
+  return revision ? `${path}?v=${encodeURIComponent(revision)}` : path;
 }
 
 function toMediaRendition(

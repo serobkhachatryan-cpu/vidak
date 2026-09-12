@@ -15,6 +15,12 @@ export interface VideoSpaceEnvelope {
   id: string;
   ontology: string;
   parsed: Record<string, unknown>;
+  /**
+   * Internal discovery context, never part of a source envelope. A referenced
+   * CallSession can be resolved from a vault other than the listing vault, so
+   * its exact authorization record must retain its own canonical home.
+   */
+  sourceCallSessionVault?: string;
 }
 
 /** A File reference points at the canonical file record in another eVault. */
@@ -46,6 +52,16 @@ export interface DiscoveredVideoRecord {
   sourceSpaceKey?: string;
   /** Server-only direct-chat identity for current shared-playback verification. */
   sourceChatId?: string;
+  /** Server-only viewer-vault Chat envelope used for an O(1) current direct-share proof. */
+  sourceViewerChatGrantId?: string;
+  /** Canonical CallSession envelope that carries the recording references. */
+  sourceCallSessionId?: string;
+  /** Canonical vault containing `sourceCallSessionId` and its source Chat. */
+  sourceCallSessionVault?: string;
+  /** Optional media-storage vault named inside the CallSession recording. */
+  sourceRecordingVault?: string;
+  /** Server-only source relationship kind; only direct chats may use the source bridge. */
+  sourceChatKind?: 'direct' | 'group';
   /** Server-only local File-reference envelope used to prove a direct share. */
   sourceReferenceId?: string;
   /** Canonical File envelope that the local reference must still target. */
@@ -192,11 +208,127 @@ function hasUsefulTitle(item: DiscoveredVideoRecord): boolean {
   );
 }
 
+/**
+ * Two bindings for the same file can represent the same direct historical
+ * share while carrying different presentation metadata.  The exact
+ * viewer-vault Chat envelope is authorization context rather than display
+ * metadata, so preserve it across that otherwise ordinary card merge.  The
+ * envelope is still re-read and validated at playback; it can never prove a
+ * different source, chat, or file accessible.
+ */
+function directHistoryViewerChatGrantId(
+  existing: DiscoveredVideoRecord,
+  candidate: DiscoveredVideoRecord,
+): string | undefined {
+  if (
+    existing.accessScope !== 'shared' ||
+    candidate.accessScope !== 'shared' ||
+    existing.accessBasis !== 'history' ||
+    candidate.accessBasis !== 'history' ||
+    !existing.sourceSpaceKey ||
+    !candidate.sourceSpaceKey ||
+    !sameEName(existing.sourceSpaceKey, candidate.sourceSpaceKey) ||
+    !existing.sourceChatId ||
+    existing.sourceChatId !== candidate.sourceChatId
+  ) {
+    return undefined;
+  }
+  // A newly rediscovered envelope is preferred when present, but retaining a
+  // still-valid older hint is safe if this pass has not reached that Chat yet.
+  return candidate.sourceViewerChatGrantId ?? existing.sourceViewerChatGrantId;
+}
+
+/**
+ * A CallSession is the canonical recording carrier. Preserve its exact source
+ * pointer when a higher-ranked duplicate supplies the display metadata for the
+ * same direct historical share; the source bridge still verifies the listed
+ * file against that CallSession before returning any media URL.
+ */
+function directHistoryCallSessionContext(
+  existing: DiscoveredVideoRecord,
+  candidate: DiscoveredVideoRecord,
+):
+  | {
+      sourceCallSessionId: string;
+      sourceCallSessionVault: string;
+      sourceRecordingVault?: string;
+      sourceChatKind: 'direct' | 'group';
+    }
+  | undefined {
+  if (
+    existing.accessScope !== 'shared' ||
+    candidate.accessScope !== 'shared' ||
+    existing.accessBasis !== 'history' ||
+    candidate.accessBasis !== 'history' ||
+    !existing.sourceSpaceKey ||
+    !candidate.sourceSpaceKey ||
+    !sameEName(existing.sourceSpaceKey, candidate.sourceSpaceKey) ||
+    !existing.sourceChatId ||
+    existing.sourceChatId !== candidate.sourceChatId
+  ) {
+    return undefined;
+  }
+  const context = (item: DiscoveredVideoRecord) =>
+    item.sourceCallSessionId && item.sourceCallSessionVault && item.sourceChatKind
+      ? {
+          sourceCallSessionId: item.sourceCallSessionId,
+          sourceCallSessionVault: item.sourceCallSessionVault,
+          ...(item.sourceRecordingVault ? { sourceRecordingVault: item.sourceRecordingVault } : {}),
+          sourceChatKind: item.sourceChatKind,
+        }
+      : undefined;
+  return context(candidate) ?? context(existing);
+}
+
+/**
+ * A catalogue rescan can rediscover one CallSession with a richer ordered
+ * source list than the retained checkpoint had. This happens when an old card
+ * stored only `mediaUri` and a newer parser recognizes the whole
+ * `mediaSegments` recording. Merge by its stable record key before file-URI
+ * dedupe so the new list replaces the truncated one instead of becoming a
+ * duplicate card beside it.
+ */
+function mergeRepeatedDiscoveryRecord(
+  existing: DiscoveredVideoRecord,
+  candidate: DiscoveredVideoRecord,
+): DiscoveredVideoRecord {
+  const viewerChatGrantId = directHistoryViewerChatGrantId(existing, candidate);
+  const callSessionContext = directHistoryCallSessionContext(existing, candidate);
+  const candidateHasMoreSources = candidate.fileUris.length > existing.fileUris.length;
+  const existingHasUsefulTitle = hasUsefulTitle(existing);
+  const candidateHasUsefulTitle = hasUsefulTitle(candidate);
+  const selected =
+    (existing.accessScope === 'shared' && candidate.accessScope === 'personal') ||
+    candidateHasMoreSources ||
+    (candidate.fileUris.length === existing.fileUris.length &&
+      candidateHasUsefulTitle &&
+      !existingHasUsefulTitle)
+      ? candidate
+      : existing;
+  return {
+    ...selected,
+    ...(viewerChatGrantId ? { sourceViewerChatGrantId: viewerChatGrantId } : {}),
+    ...(callSessionContext ?? {}),
+  };
+}
+
 export function dedupeDiscoveredVideos(
   items: readonly DiscoveredVideoRecord[],
 ): DiscoveredVideoRecord[] {
+  // First collapse equivalent source records. URI identity alone is not
+  // stable across the legacy first-segment repair: one CallSession can grow
+  // from `[part-1]` to `[part-1, part-2, …]` without becoming a new video.
+  const byRecordKey = new Map<string, DiscoveredVideoRecord>();
+  for (const candidate of items) {
+    const existing = byRecordKey.get(candidate.key);
+    byRecordKey.set(
+      candidate.key,
+      existing ? mergeRepeatedDiscoveryRecord(existing, candidate) : candidate,
+    );
+  }
+
   const unique = new Map<string, DiscoveredVideoRecord>();
-  for (const item of items) {
+  for (const item of byRecordKey.values()) {
     const identity = videoSpaceFileIdentity(item.fileUris);
     if (!identity) continue;
     const existing = unique.get(identity);
@@ -204,15 +336,37 @@ export function dedupeDiscoveredVideos(
       unique.set(identity, item);
       continue;
     }
-    const existingHasUsefulTitle = hasUsefulTitle(existing);
-    const nextHasUsefulTitle = hasUsefulTitle(item);
+    const viewerChatGrantId = directHistoryViewerChatGrantId(existing, item);
+    const callSessionContext = directHistoryCallSessionContext(existing, item);
+    // Keep a fresh direct-share proof when title/kind ranking selects the
+    // retained record, and do not let a richer duplicate silently discard it.
+    const retained =
+      viewerChatGrantId && existing.sourceViewerChatGrantId !== viewerChatGrantId
+        ? { ...existing, sourceViewerChatGrantId: viewerChatGrantId }
+        : existing;
+    const candidate =
+      viewerChatGrantId && item.sourceViewerChatGrantId !== viewerChatGrantId
+        ? { ...item, sourceViewerChatGrantId: viewerChatGrantId }
+        : item;
+    const existingHasUsefulTitle = hasUsefulTitle(retained);
+    const nextHasUsefulTitle = hasUsefulTitle(candidate);
     const preferNext =
-      (existing.accessScope === 'shared' && item.accessScope === 'personal') ||
-      (existing.accessScope === item.accessScope &&
+      (retained.accessScope === 'shared' && candidate.accessScope === 'personal') ||
+      (retained.accessScope === candidate.accessScope &&
         (nextHasUsefulTitle !== existingHasUsefulTitle
           ? nextHasUsefulTitle
-          : kindRank[item.kind] > kindRank[existing.kind]));
-    if (preferNext) unique.set(identity, item);
+          : kindRank[candidate.kind] > kindRank[retained.kind]));
+    const selected = preferNext ? candidate : retained;
+    unique.set(
+      identity,
+      callSessionContext &&
+        (selected.sourceCallSessionId !== callSessionContext.sourceCallSessionId ||
+          selected.sourceCallSessionVault !== callSessionContext.sourceCallSessionVault ||
+          selected.sourceRecordingVault !== callSessionContext.sourceRecordingVault ||
+          selected.sourceChatKind !== callSessionContext.sourceChatKind)
+        ? { ...selected, ...callSessionContext }
+        : selected,
+    );
   }
   return [...unique.values()];
 }
@@ -349,6 +503,10 @@ export function discoverCallRecordingVideos(input: {
   referenced: Set<string>;
   chatId?: string;
   chatIds?: ReadonlySet<string>;
+  /** Viewer-vault current Chat grants keyed by canonical direct Chat id. */
+  sourceViewerChatGrantIds?: ReadonlyMap<string, string>;
+  /** Group membership needs its own current proof; only direct chats use the source grant bridge. */
+  sourceChatKind?: 'direct' | 'group';
 }): DiscoveredVideoRecord[] {
   const discovered: DiscoveredVideoRecord[] = [];
   for (const call of input.calls) {
@@ -369,6 +527,18 @@ export function discoverCallRecordingVideos(input: {
       fileUris,
       vaultOwnerEName: input.sourceEName,
     });
+    const sourceViewerChatGrantId = callChatId
+      ? input.sourceViewerChatGrantIds?.get(callChatId)
+      : undefined;
+    const sourceRecordingVault = optionalEName(recording.recordingVault);
+    // `resolveCall` attaches the vault that actually held the canonical
+    // CallSession. That precise location must win over `recordingVault`: the
+    // latter is a media-storage hint in the published schema and historical
+    // direct recordings can keep their bytes on a different vault. Only an
+    // older discovery record without canonical-location metadata falls back to
+    // the recording vault, then the listing owner.
+    const sourceCallSessionVault =
+      optionalEName(call.sourceCallSessionVault) ?? sourceRecordingVault ?? input.sourceEName;
     discovered.push({
       key: `call:${input.sourceEName}:${call.id}`,
       fileUris,
@@ -387,6 +557,15 @@ export function discoverCallRecordingVideos(input: {
       sourceId: 'call-recording',
       sourceSpaceKey: input.sourceEName,
       ...(callChatId ? { sourceChatId: callChatId } : {}),
+      ...(sourceViewerChatGrantId ? { sourceViewerChatGrantId } : {}),
+      ...(call.id && sourceCallSessionVault
+        ? {
+            sourceCallSessionId: call.id,
+            sourceCallSessionVault,
+            ...(sourceRecordingVault ? { sourceRecordingVault } : {}),
+          }
+        : {}),
+      ...(input.sourceChatKind ? { sourceChatKind: input.sourceChatKind } : {}),
       accessBasis: accessScope === 'personal' ? 'personal' : 'history',
     });
   }
@@ -399,6 +578,8 @@ export function discoverVideoMessageVideos(
   viewerEName: string,
   sourceSpaceKey?: string,
   sourceChatIdHint?: string,
+  sourceViewerChatGrantIdHint?: string,
+  sourceViewerChatGrantIds?: ReadonlyMap<string, string>,
 ): DiscoveredVideoRecord[] {
   const discovered: DiscoveredVideoRecord[] = [];
   for (const message of messages) {
@@ -414,7 +595,16 @@ export function discoverVideoMessageVideos(
     // documented Message envelopes omit a duplicate `chatId` field, so retain
     // that trusted request context rather than turning a valid shared video
     // into an unprovable history card after persistence/revalidation.
-    const sourceChatId = optionalString(message.parsed.chatId) ?? sourceChatIdHint;
+    // A Messages-by-Chat response is scoped by the request's chat id. Prefer
+    // that trusted context over a legacy payload alias: using the alias can
+    // attach the card to a different direct grant and force playback back to
+    // a slow broad Chat search.
+    const sourceChatId = sourceChatIdHint ?? optionalString(message.parsed.chatId);
+    const sourceViewerChatGrantId = sourceChatId
+      ? sourceChatIdHint && sourceChatId === sourceChatIdHint
+        ? (sourceViewerChatGrantIdHint ?? sourceViewerChatGrantIds?.get(sourceChatId))
+        : sourceViewerChatGrantIds?.get(sourceChatId)
+      : undefined;
     const accessScope = scopeForRecord({
       viewerEName,
       payload: message.parsed,
@@ -447,6 +637,7 @@ export function discoverVideoMessageVideos(
       sourceId: 'video-message',
       ...(sourceSpaceKey ? { sourceSpaceKey } : {}),
       ...(sourceChatId ? { sourceChatId } : {}),
+      ...(sourceViewerChatGrantId ? { sourceViewerChatGrantId } : {}),
       accessBasis: accessScope === 'personal' ? 'personal' : 'history',
     });
   }
@@ -466,9 +657,19 @@ export function orderedRecordingFileUris(recording: Record<string, unknown>): st
   const segments = asArray(recording.mediaSegments)
     .map(optionalString)
     .filter((fileUri): fileUri is string => Boolean(fileUri && parseW3dsFileUri(fileUri)));
-  if (segments.length) return segments;
+  const uniqueSegments = [...new Set(segments)];
   const mediaUri = optionalString(recording.mediaUri);
-  return mediaUri && parseW3dsFileUri(mediaUri) ? [mediaUri] : [];
+  const validMediaUri = mediaUri && parseW3dsFileUri(mediaUri) ? mediaUri : undefined;
+
+  // A modern recording can retain a real full-length file in `mediaUri` and
+  // list generated fallback chunks separately. Prefer that file so native
+  // range seeking remains available. Older recording writers, however, set
+  // `mediaUri` to `mediaSegments[0]` for backwards compatibility; treating it
+  // as a complete file silently dropped every later chunk and made an hour
+  // call look like a ~20-minute video. In that legacy shape the ordered
+  // segment list is the recording.
+  if (validMediaUri && !uniqueSegments.includes(validMediaUri)) return [validMediaUri];
+  return uniqueSegments;
 }
 
 /**

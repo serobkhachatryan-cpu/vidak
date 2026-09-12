@@ -9,6 +9,19 @@ import {
   resolveCorrelationId,
 } from '../../../../../server/ops-observability';
 import {
+  deletePlaybackResolutionCache,
+  getPlaybackResolutionCache,
+} from '../../../../../server/playback-resolution-cache';
+import {
+  isRefreshablePrivateMediaFailure,
+  openPrivateMediaUpstream,
+} from '../../../../../server/private-media-upstream';
+import {
+  SharedVideoAuthorizationReceiptConfigurationError,
+  sharedVideoAuthorizationReceiptCookieName,
+  verifySharedVideoAuthorizationReceipt,
+} from '../../../../../server/shared-video-authorization-receipt';
+import {
   getBearerToken,
   getW3dsAuthService,
   W3dsAuthError,
@@ -30,38 +43,90 @@ export async function GET(
     const session = await getW3dsAuthService().getSession(accessToken);
     const { streamId } = await context.params;
     const library = createMeshengerVideoLibrary();
+    const sharedAuthorizationReceipt = request.cookies.get(
+      sharedVideoAuthorizationReceiptCookieName,
+    )?.value;
     let retriedSource = false;
     let renewedExpiredStream = false;
     let resolvedStreamId = streamId;
+    let usedReceiptBoundResolutionCache = false;
     let mediaUrl: string;
+    const resolveSource = async (
+      candidateStreamId: string,
+      options?: { bypassReceiptBoundResolutionCache?: boolean },
+    ): Promise<string> => {
+      const hasRecentSharedAuthorizationReceipt = hasVerifiedSharedAuthorizationReceipt(
+        sharedAuthorizationReceipt,
+        session.user.eName,
+        candidateStreamId,
+      );
+      if (hasRecentSharedAuthorizationReceipt && !options?.bypassReceiptBoundResolutionCache) {
+        const cachedMediaUrl = await readReceiptBoundResolutionCache(
+          sharedAuthorizationReceipt,
+          session.user.eName,
+          candidateStreamId,
+        );
+        if (cachedMediaUrl) {
+          // A cached URL is not an authorization grant. Confirm the opaque
+          // signed stream is still valid and bound to this session before it
+          // is ever handed to the private upstream transport.
+          library.inspectBoundStream(session.user, candidateStreamId);
+          usedReceiptBoundResolutionCache = true;
+          return cachedMediaUrl;
+        }
+      }
+      return hasRecentSharedAuthorizationReceipt
+        ? await library.resolveMediaUrl(session.user, candidateStreamId, {
+            hasRecentSharedAuthorizationReceipt: true,
+          })
+        : await library.resolveMediaUrl(session.user, candidateStreamId);
+    };
     try {
-      mediaUrl = await library.resolveMediaUrl(session.user, streamId);
+      mediaUrl = await resolveSource(streamId);
     } catch (error) {
       if (!(error instanceof MeshengerVideoLibraryError) || error.code !== 'stream_expired')
         throw error;
       const renewedStreamId = await library.renewPlayableStream(session.user, streamId);
       resolvedStreamId = renewedStreamId;
-      mediaUrl = await library.resolveMediaUrl(session.user, renewedStreamId);
+      mediaUrl = await resolveSource(renewedStreamId);
       renewedExpiredStream = true;
     }
-    let upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
-    if (!upstream.ok && upstream.status !== 206) {
-      if ([401, 403, 404].includes(upstream.status)) {
-        await discardUpstreamBody(upstream);
-        await library.invalidateMediaUrl(session.user, resolvedStreamId);
-        mediaUrl = await library.resolveMediaUrl(session.user, resolvedStreamId);
-        upstream = await fetchUpstreamMedia(mediaUrl, request.headers.get('range'));
-        retriedSource = true;
+    const openUpstream = () =>
+      openPrivateMediaUpstream({
+        mediaUrl,
+        range: request.headers.get('range'),
+        signal: request.signal,
+      });
+    let upstreamResult = await openUpstream();
+    if (
+      upstreamResult.kind === 'failure' &&
+      isRefreshablePrivateMediaFailure(upstreamResult.failure)
+    ) {
+      if (usedReceiptBoundResolutionCache) {
+        // A stale cache row must never participate in the one bounded retry.
+        // Cleanup is intentionally non-blocking and cannot affect playback.
+        void deleteReceiptBoundResolutionCache(
+          sharedAuthorizationReceipt,
+          session.user.eName,
+          resolvedStreamId,
+        );
+        usedReceiptBoundResolutionCache = false;
       }
+      await library.invalidateMediaUrl(session.user, resolvedStreamId);
+      mediaUrl = await resolveSource(resolvedStreamId, {
+        bypassReceiptBoundResolutionCache: true,
+      });
+      upstreamResult = await openUpstream();
+      retriedSource = true;
     }
-    if (!upstream.ok && upstream.status !== 206) {
-      await discardUpstreamBody(upstream);
+    if (upstreamResult.kind === 'failure') {
       throw new MeshengerVideoLibraryError(
         'The video file is unavailable.',
         'remote_rejected',
         502,
       );
     }
+    const upstream = upstreamResult.response;
     if (renewedExpiredStream || retriedSource) {
       reportOperationalEvent({
         category: 'video_playback',
@@ -103,28 +168,47 @@ function logProxyFailure(error: unknown, correlationId: string): void {
   });
 }
 
-async function discardUpstreamBody(response: Response): Promise<void> {
+/** Invalid receipts never alter the established private-player behavior. */
+function hasVerifiedSharedAuthorizationReceipt(
+  receipt: string | undefined,
+  viewerEName: string,
+  streamId: string,
+): boolean {
+  if (!receipt) return false;
   try {
-    await response.body?.cancel();
-  } catch {
-    // The response is already unusable. Continue with the source refresh.
+    return verifySharedVideoAuthorizationReceipt({ receipt, viewerEName, streamId });
+  } catch (error) {
+    if (error instanceof SharedVideoAuthorizationReceiptConfigurationError) return false;
+    throw error;
   }
 }
 
-/** Limit time to the upstream response headers, never the viewer's media stream. */
-async function fetchUpstreamMedia(mediaUrl: string, range: string | null): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 30_000);
+/**
+ * The receipt cache is deliberately invisible when its backing store or
+ * configuration is unavailable. The cache itself repeats the exact receipt,
+ * viewer, and stream validation; this wrapper retains no source details.
+ */
+async function readReceiptBoundResolutionCache(
+  receipt: string | undefined,
+  viewerEName: string,
+  streamId: string,
+): Promise<string | undefined> {
+  if (!receipt) return undefined;
   try {
-    return await fetch(mediaUrl, {
-      cache: 'no-store',
-      redirect: 'error',
-      ...(range ? { headers: { Range: range } } : {}),
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timeout);
+    return await getPlaybackResolutionCache({ receipt, viewerEName, streamId });
+  } catch {
+    return undefined;
   }
+}
+
+/** A rejected cache-hit URL is removed best-effort before the one fresh resolve. */
+function deleteReceiptBoundResolutionCache(
+  receipt: string | undefined,
+  viewerEName: string,
+  streamId: string,
+): Promise<boolean> {
+  if (!receipt) return Promise.resolve(false);
+  return deletePlaybackResolutionCache({ receipt, viewerEName, streamId }).catch(() => false);
 }
 
 function errorResponse(error: unknown, correlationId: string): NextResponse {

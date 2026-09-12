@@ -12,6 +12,13 @@ interface VerifiedAccess {
   expiresAt: number;
 }
 
+/**
+ * A catalogue recheck is cancellable background work. It must never become
+ * the pending operation that an interactive playback authorization inherits.
+ * Positive completed proofs remain shared across both scopes.
+ */
+export type SharedAccessProbePriority = 'background' | 'warmup' | 'interactive';
+
 const verifiedAccess = new Map<string, VerifiedAccess>();
 const inflightProbes = new Map<string, Promise<SharedSpaceAccess>>();
 
@@ -25,18 +32,23 @@ export async function coalesceSharedAccessProbe(
   source: SharedSpaceProbe,
   probe: () => Promise<SharedSpaceAccess>,
   now = Date.now(),
+  completedAt: () => number = Date.now,
+  options?: { priority?: SharedAccessProbePriority },
 ): Promise<SharedSpaceAccess> {
   if (hasVerifiedSharedAccess(viewerEName, source, now)) {
     return { access: 'ok', member: true };
   }
-  const key = sharedAccessCacheKey(viewerEName, source);
+  const key = inflightProbeKey(viewerEName, source, options?.priority ?? 'interactive');
   const inflight = inflightProbes.get(key);
   if (inflight) return inflight;
 
   const pending = probe()
     .then((access) => {
       if (access.access === 'ok' && access.member) {
-        rememberVerifiedSharedAccess(viewerEName, source, now);
+        // Start the short reuse window when a potentially slow source check
+        // actually succeeds. Using the request's start time can leave almost
+        // no cache lifetime after a long eVault authorization read.
+        rememberVerifiedSharedAccess(viewerEName, source, completedAt());
       }
       return access;
     })
@@ -91,6 +103,14 @@ function sharedAccessCacheKey(viewerEName: string, source: SharedSpaceProbe): st
   )}\u0000${source.kind === 'direct' ? source.chatId : ''}\u0000${
     source.kind === 'reference' ? source.referenceId : ''
   }\u0000${source.kind === 'reference' ? source.fileId : ''}`;
+}
+
+function inflightProbeKey(
+  viewerEName: string,
+  source: SharedSpaceProbe,
+  priority: SharedAccessProbePriority,
+): string {
+  return `${sharedAccessCacheKey(viewerEName, source)}\u0000${priority}`;
 }
 
 function normalizeEName(value: string): string {

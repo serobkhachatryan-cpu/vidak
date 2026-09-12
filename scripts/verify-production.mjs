@@ -2,11 +2,18 @@
 /**
  * Read-only post-deploy production smoke test.
  *
- * It deliberately uses only anonymous GET requests and reports aggregate
- * counts. It never logs titles, identifiers, source URLs, cookies, or media
- * bytes. Run it after a successful deployment:
+ * It deliberately uses only anonymous GET requests plus, when configured, an
+ * unsigned no-op POST that proves the Meshenger playback-grant route exists and
+ * fails closed. It never logs titles, identifiers, source URLs, cookies, or
+ * media bytes. Run it after a successful deployment:
  *
  *   VIDAK_SMOKE_ORIGIN=https://vidak.postplatforms.com pnpm smoke:production
+ *
+ * After the source grant is deployed, add its public endpoint (never a media
+ * URL or a real recording identifier):
+ *
+ *   MESHENGER_PLAYBACK_GRANT_SMOKE_URL=https://meshenger.example/api/integrations/vidak/recording-playback-grant \
+ *     VIDAK_SMOKE_ORIGIN=https://vidak.postplatforms.com pnpm smoke:production
  */
 
 const REQUIRED_DOCUMENT_HEADERS = [
@@ -22,6 +29,7 @@ const PRIVATE_ENDPOINTS = [
   '/api/auth/me',
   '/api/support/reports',
 ];
+const MESHENGER_PLAYBACK_GRANT_PATH = '/api/integrations/vidak/recording-playback-grant';
 
 const FORBIDDEN_PUBLIC_FIELDS = new Set([
   'ownerid',
@@ -67,6 +75,39 @@ function smokeUrl(origin, path) {
   const url = new URL(path, origin);
   assert(url.origin === origin.origin, 'Public content was not served from Vidak.');
   return url;
+}
+
+function playbackGrantSmokeUrl(value) {
+  if (!value) return undefined;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    fail('MESHENGER_PLAYBACK_GRANT_SMOKE_URL must be an absolute HTTPS URL.');
+  }
+  assert(url.protocol === 'https:', 'MESHENGER_PLAYBACK_GRANT_SMOKE_URL must use HTTPS.');
+  assert(
+    url.pathname === MESHENGER_PLAYBACK_GRANT_PATH && !url.search && !url.hash,
+    'MESHENGER_PLAYBACK_GRANT_SMOKE_URL must target only the playback-grant route.',
+  );
+  return url;
+}
+
+async function checkPlaybackGrantBoundary(fetchImpl, endpoint) {
+  if (!endpoint) return false;
+  const response = await fetchImpl(endpoint, {
+    method: 'POST',
+    body: '{}',
+    headers: { 'content-type': 'application/json' },
+    redirect: 'manual',
+  });
+  assert(response.status === 401, 'The playback-grant route did not reject an unsigned request.');
+  assert(
+    (response.headers.get('cache-control') ?? '').toLowerCase().includes('no-store'),
+    'The playback-grant route is missing Cache-Control: no-store.',
+  );
+  await response.body?.cancel().catch(() => undefined);
+  return true;
 }
 
 function usableSearchTerm(title) {
@@ -137,7 +178,11 @@ async function checkPublicMedia(fetchImpl, origin, video) {
 }
 
 /** Executes the read-only checks. Exported for integration tooling. */
-export async function runProductionSmoke({ origin: configuredOrigin, fetchImpl = fetch } = {}) {
+export async function runProductionSmoke({
+  origin: configuredOrigin,
+  playbackGrantEndpoint: configuredPlaybackGrantEndpoint,
+  fetchImpl = fetch,
+} = {}) {
   assert(configuredOrigin, 'VIDAK_SMOKE_ORIGIN is required.');
   let origin;
   try {
@@ -146,6 +191,7 @@ export async function runProductionSmoke({ origin: configuredOrigin, fetchImpl =
     fail('VIDAK_SMOKE_ORIGIN must be an absolute HTTPS URL.');
   }
   assert(origin.protocol === 'https:', 'VIDAK_SMOKE_ORIGIN must use HTTPS.');
+  const playbackGrantEndpoint = playbackGrantSmokeUrl(configuredPlaybackGrantEndpoint);
 
   const documentResponse = await fetchImpl(smokeUrl(origin, '/'), { redirect: 'manual' });
   assert(documentResponse.ok, `The home document returned HTTP ${documentResponse.status}.`);
@@ -233,17 +279,26 @@ export async function runProductionSmoke({ origin: configuredOrigin, fetchImpl =
     'An anonymous request reached a private endpoint.',
   );
 
+  const checkedPlaybackGrantEndpoint = await checkPlaybackGrantBoundary(
+    fetchImpl,
+    playbackGrantEndpoint,
+  );
+
   return {
     publicChannels: channels.items.length,
     publicVideos: videos.items.length,
     checkedPublicPosters: videos.items.length,
     checkedPublicPlayback: videos.items.length,
     searchChecked,
+    checkedPlaybackGrantEndpoint,
   };
 }
 
 async function main() {
-  const summary = await runProductionSmoke({ origin: process.env.VIDAK_SMOKE_ORIGIN });
+  const summary = await runProductionSmoke({
+    origin: process.env.VIDAK_SMOKE_ORIGIN,
+    playbackGrantEndpoint: process.env.MESHENGER_PLAYBACK_GRANT_SMOKE_URL,
+  });
   console.log(`production smoke passed — ${JSON.stringify(summary)}`);
 }
 

@@ -25,6 +25,8 @@ export interface VideoSpaceCatalogueItem {
   streamIds: string[];
   sourceSpaceKey?: string;
   sourceChatId?: string;
+  /** Server-only current viewer Chat evidence for a direct historical share. */
+  sourceViewerChatGrantId?: string;
   /** Server-only proof for a File reference stored in the viewer's vault. */
   sourceReferenceId?: string;
   sourceReferenceFileId?: string;
@@ -41,6 +43,11 @@ export interface VideoSpaceStreamGrantInput {
   accessScope: VideoSpaceAccessScope;
   sourceSpaceKey?: string;
   sourceChatId?: string;
+  sourceViewerChatGrantId?: string;
+  sourceCallSessionId?: string;
+  sourceCallSessionVault?: string;
+  sourceRecordingVault?: string;
+  sourceChatKind?: 'direct' | 'group';
   sourceReferenceId?: string;
   sourceReferenceFileId?: string;
   accessBasis?: VideoAccessBasis;
@@ -95,6 +102,19 @@ export function assembleVideoSpaceCatalogue(input: {
                 accessScope: item.accessScope,
                 ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
                 ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
+                ...(item.sourceViewerChatGrantId
+                  ? { sourceViewerChatGrantId: item.sourceViewerChatGrantId }
+                  : {}),
+                ...(item.sourceCallSessionId
+                  ? { sourceCallSessionId: item.sourceCallSessionId }
+                  : {}),
+                ...(item.sourceCallSessionVault
+                  ? { sourceCallSessionVault: item.sourceCallSessionVault }
+                  : {}),
+                ...(item.sourceRecordingVault
+                  ? { sourceRecordingVault: item.sourceRecordingVault }
+                  : {}),
+                ...(item.sourceChatKind ? { sourceChatKind: item.sourceChatKind } : {}),
                 ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
                 ...(item.sourceReferenceFileId
                   ? { sourceReferenceFileId: item.sourceReferenceFileId }
@@ -105,6 +125,9 @@ export function assembleVideoSpaceCatalogue(input: {
           : [],
         ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
         ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
+        ...(item.sourceViewerChatGrantId
+          ? { sourceViewerChatGrantId: item.sourceViewerChatGrantId }
+          : {}),
         ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
         ...(item.sourceReferenceFileId
           ? { sourceReferenceFileId: item.sourceReferenceFileId }

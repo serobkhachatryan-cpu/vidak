@@ -27,6 +27,11 @@ const shared: DiscoveredVideoRecord = {
   sourceId: 'call-recording',
   sourceSpaceKey: '@friend.w3id',
   sourceChatId: 'chat-1',
+  sourceViewerChatGrantId: 'viewer-chat-grant',
+  sourceCallSessionId: 'call-session-1',
+  sourceCallSessionVault: '@friend.w3id',
+  sourceRecordingVault: '@friend.w3id',
+  sourceChatKind: 'direct',
   accessBasis: 'history',
 };
 
@@ -91,6 +96,11 @@ describe('assembleVideoSpaceCatalogue', () => {
         accessScope: 'shared',
         sourceSpaceKey: '@friend.w3id',
         sourceChatId: 'chat-1',
+        sourceViewerChatGrantId: 'viewer-chat-grant',
+        sourceCallSessionId: 'call-session-1',
+        sourceCallSessionVault: '@friend.w3id',
+        sourceRecordingVault: '@friend.w3id',
+        sourceChatKind: 'direct',
         accessBasis: 'history',
       },
     ]);
@@ -98,7 +108,15 @@ describe('assembleVideoSpaceCatalogue', () => {
 
   it('mints a shared File-reference grant with only its server-side reference proof', () => {
     const grants: VideoSpaceStreamGrantInput[] = [];
-    const { sourceChatId: _chat, ...sharedWithoutChat } = shared;
+    const {
+      sourceChatId: _chat,
+      sourceViewerChatGrantId: _viewerChatGrant,
+      sourceCallSessionId: _callSession,
+      sourceCallSessionVault: _callSessionVault,
+      sourceRecordingVault: _recordingVault,
+      sourceChatKind: _sourceChatKind,
+      ...sharedWithoutChat
+    } = shared;
     const reference: DiscoveredVideoRecord = {
       ...sharedWithoutChat,
       key: 'file:@owner.w3id/local-reference',

@@ -22,7 +22,10 @@ export interface ExtractedPreviewFrame {
 }
 
 export interface VideoFrameExtractor {
-  extractUsefulFrame(source: PreviewFrameSource): Promise<ExtractedPreviewFrame | undefined>;
+  extractUsefulFrame(
+    source: PreviewFrameSource,
+    options?: { signal?: AbortSignal },
+  ): Promise<ExtractedPreviewFrame | undefined>;
   /**
    * Optional lightweight metadata probe. Implementations that cannot inspect
    * duration can omit it without making preview generation unavailable.
@@ -50,16 +53,27 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     private readonly ffprobePath = 'ffprobe',
   ) {}
 
-  async extractUsefulFrame(source: PreviewFrameSource): Promise<ExtractedPreviewFrame | undefined> {
+  async extractUsefulFrame(
+    source: PreviewFrameSource,
+    options?: { signal?: AbortSignal },
+  ): Promise<ExtractedPreviewFrame | undefined> {
     const workspace = await mkdtemp(join(tmpdir(), 'vidak-preview-'));
     try {
       const input = await this.materializeInput(source, workspace);
-      const duration = await this.probeDurationForInput(input);
+      const duration = await this.probeDurationForInput(input, options?.signal);
+      if (options?.signal?.aborted) return undefined;
       const candidates = previewCaptureCandidates(duration ?? 0);
       for (const captureSeconds of candidates) {
-        const sample = await this.extractRgbSample(input, captureSeconds, workspace);
+        const sample = await this.extractRgbSample(
+          input,
+          captureSeconds,
+          workspace,
+          options?.signal,
+        );
+        if (options?.signal?.aborted) return undefined;
         if (!sample || isMostlyBlackFrame(sample, sampleWidth, sampleHeight)) continue;
-        const jpeg = await this.extractJpeg(input, captureSeconds, workspace);
+        const jpeg = await this.extractJpeg(input, captureSeconds, workspace, options?.signal);
+        if (options?.signal?.aborted) return undefined;
         if (jpeg?.byteLength) {
           return {
             jpeg,
@@ -92,12 +106,16 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     return path;
   }
 
-  private async probeDurationForInput(input: string): Promise<number | undefined> {
+  private async probeDurationForInput(
+    input: string,
+    signal?: AbortSignal,
+  ): Promise<number | undefined> {
     try {
       const stdout = await runProcess(
         this.ffprobePath,
         ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', input],
         probeTimeoutMs,
+        signal,
       );
       const duration = Number.parseFloat(stdout.trim());
       return Number.isFinite(duration) && duration > 0 ? duration : undefined;
@@ -110,6 +128,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     input: string,
     captureSeconds: number,
     workspace: string,
+    signal?: AbortSignal,
   ): Promise<Uint8Array | undefined> {
     const output = join(workspace, `sample-${captureSeconds}.rgb`);
     const ok = await runProcessExit(
@@ -134,6 +153,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
         output,
       ],
       extractTimeoutMs,
+      signal,
     );
     if (!ok) return undefined;
     try {
@@ -148,6 +168,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     input: string,
     captureSeconds: number,
     workspace: string,
+    signal?: AbortSignal,
   ): Promise<Uint8Array | undefined> {
     const output = join(workspace, `poster-${captureSeconds}.jpg`);
     const ok = await runProcessExit(
@@ -170,6 +191,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
         output,
       ],
       extractTimeoutMs,
+      signal,
     );
     if (!ok) return undefined;
     try {
@@ -182,17 +204,35 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
   }
 }
 
-function runProcess(command: string, args: string[], timeoutMs: number): Promise<string> {
+function runProcess(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new VideoFrameExtractorError('Frame extraction was preempted.', 'failed'));
+      return;
+    }
     const child = spawn(command, args, { stdio: ['ignore', 'pipe', 'ignore'] });
     const chunks: Buffer[] = [];
+    const cleanup = () => signal?.removeEventListener('abort', abort);
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
+      cleanup();
       reject(new VideoFrameExtractorError('Frame extraction timed out.', 'failed'));
     }, timeoutMs);
+    const abort = () => {
+      clearTimeout(timer);
+      child.kill('SIGKILL');
+      reject(new VideoFrameExtractorError('Frame extraction was preempted.', 'failed'));
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     child.stdout.on('data', (chunk: Buffer) => chunks.push(chunk));
     child.on('error', (error) => {
       clearTimeout(timer);
+      cleanup();
       reject(
         new VideoFrameExtractorError(
           error instanceof Error ? error.message : 'Frame extraction is unavailable.',
@@ -202,25 +242,45 @@ function runProcess(command: string, args: string[], timeoutMs: number): Promise
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      cleanup();
       if (code === 0) resolve(Buffer.concat(chunks).toString('utf8'));
       else reject(new VideoFrameExtractorError('Frame extraction failed.', 'failed'));
     });
   });
 }
 
-function runProcessExit(command: string, args: string[], timeoutMs: number): Promise<boolean> {
+function runProcessExit(
+  command: string,
+  args: string[],
+  timeoutMs: number,
+  signal?: AbortSignal,
+): Promise<boolean> {
   return new Promise((resolve) => {
+    if (signal?.aborted) {
+      resolve(false);
+      return;
+    }
     const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'ignore'] });
+    const cleanup = () => signal?.removeEventListener('abort', abort);
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
+      cleanup();
       resolve(false);
     }, timeoutMs);
+    const abort = () => {
+      clearTimeout(timer);
+      child.kill('SIGKILL');
+      resolve(false);
+    };
+    signal?.addEventListener('abort', abort, { once: true });
     child.on('error', () => {
       clearTimeout(timer);
+      cleanup();
       resolve(false);
     });
     child.on('close', (code) => {
       clearTimeout(timer);
+      cleanup();
       resolve(code === 0);
     });
   });

@@ -151,6 +151,30 @@ describe('W3dsAuthService', () => {
     expect(reused.eName).toBe('@creator.w3id');
   });
 
+  it('projects a validated media session without signing replacement credentials', async () => {
+    const { service } = createService();
+    const accessToken = await completeLogin(service, verifiedIdentity.eName);
+    const sign = vi.spyOn(globalThis.crypto.subtle, 'sign');
+    const verify = vi.spyOn(globalThis.crypto.subtle, 'verify');
+
+    try {
+      const session = await service.getSession(accessToken);
+
+      expect(session).toMatchObject({
+        provider: 'w3ds',
+        user: verifiedIdentity,
+        tokens: { expiresAt: expect.any(String) },
+      });
+      expect(session.tokens.accessToken).toBeUndefined();
+      expect(session.tokens.refreshToken).toBeUndefined();
+      expect(verify).toHaveBeenCalled();
+      expect(sign).not.toHaveBeenCalled();
+    } finally {
+      sign.mockRestore();
+      verify.mockRestore();
+    }
+  });
+
   it('provisions new W3DS accounts with a neutral public display name', async () => {
     const { service } = createService();
     const uuidEName = '@fd10387a-b0d3-5f9c-bf54-7214a491cace';

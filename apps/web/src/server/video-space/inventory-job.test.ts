@@ -12,6 +12,48 @@ type Work = DeferredWork & {
 };
 
 describe('durable inventory checkpoints', () => {
+  it('returns only a current exact card for its authenticated owner', async () => {
+    const store = createMemoryInventoryJobStore();
+    const current = await store.createJob({
+      ownerEName: '@viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const card = {
+      id: 'w3ds-file:@owner.w3id/shared-recording',
+      kind: 'call-recording' as const,
+      title: 'Shared recording',
+      accessScope: 'shared' as const,
+      visibility: 'shared-with-me' as const,
+      streamIds: ['opaque-viewer-stream'],
+    };
+    await store.saveJob({
+      ...current,
+      status: 'complete',
+      completeness: { ...current.completeness, complete: true, retryNeeded: false },
+      ledger: { drainFinished: true, catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION },
+      items: [card],
+    });
+
+    await expect(store.getItemByOwner('@viewer.w3id', card.id)).resolves.toEqual(card);
+    await expect(store.getItemByOwner('@other.w3id', card.id)).resolves.toBeUndefined();
+
+    const stale = await store.createJob({
+      ownerEName: '@stale-viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...stale,
+      status: 'complete',
+      completeness: { ...stale.completeness, complete: true, retryNeeded: false },
+      ledger: {
+        drainFinished: true,
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION - 1,
+      },
+      items: [card],
+    });
+    await expect(store.getItemByOwner('@stale-viewer.w3id', card.id)).resolves.toBeUndefined();
+  });
+
   it('pumps completed stale catalogue jobs after a media-discovery repair', async () => {
     const store = createMemoryInventoryJobStore();
     const job = await store.createJob({
@@ -138,6 +180,56 @@ describe('durable inventory checkpoints', () => {
     expect(persisted).toBe(1);
   });
 
+  it('requeues a selected cursor when playback gates its vault before dispatch', async () => {
+    const now = 1_000;
+    const queue: Work[] = [
+      {
+        type: 'messages',
+        vaultKey: '@watched.w3id',
+        after: 'cursor-9',
+        attempts: 2,
+        id: 'watched-cursor',
+      },
+    ];
+    let gateChecks = 0;
+    let processed = 0;
+    let persisted = 0;
+
+    await drainFairVaultQueue(
+      queue,
+      async () => {
+        processed += 1;
+      },
+      {
+        vaultKey: (item) => item.vaultKey,
+        priority: () => 1,
+        now: () => now,
+        maxWaves: 1,
+        vaultNotBefore: () => {
+          gateChecks += 1;
+          // The first check fills this wave. The immediate dispatch check
+          // observes the Watch reservation that arrived in between.
+          return gateChecks === 1 ? 0 : now + 90_000;
+        },
+        persist: () => {
+          persisted += 1;
+        },
+        workKey: (item) => item.id,
+      },
+    );
+
+    expect(processed).toBe(0);
+    expect(persisted).toBe(1);
+    expect(queue).toEqual([
+      expect.objectContaining({
+        id: 'watched-cursor',
+        after: 'cursor-9',
+        attempts: 2,
+        notBefore: now + 90_000,
+      }),
+    ]);
+  });
+
   it('yields deferred durable work instead of blocking the next inventory pump', async () => {
     const now = 1_000;
     const queue: Work[] = [
@@ -235,6 +327,18 @@ describe('durable inventory checkpoints', () => {
     expect(await store.tryClaimDrain(job.id, 1_000)).toBe(false);
     await store.releaseDrain(job.id);
     expect(await store.tryClaimDrain(job.id, 2_000)).toBe(true);
+  });
+
+  it('never lets a later retry shorten an interactive vault gate', async () => {
+    const store = createMemoryInventoryJobStore();
+    await store.setVaultGate('@shared.w3id', 91_000, 2_000);
+    // A background retry writes an earlier eligibility time after playback
+    // has reserved the source. It must preserve both gate dimensions.
+    await store.setVaultGate('@shared.w3id', 3_000);
+
+    expect(await store.vaultNotBefore('@shared.w3id', 1_000)).toBe(Number.POSITIVE_INFINITY);
+    await store.clearVaultInflight('@shared.w3id');
+    expect(await store.vaultNotBefore('@shared.w3id', 1_000)).toBe(91_000);
   });
 
   it('replaces open tasks so completed cursors are not revived on resume', async () => {

@@ -7,6 +7,11 @@ import type {
   SharedSpaceProbe,
 } from '../meshenger-video-library';
 import { setOperationalLogSinkForTests } from '../ops-observability';
+import {
+  reserveInteractivePlayback,
+  resetBackgroundWorkPriorityForTests,
+} from './background-work-priority';
+import { VIDEO_SPACE_CATALOGUE_VERSION } from './catalogue-version';
 import { completeInventory } from './completeness';
 import type { InventorySourceCounts } from './discovery';
 import { createInventoryCoordinator, publicLibraryItems } from './inventory-coordinator';
@@ -38,6 +43,7 @@ function library(items: MeshengerVideo[], completeness = completeInventory): Mes
 describe('inventory coordinator', () => {
   beforeEach(() => {
     setInventoryJobStoreForTests(createMemoryInventoryJobStore());
+    resetBackgroundWorkPriorityForTests();
     resetSharedAccessCacheForTests();
   });
 
@@ -45,7 +51,108 @@ describe('inventory coordinator', () => {
     vi.useRealTimers();
     setInventoryJobStoreForTests(undefined);
     setOperationalLogSinkForTests(undefined);
+    resetBackgroundWorkPriorityForTests();
     resetSharedAccessCacheForTests();
+  });
+
+  it('returns an owner-scoped public persisted watch card without starting a source scan', async () => {
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    const job = await store.createJob({
+      ownerEName: '@viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const shared = video({
+      id: 'w3ds-file:@owner.w3id/shared-recording',
+      title: 'Shared recording',
+      kind: 'call-recording',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@owner.w3id',
+      sourceChatId: 'private-chat-envelope',
+      sourceViewerChatGrantId: 'viewer-grant',
+      accessBasis: 'history',
+      sharedBy: 'Untrusted source name',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: { ...job.completeness, complete: true, retryNeeded: false },
+      ledger: { drainFinished: true, catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION },
+      items: [shared],
+    });
+    const scanLibrary = vi.fn();
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    const item = await coordinator.getItem(
+      { eName: '@viewer.w3id' },
+      { itemId: shared.id, scope: 'all' },
+    );
+
+    expect(item).toMatchObject({
+      id: shared.id,
+      title: 'Shared recording',
+      streamIds: ['opaque-stream'],
+      sharedVia: 'conversation',
+    });
+    expect(item).not.toHaveProperty('sourceSpaceKey');
+    expect(item).not.toHaveProperty('sourceChatId');
+    expect(item).not.toHaveProperty('sourceViewerChatGrantId');
+    expect(item).not.toHaveProperty('accessBasis');
+    expect(item).not.toHaveProperty('sharedBy');
+    expect(scanLibrary).not.toHaveBeenCalled();
+  });
+
+  it('reuses a fresh in-memory exact card without another source scan', async () => {
+    const target = video({ id: 'personal-target', title: 'Personal target' });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([target]), 'done', {
+        personalPages: 1,
+        sharedSpaces: 0,
+        failed: 0,
+      });
+      return library([target]);
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    await coordinator.getSnapshot({ eName: '@viewer.w3id' }, { scope: 'all' });
+    const item = await coordinator.getItem(
+      { eName: '@viewer.w3id' },
+      { itemId: target.id, scope: 'all' },
+    );
+
+    expect(item).toMatchObject({ id: target.id, title: 'Personal target' });
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to the normal viewer-authorized snapshot after an exact durable miss', async () => {
+    const target = video({ id: 'shared-target', title: 'Recovered shared target' });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([target]), 'done', {
+        personalPages: 0,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([target]);
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    const item = await coordinator.getItem(
+      { eName: '@viewer.w3id' },
+      { itemId: target.id, scope: 'all' },
+    );
+
+    expect(item).toMatchObject({ id: target.id, title: 'Recovered shared target' });
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
   });
 
   it('scopes owned and shared scans and coalesces in-flight work', async () => {
@@ -142,7 +249,7 @@ describe('inventory coordinator', () => {
     expect(scanLibrary).toHaveBeenCalledTimes(2);
   });
 
-  it('does not offer a freshly scanned shared item after access is revoked', async () => {
+  it('keeps a discovered shared item visible after a source recheck is denied', async () => {
     const sharedVideo = video({
       id: 'shared-1',
       title: 'Group cut',
@@ -175,7 +282,7 @@ describe('inventory coordinator', () => {
         { eName: '@person.w3id' },
         { scope: 'shared' },
       );
-      expect(afterRecheck.items).toEqual([]);
+      expect(afterRecheck.items).toEqual([expect.objectContaining({ id: 'shared-1' })]);
     });
     expect(scanLibrary).toHaveBeenCalledTimes(1);
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
@@ -217,6 +324,8 @@ describe('inventory coordinator', () => {
         referenceId: 'local-reference',
         fileId: 'canonical-file',
       },
+      'fail-fast',
+      expect.objectContaining({ signal: expect.anything() }),
     );
   });
 
@@ -347,19 +456,43 @@ describe('inventory coordinator', () => {
       });
       return library([ownedVideo, sharedVideo]);
     });
+    let aborted = false;
     const probeSharedSpaceAccess = vi.fn(
-      () => new Promise<{ access: 'ok'; member: boolean }>(() => undefined),
+      (
+        _user: { eName: string },
+        _space: SharedSpaceProbe,
+        _rateLimit?: 'fail-fast' | 'backoff',
+        options?: { signal?: AbortSignal },
+      ) =>
+        new Promise<{ access: 'retry'; member: false }>((resolve) => {
+          options?.signal?.addEventListener(
+            'abort',
+            () => {
+              aborted = true;
+              resolve({ access: 'retry', member: false });
+            },
+            { once: true },
+          );
+        }),
     );
     const coordinator = createInventoryCoordinator({
       createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
       log: () => undefined,
       ttlMs: 60_000,
-      revalidationTimeoutMs: 1,
+      revalidationTimeoutMs: 25,
     });
 
     const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
     expect(first.items.map((item) => item.title)).toEqual(['Personal clip', 'Shared clip']);
     expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1);
+    expect(probeSharedSpaceAccess).toHaveBeenCalledWith(
+      { eName: '@person.w3id' },
+      expect.objectContaining({ kind: 'group' }),
+      'fail-fast',
+      expect.objectContaining({ signal: expect.anything() }),
+    );
+
+    await vi.waitFor(() => expect(aborted).toBe(true));
 
     await vi.waitFor(async () => {
       const afterTimeout = await coordinator.getSnapshot(
@@ -374,6 +507,67 @@ describe('inventory coordinator', () => {
     });
   });
 
+  it('preempts a live background source recheck when playback begins without hiding its card', async () => {
+    const sharedVideo = video({
+      id: 'shared-1',
+      title: 'Shared clip',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@group.w3id',
+      accessBasis: 'membership',
+    });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([sharedVideo]), 'done', {
+        personalPages: 0,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([sharedVideo]);
+    });
+    let aborted = false;
+    const probeSharedSpaceAccess = vi.fn(
+      (
+        _user: { eName: string },
+        _space: SharedSpaceProbe,
+        _rateLimit?: 'fail-fast' | 'backoff',
+        options?: { signal?: AbortSignal },
+      ) =>
+        new Promise<{ access: 'retry'; member: false }>((resolve) => {
+          const abort = () => {
+            aborted = true;
+            resolve({ access: 'retry', member: false });
+          };
+          if (options?.signal?.aborted) abort();
+          else options?.signal?.addEventListener('abort', abort, { once: true });
+        }),
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess }),
+      log: () => undefined,
+      ttlMs: 60_000,
+      revalidationTimeoutMs: 60_000,
+    });
+
+    const first = await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(first.items).toEqual([
+      expect.objectContaining({ id: 'shared-1', sourceAccess: 'checking' }),
+    ]);
+    await vi.waitFor(() => expect(probeSharedSpaceAccess).toHaveBeenCalledTimes(1));
+
+    reserveInteractivePlayback(30_000);
+    await vi.waitFor(() => expect(aborted).toBe(true));
+
+    await vi.waitFor(async () => {
+      const afterPreemption = await coordinator.getSnapshot(
+        { eName: '@person.w3id' },
+        { scope: 'shared' },
+      );
+      expect(afterPreemption.items).toEqual([
+        expect.objectContaining({ id: 'shared-1', title: 'Shared clip', sourceAccess: 'checking' }),
+      ]);
+    });
+  });
+
   it('checks the exact conversation and its authorized group fallback before showing history-shared media', async () => {
     const historyShared = video({
       id: 'shared-history-1',
@@ -382,6 +576,7 @@ describe('inventory coordinator', () => {
       visibility: 'shared-with-me',
       sourceSpaceKey: '@group.w3id',
       sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
       accessBasis: 'history',
     });
     const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
@@ -409,11 +604,19 @@ describe('inventory coordinator', () => {
     expect(snapshot.items.map((item) => item.title)).toEqual(['History-shared clip']);
     expect(probeSharedSpaceAccess).toHaveBeenCalledWith(
       { eName: '@person.w3id' },
-      expect.objectContaining({ kind: 'direct', chatId: 'chat-1' }),
+      expect.objectContaining({
+        kind: 'direct',
+        chatId: 'chat-1',
+        viewerChatGrantId: 'viewer-chat-grant',
+      }),
+      'fail-fast',
+      expect.objectContaining({ signal: expect.anything() }),
     );
     expect(probeSharedSpaceAccess).toHaveBeenCalledWith(
       { eName: '@person.w3id' },
       expect.objectContaining({ kind: 'group' }),
+      'fail-fast',
+      expect.objectContaining({ signal: expect.anything() }),
     );
   });
 
@@ -558,6 +761,7 @@ describe('inventory coordinator', () => {
         id: 'own-1',
         title: 'Mine',
         sourceSpaceKey: '@secret.w3id',
+        sourceViewerChatGrantId: 'private-viewer-chat-grant',
         sourceReferenceId: 'private-reference',
         sourceReferenceFileId: 'private-file',
         accessBasis: 'personal',
@@ -565,6 +769,7 @@ describe('inventory coordinator', () => {
     ]);
     expect(JSON.stringify(items)).not.toMatch(/@secret|cookie|Bearer|https:\/\//i);
     expect(items[0]).not.toHaveProperty('sourceSpaceKey');
+    expect(items[0]).not.toHaveProperty('sourceViewerChatGrantId');
     expect(items[0]).not.toHaveProperty('sourceReferenceId');
     expect(items[0]).not.toHaveProperty('sourceReferenceFileId');
   });
@@ -768,7 +973,12 @@ describe('inventory coordinator', () => {
     const scanLibrary = vi.fn(
       async (
         _user: unknown,
-        options: { drain?: boolean; maxWaves?: number; onSnapshot: SnapshotHandler },
+        options: {
+          drain?: boolean;
+          maxWaves?: number;
+          maxVaultsPerWave?: number;
+          onSnapshot: SnapshotHandler;
+        },
       ) => {
         if (options.drain === true) {
           options.onSnapshot(library([clip], refreshing), 'batch', {
@@ -817,7 +1027,12 @@ describe('inventory coordinator', () => {
       scanLibrary.mock.calls.some(
         (call) =>
           (call[1] as { drain?: boolean; maxWaves?: number }).drain === true &&
-          (call[1] as { maxWaves?: number }).maxWaves === 2,
+          (call[1] as { maxWaves?: number }).maxWaves === 1,
+      ),
+    ).toBe(true);
+    expect(
+      scanLibrary.mock.calls.some(
+        (call) => (call[1] as { maxVaultsPerWave?: number }).maxVaultsPerWave === 2,
       ),
     ).toBe(true);
   });
@@ -892,6 +1107,194 @@ describe('inventory coordinator', () => {
     expect(operationalLogs[0]).toContain('"code":"background_pump_failed"');
     expect(operationalLogs[0]).not.toContain('private source details');
     expect(operationalLogs[0]).not.toContain('@person.w3id');
+  });
+
+  it('coalesces overlapping durable pump requests instead of queuing inventory waves', async () => {
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    let notifyStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    let releaseScan: (value: MeshengerLibrary) => void = () => undefined;
+    const refreshing = {
+      ...completeInventory,
+      complete: false,
+      retrying: 1,
+    };
+    const scanLibrary = vi.fn(
+      () =>
+        new Promise<MeshengerLibrary>((resolve) => {
+          notifyStarted();
+          releaseScan = resolve;
+        }),
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    const first = coordinator.pumpRunning();
+    await started;
+    const second = coordinator.pumpRunning();
+    const third = coordinator.pumpRunning();
+
+    expect(second).toBe(first);
+    expect(third).toBe(first);
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+
+    releaseScan(library([], refreshing));
+    await first;
+    // The second run intentionally remains pending: its only purpose is to
+    // prove that a later timer tick starts one fresh wave rather than a queue
+    // of every overlapping tick that arrived while the first scan was open.
+    void coordinator.pumpRunning();
+    await vi.waitFor(() => expect(scanLibrary).toHaveBeenCalledTimes(2));
+  });
+
+  it('postpones a new durable inventory wave while playback has priority', async () => {
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const scanLibrary = vi.fn().mockResolvedValue(library([]));
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    reserveInteractivePlayback(30_000);
+    await coordinator.pumpRunning();
+
+    expect(scanLibrary).not.toHaveBeenCalled();
+
+    resetBackgroundWorkPriorityForTests();
+    await coordinator.pumpRunning();
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it('preempts an active durable job with a resumable background lease', async () => {
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    let signal: AbortSignal | undefined;
+    let notifyStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const refreshing = { ...completeInventory, complete: false };
+    let scans = 0;
+    const scanLibrary = vi.fn(
+      async (_user: unknown, options: { signal?: AbortSignal; onSnapshot: SnapshotHandler }) => {
+        scans += 1;
+        if (scans > 1) return library([], refreshing);
+        signal = options.signal;
+        notifyStarted();
+        return new Promise<MeshengerLibrary>((resolve) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => {
+              options.onSnapshot(library([], refreshing), 'batch', {
+                personalPages: 0,
+                sharedSpaces: 0,
+                failed: 0,
+              });
+              resolve(library([], refreshing));
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    const first = coordinator.pumpRunning();
+    await started;
+    expect(signal).toBeDefined();
+
+    reserveInteractivePlayback(30_000);
+    await first;
+
+    expect(signal?.aborted).toBe(true);
+    expect(scanLibrary).toHaveBeenCalledWith(
+      { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+      expect.objectContaining({ drain: true, signal: expect.anything() }),
+    );
+
+    resetBackgroundWorkPriorityForTests();
+    await coordinator.pumpRunning();
+    expect(scanLibrary).toHaveBeenCalledTimes(2);
+  });
+
+  it('preempts a cache-miss checkpoint when playback begins and retries it later', async () => {
+    let signal: AbortSignal | undefined;
+    let notifyStarted: () => void = () => undefined;
+    const started = new Promise<void>((resolve) => {
+      notifyStarted = resolve;
+    });
+    const refreshing = { ...completeInventory, complete: false };
+    let scans = 0;
+    const scanLibrary = vi.fn(
+      async (_user: unknown, options: { signal?: AbortSignal; onSnapshot: SnapshotHandler }) => {
+        scans += 1;
+        if (scans > 1) {
+          options.onSnapshot(library([], completeInventory), 'done', {
+            personalPages: 0,
+            sharedSpaces: 0,
+            failed: 0,
+          });
+          return library([], completeInventory);
+        }
+        signal = options.signal;
+        notifyStarted();
+        return new Promise<MeshengerLibrary>((resolve) => {
+          options.signal?.addEventListener(
+            'abort',
+            () => {
+              options.onSnapshot(library([], refreshing), 'batch', {
+                personalPages: 0,
+                sharedSpaces: 0,
+                failed: 0,
+              });
+              resolve(library([], refreshing));
+            },
+            { once: true },
+          );
+        });
+      },
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    const first = coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    await started;
+    expect(signal).toBeDefined();
+
+    reserveInteractivePlayback(30_000);
+    await first;
+    expect(signal?.aborted).toBe(true);
+    expect(scanLibrary).toHaveBeenCalledWith(
+      { eName: '@person.w3id' },
+      expect.objectContaining({ drain: false, signal: expect.anything() }),
+    );
+
+    resetBackgroundWorkPriorityForTests();
+    await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'shared' });
+    expect(scanLibrary).toHaveBeenCalledTimes(2);
   });
 
   it('does not start a second drain when two polls overlap', async () => {

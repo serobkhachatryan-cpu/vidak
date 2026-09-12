@@ -33,6 +33,25 @@ export async function GET(_request: NextRequest, context: RouteContext) {
   try {
     const { publicVideoId } = await context.params;
     const video = await getCreatorVideoService().getPublicVideo(publicVideoId);
+
+    // A real frame is the dependable default for published-video cards. Older
+    // uploads can contain generic images selected by the browser as a
+    // thumbnail; serving those first makes a playable video appear broken.
+    // Keep a creator-provided thumbnail as a graceful fallback while the
+    // server is generating a frame or the source cannot yield one.
+    const generated = await getVideoPreviewService().openPublishedPreview(video.id);
+    if (generated.status === 'ready') {
+      return new NextResponse(Buffer.from(generated.body), {
+        status: 200,
+        headers: {
+          'Content-Type': generated.contentType,
+          'Content-Length': String(generated.body.byteLength),
+          'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
+          'X-Content-Type-Options': 'nosniff',
+        },
+      });
+    }
+
     try {
       const download = await getMediaAssetService().openPublishedThumbnailDownload(video.id);
       return new NextResponse(download.body, {
@@ -43,19 +62,7 @@ export async function GET(_request: NextRequest, context: RouteContext) {
       if (!(error instanceof MediaAssetError) || error.code !== 'not_found') throw error;
     }
 
-    const generated = await getVideoPreviewService().openPublishedPreview(video.id);
-    if (generated.status !== 'ready') {
-      return NextResponse.json({ status: generated.status }, { status: 202 });
-    }
-    return new NextResponse(Buffer.from(generated.body), {
-      status: 200,
-      headers: {
-        'Content-Type': generated.contentType,
-        'Content-Length': String(generated.body.byteLength),
-        'Cache-Control': 'public, max-age=3600, stale-while-revalidate=86400',
-        'X-Content-Type-Options': 'nosniff',
-      },
-    });
+    return NextResponse.json({ status: generated.status }, { status: 202 });
   } catch (error) {
     return errorResponse(error);
   }

@@ -12,6 +12,7 @@ import {
   discoverW3dsFileVideos,
   documentedRecordOwnerEName,
   isAuthorizedCallParticipant,
+  orderedRecordingFileUris,
 } from './adapters';
 
 const owner = '@owner.w3id';
@@ -19,6 +20,49 @@ const viewer = '@viewer.w3id';
 const fileUri = 'w3ds://file?id=@owner.w3id/clip-1';
 
 describe('video space adapters', () => {
+  it('prefers a complete call recording over its segment fallbacks', () => {
+    expect(
+      orderedRecordingFileUris({
+        mediaUri: 'w3ds://file?id=@owner.w3id/full-call',
+        mediaSegments: [
+          'w3ds://file?id=@owner.w3id/full-call-1',
+          'w3ds://file?id=@owner.w3id/full-call-2',
+        ],
+      }),
+    ).toEqual(['w3ds://file?id=@owner.w3id/full-call']);
+  });
+
+  it('uses de-duplicated segments only when no complete call recording exists', () => {
+    expect(
+      orderedRecordingFileUris({
+        mediaSegments: [
+          'w3ds://file?id=@owner.w3id/part-1',
+          'w3ds://file?id=@owner.w3id/part-1',
+          'w3ds://file?id=@owner.w3id/part-2',
+        ],
+      }),
+    ).toEqual(['w3ds://file?id=@owner.w3id/part-1', 'w3ds://file?id=@owner.w3id/part-2']);
+  });
+
+  it('keeps every legacy segment when mediaUri only aliases the first one', () => {
+    expect(
+      orderedRecordingFileUris({
+        // Older Meshenger writers intentionally used the first segment as the
+        // legacy `mediaUri`; it is not a separate full-length file.
+        mediaUri: 'w3ds://file?id=@owner.w3id/part-1',
+        mediaSegments: [
+          'w3ds://file?id=@owner.w3id/part-1',
+          'w3ds://file?id=@owner.w3id/part-2',
+          'w3ds://file?id=@owner.w3id/part-3',
+        ],
+      }),
+    ).toEqual([
+      'w3ds://file?id=@owner.w3id/part-1',
+      'w3ds://file?id=@owner.w3id/part-2',
+      'w3ds://file?id=@owner.w3id/part-3',
+    ]);
+  });
+
   it('surfaces an owned eVault video as a personal file', () => {
     const referenced = new Set<string>();
     expect(
@@ -101,6 +145,104 @@ describe('video space adapters', () => {
     ]);
   });
 
+  it('prefers the Messages-by-Chat context over a conflicting legacy payload chat id', () => {
+    expect(
+      discoverVideoMessageVideos(
+        [
+          {
+            id: 'message-with-conflicting-chat-id',
+            ontology: '550e8400-e29b-41d4-a716-446655440004',
+            parsed: {
+              type: 'video',
+              chatId: 'legacy-alias-chat',
+              fileId: fileUri,
+              senderEName: owner,
+            },
+          },
+        ],
+        new Set(),
+        viewer,
+        owner,
+        'authorized-chat',
+        'viewer-chat-grant',
+        new Map([['legacy-alias-chat', 'wrong-chat-grant']]),
+      ),
+    ).toEqual([
+      expect.objectContaining({
+        sourceChatId: 'authorized-chat',
+        sourceViewerChatGrantId: 'viewer-chat-grant',
+      }),
+    ]);
+  });
+
+  it('carries an exact current viewer Chat grant only for the matching direct conversation', () => {
+    const grants = new Map([['authorized-chat', 'viewer-chat-grant']]);
+    const messages = discoverVideoMessageVideos(
+      [
+        {
+          id: 'direct-message',
+          ontology: '550e8400-e29b-41d4-a716-446655440004',
+          parsed: {
+            type: 'video',
+            chatId: 'authorized-chat',
+            fileId: fileUri,
+            senderEName: owner,
+          },
+        },
+        {
+          id: 'other-message',
+          ontology: '550e8400-e29b-41d4-a716-446655440004',
+          parsed: {
+            type: 'video',
+            chatId: 'other-chat',
+            fileId: 'w3ds://file?id=@owner.w3id/other-clip',
+            senderEName: owner,
+          },
+        },
+      ],
+      new Set(),
+      viewer,
+      owner,
+      undefined,
+      undefined,
+      grants,
+    );
+
+    expect(messages.find((item) => item.key.startsWith('message:direct-message'))).toMatchObject({
+      sourceChatId: 'authorized-chat',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+    });
+    expect(
+      messages.find((item) => item.key.startsWith('message:other-message')),
+    ).not.toHaveProperty('sourceViewerChatGrantId');
+
+    const calls = discoverCallRecordingVideos({
+      viewerEName: viewer,
+      sourceEName: owner,
+      referenced: new Set(),
+      sourceViewerChatGrantIds: grants,
+      sourceChatKind: 'direct',
+      calls: [
+        {
+          id: 'direct-call-session',
+          ontology: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd',
+          parsed: {
+            participants: [viewer, owner],
+            chatId: 'authorized-chat',
+            recording: { mediaIsVideo: true, mediaUri: fileUri, recordingVault: owner },
+          },
+        },
+      ],
+    });
+    expect(calls[0]).toMatchObject({
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'direct-call-session',
+      sourceCallSessionVault: owner,
+      sourceRecordingVault: owner,
+      sourceChatKind: 'direct',
+    });
+  });
+
   it('uses the canonical target for a shared File reference without leaving it untitled', () => {
     const referenced = new Set<string>();
     expect(
@@ -132,6 +274,40 @@ describe('video space adapters', () => {
       }),
     ]);
     expect(referenced.has('w3ds://file?id=@friend.w3id/canonical-clip')).toBe(false);
+  });
+
+  it('keeps a CallSession on its resolved canonical vault when media lives elsewhere', () => {
+    const calls = discoverCallRecordingVideos({
+      viewerEName: viewer,
+      sourceEName: owner,
+      referenced: new Set(),
+      sourceViewerChatGrantIds: new Map([['authorized-chat', 'viewer-chat-grant']]),
+      sourceChatKind: 'direct',
+      calls: [
+        {
+          id: 'canonical-call-session',
+          ontology: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd',
+          sourceCallSessionVault: '@chat-owner.w3id',
+          parsed: {
+            participants: [viewer, owner],
+            chatId: 'authorized-chat',
+            recording: {
+              mediaIsVideo: true,
+              mediaUri: fileUri,
+              recordingVault: '@recording-media.w3id',
+            },
+          },
+        },
+      ],
+    });
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        sourceCallSessionId: 'canonical-call-session',
+        sourceCallSessionVault: '@chat-owner.w3id',
+        sourceRecordingVault: '@recording-media.w3id',
+      }),
+    ]);
   });
 
   it('never returns a call recording the viewer did not join', () => {
@@ -211,6 +387,75 @@ describe('video space adapters', () => {
     };
 
     expect(dedupeDiscoveredVideos([genericCall, labelledMessage])).toEqual([labelledMessage]);
+  });
+
+  it('keeps a newly discovered direct Chat-grant hint when retaining a richer legacy card', () => {
+    const legacy: DiscoveredVideoRecord = {
+      key: 'message:legacy-clip',
+      fileUris: [fileUri],
+      kind: 'video-message',
+      title: 'Customer interview',
+      accessScope: 'shared',
+      sourceId: 'video-message',
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      accessBasis: 'history',
+    };
+    const rediscovered: DiscoveredVideoRecord = {
+      key: 'call:legacy-clip',
+      fileUris: [fileUri],
+      kind: 'call-recording',
+      title: 'Untitled video',
+      accessScope: 'shared',
+      sourceId: 'call-recording',
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'fresh-viewer-chat-grant',
+      sourceCallSessionId: 'fresh-call-session',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceRecordingVault: '@friend.w3id',
+      sourceChatKind: 'direct',
+      accessBasis: 'history',
+    };
+
+    expect(dedupeDiscoveredVideos([legacy, rediscovered])).toEqual([
+      {
+        ...legacy,
+        sourceViewerChatGrantId: 'fresh-viewer-chat-grant',
+        sourceCallSessionId: 'fresh-call-session',
+        sourceCallSessionVault: '@friend.w3id',
+        sourceRecordingVault: '@friend.w3id',
+        sourceChatKind: 'direct',
+      },
+    ]);
+  });
+
+  it('replaces a retained first-segment CallSession card with its full recording on reindex', () => {
+    const legacy: DiscoveredVideoRecord = {
+      key: 'call:@friend.w3id:call-1',
+      fileUris: ['w3ds://file?id=@friend.w3id/part-1'],
+      kind: 'call-recording',
+      title: 'Call recording',
+      accessScope: 'shared',
+      sourceId: 'call-recording',
+      sourceSpaceKey: '@friend.w3id',
+      sourceChatId: 'chat-1',
+      sourceViewerChatGrantId: 'viewer-chat-grant',
+      sourceCallSessionId: 'call-1',
+      sourceCallSessionVault: '@friend.w3id',
+      sourceChatKind: 'direct',
+      accessBasis: 'history',
+    };
+    const reindexed: DiscoveredVideoRecord = {
+      ...legacy,
+      fileUris: [
+        'w3ds://file?id=@friend.w3id/part-1',
+        'w3ds://file?id=@friend.w3id/part-2',
+        'w3ds://file?id=@friend.w3id/part-3',
+      ],
+    };
+
+    expect(dedupeDiscoveredVideos([legacy, reindexed])).toEqual([reindexed]);
   });
 
   it('ignores non-video blobs so they never become cards', () => {

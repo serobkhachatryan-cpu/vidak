@@ -147,10 +147,30 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
     }
     queue.push(...deferred);
     compact();
-    await mapPool(chosen, chosen.length || 1, process);
+    // A Watch action can reserve a vault after selection but before this wave
+    // actually dispatches. Recheck immediately before each source operation;
+    // put the untouched cursor back so the durable checkpoint can resume it
+    // after the interactive opening has finished.
+    let yieldedForInteractiveGate = false;
+    await mapPool(chosen, chosen.length || 1, async (item) => {
+      const timestamp = now();
+      const gated = options.vaultNotBefore
+        ? await options.vaultNotBefore(options.vaultKey(item), timestamp)
+        : 0;
+      if (gated > timestamp) {
+        item.notBefore = Math.max(
+          item.notBefore ?? 0,
+          Number.isFinite(gated) ? gated : timestamp + maxWaitMs,
+        );
+        queue.push(item);
+        yieldedForInteractiveGate = true;
+        return;
+      }
+      await process(item);
+    });
     compact();
     await options.persist?.(queue);
     waves += 1;
-    if (waves >= maxWaves) return;
+    if (yieldedForInteractiveGate || waves >= maxWaves) return;
   }
 }

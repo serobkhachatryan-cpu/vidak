@@ -13,6 +13,8 @@ import {
 
 export const runtime = 'nodejs';
 
+const maxExactItemIdLength = 8_192;
+
 export async function GET(request: NextRequest) {
   try {
     const accessToken =
@@ -22,7 +24,31 @@ export async function GET(request: NextRequest) {
     const session = await getW3dsAuthService().getSession(accessToken);
     const scope = parseInventoryScope(request.nextUrl.searchParams.get('scope')) ?? 'all';
     const refresh = request.nextUrl.searchParams.get('refresh') === '1';
+    const requestedItemId = request.nextUrl.searchParams.get('itemId');
+
+    if (requestedItemId !== null) {
+      // Watch only needs one viewer-scoped card. The coordinator first checks
+      // its short-lived memory cache, then the owner's exact persisted card;
+      // neither path starts or waits for a source inventory scan. A missing or
+      // stale retained card falls back inside the coordinator to the existing
+      // viewer-authorized snapshot behavior.
+      const item = isSafeExactItemId(requestedItemId)
+        ? await getInventoryCoordinator().getItem(session.user, {
+            itemId: requestedItemId,
+            scope,
+            refresh,
+          })
+        : undefined;
+      return privateJson({
+        items: item ? [item] : [],
+        conversations: [],
+        messages: [],
+        scope,
+      });
+    }
+
     const snapshot = await getInventoryCoordinator().getSnapshot(session.user, { scope, refresh });
+
     const previewService = await loadPreviewService();
 
     const items = await Promise.all(
@@ -32,9 +58,12 @@ export async function GET(request: NextRequest) {
       (item) => item.accessScope === 'personal' && item.streamIds.length > 0,
     );
     if (previewService && personalPreviewItems.length > 0) {
-      // Preview work is deliberately best-effort. It must never delay or hide
-      // the catalogue, and shared references are never fetched until their
-      // source permission can be verified.
+      // Owned previews are local to this service, so repairing them from the
+      // catalogue has no effect on a shared source. Shared posters are queued
+      // only by their viewport-driven image route: starting every remote
+      // source after each library response kept a large catalogue busy enough
+      // to contend with a viewer opening one of its videos. The card route
+      // still creates every shared preview as it becomes visible.
       void previewService
         .scheduleLibraryBackfill(session.user, personalPreviewItems)
         .catch(() => undefined);
@@ -52,6 +81,14 @@ export async function GET(request: NextRequest) {
   } catch (error) {
     return privateJson(errorBody(error), errorStatus(error));
   }
+}
+
+/**
+ * `itemId` is compared as an exact opaque catalogue key. Do not normalize it:
+ * a similar-looking identifier must never select another private library item.
+ */
+function isSafeExactItemId(value: string): boolean {
+  return value.length > 0 && value.length <= maxExactItemIdLength && !value.includes('\u0000');
 }
 
 async function loadPreviewService() {
@@ -72,17 +109,30 @@ async function attachPreviewFields(
   user: { eName: string },
   previewService: Awaited<ReturnType<typeof loadPreviewService>>,
 ) {
-  // Shared playback grants are revalidated by the media route every time they
-  // are used. A still image is a separate source fetch, so never mint or
-  // inspect a preview URL for it here. The card remains playable and uses the
-  // neutral ready-to-watch placeholder until the viewer opens it.
-  if (item.accessScope !== 'personal') {
-    return { ...item, previewState: 'unavailable' as const };
-  }
-
   const streamId = item.streamIds[0];
   if (!streamId) {
     return { ...item, previewState: 'unavailable' as const };
+  }
+
+  if (item.accessScope !== 'personal') {
+    // Reporting cached state only validates the short-lived, viewer-bound
+    // stream token. The preview route separately rechecks live source access
+    // before it returns image bytes, so this cannot turn an old shared grant
+    // into durable poster access.
+    let previewState: VideoPreviewState = 'processing';
+    if (previewService) {
+      try {
+        previewState = await previewService.peekCachedLibraryPreview(user, streamId);
+      } catch {
+        // A preview is an enhancement: a stale stream token must not hide an
+        // otherwise authorized catalogue card.
+      }
+    }
+    return {
+      ...item,
+      previewState,
+      previewUrl: evaultVideoPreviewPath(streamId),
+    };
   }
 
   let previewState: VideoPreviewState = 'processing';

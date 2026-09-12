@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { durableDraftThumbnailUrl, sanitizePublicThumbnailUrl } from './public-video-playback';
+import {
+  durableDraftThumbnailUrl,
+  sanitizePublicThumbnailUrl,
+  versionedPublicThumbnailPath,
+} from './public-video-playback';
 
 describe('public video thumbnail URL resolution', () => {
   const baseVideo = {
@@ -47,5 +51,11 @@ describe('public video thumbnail URL resolution', () => {
     expect(durableDraftThumbnailUrl('draft-1')).toBe('/api/videos/drafts/draft-1/thumbnail');
     expect(durableDraftThumbnailUrl('draft/1')).toBe('/api/videos/drafts/draft%2F1/thumbnail');
     expect(durableDraftThumbnailUrl('draft-1')).not.toMatch(/storageKey|media_/);
+  });
+
+  it('versions a repaired public thumbnail so browsers replace old poster caches', () => {
+    expect(versionedPublicThumbnailPath('pub_1', '2026-09-08T20:16:39.000Z')).toBe(
+      '/api/videos/public/pub_1/thumbnail?v=2026-09-08T20%3A16%3A39.000Z',
+    );
   });
 });

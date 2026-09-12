@@ -47,6 +47,10 @@ RUN if [ "${APP}" = "web" ]; then \
     fi
 
 FROM node:22.16.0-alpine AS runner
+# The long-recording player joins source segments with ffmpeg. Keep the
+# executable in the runtime image (not only a developer machine), otherwise
+# every continuous recording fails after a successful ticket is issued.
+RUN apk add --no-cache ffmpeg
 ENV NODE_ENV=production
 WORKDIR /app
 ARG APP=web

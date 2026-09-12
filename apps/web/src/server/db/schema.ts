@@ -905,6 +905,118 @@ export const videoSpaceVaultGates = pgTable('video_space_vault_gates', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
 });
 
+/**
+ * A server-only pointer into the viewer's own current Chat history.
+ *
+ * This table is deliberately not an access-control list or an authorization
+ * cache. A pointer must be re-read and positively validated against the
+ * source Chat before it can be used for playback. It stores no media URL,
+ * asset bytes, stream grant, or authorization verdict.
+ */
+export type ViewerChatGrantPointerState = 'active' | 'invalid' | 'revoked';
+
+export const viewerChatGrantPointers = pgTable(
+  'viewer_chat_grant_pointers',
+  {
+    viewerEName: text('viewer_e_name').notNull(),
+    sourceEName: text('source_e_name').notNull(),
+    sourceChatId: text('source_chat_id').notNull(),
+    viewerEnvelopeId: text('viewer_envelope_id').notNull(),
+    /** Optional source-provided envelope hash; never a media/content hash. */
+    envelopeHash: text('envelope_hash'),
+    state: text('state').$type<ViewerChatGrantPointerState>().notNull(),
+    /** The most recent positive observation of this pointer, not an auth decision. */
+    observedAt: timestamp('observed_at', { withTimezone: true, mode: 'date' }).notNull(),
+    invalidatedAt: timestamp('invalidated_at', { withTimezone: true, mode: 'date' }),
+    revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'date' }),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    uniqueIndex('viewer_chat_grant_pointers_identity_uidx').on(
+      table.viewerEName,
+      table.sourceEName,
+      table.sourceChatId,
+      table.viewerEnvelopeId,
+    ),
+    index('viewer_chat_grant_pointers_candidates_idx').on(
+      table.viewerEName,
+      table.sourceEName,
+      table.sourceChatId,
+      table.state,
+      table.observedAt,
+    ),
+  ],
+);
+
+/**
+ * Ephemeral, server-only state for joining a multi-file call recording into
+ * one playback stream. This must be durable across application replicas: the
+ * browser can receive its ticket from one replica and its playback GET can be
+ * routed to another. It contains opaque stream grants and an internal-only
+ * segment capability, never a resolved media URL or media bytes.
+ */
+export const recordingConcatTickets = pgTable(
+  'recording_concat_tickets',
+  {
+    id: text('id').primaryKey(),
+    /** Preserve the authenticated spelling used for eVault authorization. */
+    viewerEName: text('viewer_e_name').notNull(),
+    /** Lower-cased only for case-insensitive viewer binding and quota lookup. */
+    viewerENameKey: text('viewer_e_name_key').notNull(),
+    /**
+     * AES-GCM encrypted `{ segmentKey, streamIds, eVaultUri, correlationId }`.
+     * The DB never stores a raw sealed stream grant or inner capability.
+     */
+    encryptedPayload: text('encrypted_payload').notNull(),
+    claimed: boolean('claimed').notNull().default(false),
+    /** Renewable only while the ffmpeg route is alive; releases crash capacity. */
+    activeLeaseExpiresAt: timestamp('active_lease_expires_at', {
+      withTimezone: true,
+      mode: 'date',
+    }),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [
+    index('recording_concat_tickets_expires_idx').on(table.expiresAt),
+    index('recording_concat_tickets_viewer_expires_idx').on(table.viewerENameKey, table.expiresAt),
+  ],
+);
+
+/**
+ * One server-owned row serializes ticket issuance across replicas. A bounded
+ * global limit is a resource-protection control, so a process-local counter
+ * would be bypassable by load-balancer routing.
+ */
+export const recordingConcatTicketLocks = pgTable('recording_concat_ticket_locks', {
+  id: text('id').primaryKey(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+});
+
+/**
+ * A short-lived cross-replica hint for an already authorized shared-video
+ * source. The receipt is reduced to a keyed non-reversible lookup value and
+ * the resolved HTTPS URL stays AES-GCM encrypted. This table is never an
+ * authorization grant: callers must validate the viewer-and-stream-bound
+ * receipt before every read, write, or delete.
+ */
+export const playbackResolutionCache = pgTable(
+  'playback_resolution_cache',
+  {
+    /** HMAC-derived from the opaque signed receipt; the receipt is never stored. */
+    receiptHash: text('receipt_hash').primaryKey(),
+    /** AES-GCM ciphertext only; never a raw media URL or identity. */
+    encryptedPayload: text('encrypted_payload').notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('playback_resolution_cache_expires_idx').on(table.expiresAt)],
+);
+
 export type ChannelImportOAuthStateRow = typeof channelImportOAuthStates.$inferSelect;
 export type VideoSpaceInventoryJobRow = typeof videoSpaceInventoryJobs.$inferSelect;
 export type VideoSpaceInventoryTaskRow = typeof videoSpaceInventoryTasks.$inferSelect;

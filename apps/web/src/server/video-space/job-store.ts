@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { and, eq, isNull, lte, notInArray, or } from 'drizzle-orm';
+import { and, eq, isNull, lte, notInArray, or, sql } from 'drizzle-orm';
 import { getW3dsDatabase, type W3dsDatabase } from '../db/client';
 import {
   type VideoSpaceInventoryJobStatus,
@@ -78,6 +78,11 @@ export interface InventoryJobRecord {
 
 export interface InventoryJobStore {
   getByOwner(ownerEName: string): Promise<InventoryJobRecord | undefined>;
+  /**
+   * Looks up one retained card without hydrating the owner's entire inventory.
+   * The caller still owns all viewer-facing projection and authorization work.
+   */
+  getItemByOwner(ownerEName: string, itemKey: string): Promise<MeshengerVideo | undefined>;
   listRunning(): Promise<InventoryJobRecord[]>;
   createJob(input: {
     ownerEName: string;
@@ -195,6 +200,15 @@ export function createMemoryInventoryJobStore(): InventoryJobStore {
       const job = jobs.get(ownerEName);
       return job ? cloneJob(job) : undefined;
     },
+    async getItemByOwner(ownerEName, itemKey) {
+      const job = jobs.get(ownerEName);
+      // Retained cards from an older catalogue layout may omit source fields
+      // needed by the current player. Treat them as a cache miss so the
+      // coordinator falls back to the normal, viewer-authorized snapshot.
+      if (!job || isStaleCatalogueVersion(job.ledger)) return undefined;
+      const item = job.items.find((candidate) => candidate.id === itemKey);
+      return item ? structuredClone(item) : undefined;
+    },
     async listRunning() {
       return [...jobs.values()]
         .filter((job) => inventoryJobNeedsDrain(job) || isStaleCatalogueVersion(job.ledger))
@@ -274,7 +288,11 @@ export function createMemoryInventoryJobStore(): InventoryJobStore {
       const previous = gates.get(vaultKey);
       gates.set(vaultKey, {
         notBefore: Math.max(previous?.notBefore ?? 0, notBefore),
-        ...(inflightUntil !== undefined ? { inflightUntil } : {}),
+        ...(inflightUntil !== undefined
+          ? { inflightUntil }
+          : previous?.inflightUntil !== undefined
+            ? { inflightUntil: previous.inflightUntil }
+            : {}),
       });
     },
     async clearVaultInflight(vaultKey) {
@@ -421,6 +439,33 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
         extras.messages,
         extras.sourceCounts,
       );
+    },
+    async getItemByOwner(ownerEName, itemKey) {
+      // Start from the authenticated owner's unique job, then use the
+      // existing (job_id, item_key) index. This is intentionally one exact
+      // joined read rather than getByOwner(), which hydrates every retained
+      // card and recreates the large-library Watch latency on a cold worker.
+      const [row] = await db()
+        .select({
+          card: videoSpaceInventoryItems.card,
+          ledger: videoSpaceInventoryJobs.ledger,
+        })
+        .from(videoSpaceInventoryItems)
+        .innerJoin(
+          videoSpaceInventoryJobs,
+          eq(videoSpaceInventoryItems.jobId, videoSpaceInventoryJobs.id),
+        )
+        .where(
+          and(
+            eq(videoSpaceInventoryJobs.ownerEName, ownerEName),
+            eq(videoSpaceInventoryItems.itemKey, itemKey),
+          ),
+        )
+        .limit(1);
+      if (!row || isStaleCatalogueVersion(row.ledger as Record<string, unknown>)) {
+        return undefined;
+      }
+      return exactPersistedItem(row.card, itemKey);
     },
     async listRunning() {
       const rows = await db().select().from(videoSpaceInventoryJobs);
@@ -638,8 +683,17 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
         .onConflictDoUpdate({
           target: videoSpaceVaultGates.vaultKey,
           set: {
-            notBefore: new Date(notBefore),
-            inflightUntil: inflightUntil !== undefined ? new Date(inflightUntil) : null,
+            // A background retry can finish after a Watch action. Never let
+            // that shorter retry delay reopen a source the player just
+            // reserved; the in-memory store uses the same monotonic rule.
+            notBefore: sql`greatest(${videoSpaceVaultGates.notBefore}, excluded.not_before)`,
+            // Callers clear a completed drain explicitly. A foreground
+            // reservation must not accidentally erase another worker's
+            // in-flight ownership while extending its not-before gate.
+            inflightUntil:
+              inflightUntil !== undefined
+                ? new Date(inflightUntil)
+                : sql`coalesce(excluded.inflight_until, ${videoSpaceVaultGates.inflightUntil})`,
             updatedAt: now,
           },
         });
@@ -669,6 +723,27 @@ function sourceCountsFromLedger(ledger: Record<string, unknown>): InventorySourc
   return ledger.sourceCounts && typeof ledger.sourceCounts === 'object'
     ? (ledger.sourceCounts as InventorySourceCounts)
     : emptySourceCounts();
+}
+
+/**
+ * Inventory cards are stored as JSON so an interrupted or manually repaired
+ * checkpoint must not turn a mismatched row into a different Watch target.
+ * Keep this deliberately narrow: the media route still validates every opaque
+ * stream grant before it opens bytes.
+ */
+function exactPersistedItem(value: unknown, itemKey: string): MeshengerVideo | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const item = value as Partial<MeshengerVideo>;
+  if (
+    item.id !== itemKey ||
+    typeof item.title !== 'string' ||
+    (item.accessScope !== 'personal' && item.accessScope !== 'shared') ||
+    !Array.isArray(item.streamIds) ||
+    !item.streamIds.every((streamId) => typeof streamId === 'string')
+  ) {
+    return undefined;
+  }
+  return structuredClone(item) as MeshengerVideo;
 }
 
 let defaultStore: InventoryJobStore | undefined;

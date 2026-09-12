@@ -10,6 +10,7 @@ import {
 } from '../meshenger-video-library';
 import { reportOperationalEvent } from '../ops-observability';
 import { getW3dsAuthService } from '../w3ds-auth';
+import { backgroundWorkDelayMs, beginBackgroundWork } from './background-work-priority';
 import type { InventoryCompleteness } from './completeness';
 import { completeInventory, inventoryJobNeedsDrain } from './completeness';
 import {
@@ -27,7 +28,11 @@ import { mapPool } from './map-pool';
 import { coalesceSharedAccessProbe } from './shared-access-cache';
 
 const cacheTtlMs = 45_000;
-const revalidateConcurrency = 4;
+// Shared source checks are background metadata work. Keep this below the
+// inventory fan-out so they cannot saturate the same small eVault that an
+// interactive Watch request is trying to open, while preserving paired
+// conversation/group fallback checks.
+const revalidateConcurrency = 2;
 const sharedAccessProbeTimeoutMs = 3_000;
 // Listing a private library must not turn every browser refresh into another
 // full round of remote eVault authorization reads. Playback is still checked
@@ -36,9 +41,11 @@ const sharedAccessProbeTimeoutMs = 3_000;
 const sharedAccessCacheTtlMs = 30_000;
 const sharedAccessRetryCacheTtlMs = 5_000;
 const sharedSourceNameTimeoutMs = 750;
-// Keep a durable background pass short. The next pump resumes its exact queue,
-// allowing interactive playback and deployments to preempt deep history scans.
-const backgroundInventoryMaxWaves = 2;
+// Keep a durable background pass very short. The next pump resumes its exact
+// queue, allowing interactive playback and deployments to preempt deep
+// history scans on the same host.
+const backgroundInventoryMaxWaves = 1;
+const backgroundInventoryMaxVaultsPerWave = 2;
 
 export interface InventorySnapshot {
   items: MeshengerVideo[];
@@ -58,6 +65,8 @@ export interface InventoryScanner {
       refresh?: boolean;
       drain?: boolean;
       maxWaves?: number;
+      maxVaultsPerWave?: number;
+      signal?: AbortSignal;
       onSnapshot: (
         library: MeshengerLibrary,
         phase: InventoryScanPhase,
@@ -68,6 +77,8 @@ export interface InventoryScanner {
   probeSharedSpaceAccess(
     user: Pick<AuthUser, 'eName'>,
     space: SharedSpaceProbe,
+    rateLimit?: 'fail-fast' | 'backoff',
+    options?: { signal?: AbortSignal },
   ): Promise<SharedSpaceAccess>;
 }
 
@@ -111,6 +122,7 @@ export function publicLibraryItems(
     const {
       sourceSpaceKey: _space,
       sourceChatId: _chat,
+      sourceViewerChatGrantId: _viewerChatGrant,
       sourceReferenceId: _reference,
       sourceReferenceFileId: _referenceFile,
       accessBasis: _basis,
@@ -155,7 +167,7 @@ export function createInventoryCoordinator(options?: {
   const createScanner = options?.createScanner ?? (() => createMeshengerVideoLibrary());
   const entries = new Map<string, CacheEntry>();
   let scanner: InventoryScanner | undefined;
-  let pumpChain: Promise<void> = Promise.resolve();
+  let activePump: Promise<void> | undefined;
   let pumpFailureReported = false;
 
   function getScanner(): InventoryScanner {
@@ -199,10 +211,18 @@ export function createInventoryCoordinator(options?: {
     };
     if (previous?.snapshot.items.length) entry.resolveFirst();
 
+    // A cache miss only seeds/resumes durable inventory; it is not part of
+    // the Watch request. Let an explicit player opening preempt even this
+    // small foreground checkpoint so its directory read cannot compete with
+    // a source proof on the constrained production worker. The checkpoint is
+    // resumable, and a preempted entry is deliberately eligible to retry on
+    // the next catalogue poll rather than being cached as an empty result.
+    const backgroundWork = beginBackgroundWork();
     const inflight = getScanner()
       .scanLibrary(user, {
         scope,
         drain: false,
+        signal: backgroundWork.signal,
         ...(refresh ? { refresh: true } : {}),
         onSnapshot: (library, phase, counts) => {
           entry.snapshot = mergeLibraries(entry.snapshot, library);
@@ -220,6 +240,14 @@ export function createInventoryCoordinator(options?: {
         entry.snapshot = mergeLibraries(entry.snapshot, library);
         entry.spaces = spacesFromItems(entry.snapshot.items, scope);
         entry.resolveFirst();
+        if (backgroundWork.signal.aborted) {
+          // Do not retain a cancelled, possibly empty cache-miss snapshot for
+          // the normal TTL. Its durable work will be picked up after playback
+          // and the next catalogue request can start a fresh checkpoint.
+          entry.scanning = false;
+          delete entry.completedAt;
+          return;
+        }
         // The foreground request only seeds a durable job. Its promise can
         // settle after one checkpoint while the persisted queue still has
         // hundreds of pages to resume. Read the job state before deciding the
@@ -237,8 +265,12 @@ export function createInventoryCoordinator(options?: {
       })
       .catch(() => {
         entry.scanning = false;
-        entry.completedAt = now();
+        if (backgroundWork.signal.aborted) delete entry.completedAt;
+        else entry.completedAt = now();
         entry.resolveFirst();
+      })
+      .finally(() => {
+        backgroundWork.release();
       })
       .then(() => undefined);
 
@@ -385,19 +417,33 @@ export function createInventoryCoordinator(options?: {
     });
     await mapPool(probes, revalidateConcurrency, async (space) => {
       const key = sharedSpaceProbeKey(space);
+      // A catalogue recheck is resumable. Register it with the same playback
+      // priority coordinator as poster extraction so an explicit Watch can
+      // stop a slow source-authorization read instead of competing with it.
+      // The card remains visible and retries later; the media route performs
+      // its own authoritative source check before it ever opens video bytes.
+      const backgroundWork = beginBackgroundWork(space.eName);
       let access: SharedSpaceAccess;
       try {
-        access = await withTimeout(
-          coalesceSharedAccessProbe(
-            user.eName,
-            space,
-            () => getScanner().probeSharedSpaceAccess(user, space),
-            checkedAt,
-          ),
+        access = await withAbortTimeout(
+          (timeoutSignal) =>
+            coalesceSharedAccessProbe(
+              user.eName,
+              space,
+              () =>
+                getScanner().probeSharedSpaceAccess(user, space, 'fail-fast', {
+                  signal: AbortSignal.any([timeoutSignal, backgroundWork.signal]),
+                }),
+              checkedAt,
+              now,
+              { priority: 'background' },
+            ),
           revalidationTimeoutMs,
         );
       } catch {
         access = { access: 'retry', member: false };
+      } finally {
+        backgroundWork.release();
       }
       accessBySpace.set(key, access);
       entry.sharedAccess.set(key, { value: access, checkedAt });
@@ -415,12 +461,12 @@ export function createInventoryCoordinator(options?: {
     entry.checkingSharedItemIds = new Set(
       [...outcomes].flatMap(([itemId, outcome]) => (outcome === 'retry' ? [itemId] : [])),
     );
-    const items = entry.snapshot.items.filter((item) => {
-      const outcome = outcomes.get(item.id);
-      return outcome === undefined || outcome === 'verified' || outcome === 'retry';
-    });
-    const denied = [...outcomes.values()].filter((outcome) => outcome === 'denied').length;
-    const missing = [...outcomes.values()].filter((outcome) => outcome === 'missing').length;
+    // Discovery is a catalogue concern; a later probe is not allowed to make
+    // cards disappear. The probe can be incomplete or read an older source
+    // mirror even while the viewer's existing, signed grant remains valid.
+    // Playback itself always repeats the authoritative source check before
+    // any video bytes are opened, so keeping the card does not grant access.
+    const items = entry.snapshot.items;
     const unavailable = [...outcomes.values()].filter((outcome) => outcome === 'retry').length;
     if (unavailable > 0 && !entry.sharedRetryReported) {
       reportOperationalEvent({ category: 'video_library', code: 'shared_source_recheck_deferred' });
@@ -430,8 +476,6 @@ export function createInventoryCoordinator(options?: {
     }
     const completeness = {
       ...entry.snapshot.completeness,
-      denied: entry.snapshot.completeness.denied + denied,
-      missing: entry.snapshot.completeness.missing + missing,
       ...(unavailable > 0
         ? {
             complete: false,
@@ -442,18 +486,27 @@ export function createInventoryCoordinator(options?: {
     };
     const next = { ...entry.snapshot, items, completeness };
     entry.snapshot = next;
-    entry.spaces = spacesFromItems(items, 'shared');
+    entry.spaces = spacesFromItems(items, entry.scope);
     pruneSharedAccess(entry);
     return next;
   }
 
   async function pumpOnce(): Promise<void> {
     try {
+      // Durable inventory is resumable. Do not start a new remote scan while
+      // a viewer is opening a video: on the small production host even an
+      // unrelated vault scan consumes the one CPU allocation and its own
+      // source sockets. The next timer tick resumes the persisted queue, so
+      // this postpones no cards permanently and never changes access rules.
+      if (backgroundWorkDelayMs() > 0) return;
       const { getInventoryJobStore } = await import('./job-store');
       const store = getInventoryJobStore();
       await store.recoverStaleLocks(now());
       const running = await store.listRunning();
       for (const job of running) {
+        // A Watch can begin while the lightweight job lookup is in flight.
+        // Recheck before this worker starts a potentially slow eVault page.
+        if (backgroundWorkDelayMs() > 0) return;
         const key = keyFor(job.ownerEName, 'all');
         const previous = entries.get(key);
         let resolveFirst = previous?.resolveFirst ?? (() => undefined);
@@ -483,42 +536,53 @@ export function createInventoryCoordinator(options?: {
           entry.scanning = true;
           entries.set(key, entry);
         }
-        const library = await getScanner().scanLibrary(
-          { eName: job.ownerEName, eVaultUri: job.ownerEVaultUri },
-          {
-            scope: 'all',
-            drain: true,
-            maxWaves: backgroundInventoryMaxWaves,
-            onSnapshot: (library, phase, counts) => {
-              entry.snapshot = mergeLibraries(entry.snapshot, library);
-              entry.sourceCounts = counts;
-              entry.spaces = spacesFromItems(entry.snapshot.items, 'all');
-              if (entry.firstResultAt === undefined) entry.firstResultAt = now();
-              entry.resolveFirst();
-              if (phase === 'done') {
-                entry.scanning = false;
-                entry.completedAt = now();
-              } else {
-                entry.scanning = true;
-              }
+        // One lease covers the whole durable job wave, including its source
+        // reads. A Watch reservation aborts this work immediately; the scanner
+        // checkpoints its untouched cursor and returns a normal batch so the
+        // next pump can resume it without changing cards or access state.
+        const backgroundWork = beginBackgroundWork();
+        try {
+          const library = await getScanner().scanLibrary(
+            { eName: job.ownerEName, eVaultUri: job.ownerEVaultUri },
+            {
+              scope: 'all',
+              drain: true,
+              maxWaves: backgroundInventoryMaxWaves,
+              maxVaultsPerWave: backgroundInventoryMaxVaultsPerWave,
+              signal: backgroundWork.signal,
+              onSnapshot: (library, phase, counts) => {
+                entry.snapshot = mergeLibraries(entry.snapshot, library);
+                entry.sourceCounts = counts;
+                entry.spaces = spacesFromItems(entry.snapshot.items, 'all');
+                if (entry.firstResultAt === undefined) entry.firstResultAt = now();
+                entry.resolveFirst();
+                if (phase === 'done') {
+                  entry.scanning = false;
+                  entry.completedAt = now();
+                } else {
+                  entry.scanning = true;
+                }
+              },
             },
-          },
-        );
-        entry.snapshot = mergeLibraries(entry.snapshot, library);
-        entry.spaces = spacesFromItems(entry.snapshot.items, 'all');
-        entry.resolveFirst();
-        // `maxWaves` deliberately yields long scans. The database—not the
-        // completion of this one worker call—is authoritative for whether
-        // another wave remains. Keeping this true causes only a 15s progress
-        // poll; it does not restart discovery because the process pump resumes
-        // the same checkpointed queue.
-        const current = await store.getByOwner(job.ownerEName);
-        if (current && inventoryJobNeedsDrain(current)) {
-          entry.scanning = true;
-          delete entry.completedAt;
-        } else {
-          entry.scanning = false;
-          entry.completedAt = now();
+          );
+          entry.snapshot = mergeLibraries(entry.snapshot, library);
+          entry.spaces = spacesFromItems(entry.snapshot.items, 'all');
+          entry.resolveFirst();
+          // `maxWaves` deliberately yields long scans. The database—not the
+          // completion of this one worker call—is authoritative for whether
+          // another wave remains. Keeping this true causes only a 15s progress
+          // poll; it does not restart discovery because the process pump resumes
+          // the same checkpointed queue.
+          const current = await store.getByOwner(job.ownerEName);
+          if (current && inventoryJobNeedsDrain(current)) {
+            entry.scanning = true;
+            delete entry.completedAt;
+          } else {
+            entry.scanning = false;
+            entry.completedAt = now();
+          }
+        } finally {
+          backgroundWork.release();
         }
       }
       pumpFailureReported = false;
@@ -535,12 +599,22 @@ export function createInventoryCoordinator(options?: {
   }
 
   function pumpRunning(): Promise<void> {
-    const next = pumpChain.then(pumpOnce, pumpOnce);
-    pumpChain = next.then(
-      () => undefined,
-      () => undefined,
-    );
-    return next;
+    // The timer and library polling can both ask for a drain. Coalesce those
+    // requests instead of queuing waves behind one another: an otherwise
+    // harmless 750 ms timer used to let a slow eVault scan catch up in a
+    // burst, starving an interactive source open.
+    if (activePump) return activePump;
+    let current: Promise<void>;
+    current = pumpOnce()
+      .then(
+        () => undefined,
+        () => undefined,
+      )
+      .finally(() => {
+        if (activePump === current) activePump = undefined;
+      });
+    activePump = current;
+    return current;
   }
 
   async function durableInventoryNeedsDrain(eName: string): Promise<boolean | undefined> {
@@ -555,41 +629,123 @@ export function createInventoryCoordinator(options?: {
     }
   }
 
-  return {
-    async getSnapshot(
-      user: Pick<AuthUser, 'eName' | 'eVaultUri'>,
-      input: { scope: InventoryScope; refresh?: boolean },
-    ): Promise<InventorySnapshot> {
-      const requestStarted = now();
-      const key = keyFor(user.eName, input.scope);
-      let entry = entries.get(key);
+  async function getSnapshot(
+    user: Pick<AuthUser, 'eName' | 'eVaultUri'>,
+    input: { scope: InventoryScope; refresh?: boolean },
+  ): Promise<InventorySnapshot> {
+    const requestStarted = now();
+    const key = keyFor(user.eName, input.scope);
+    let entry = entries.get(key);
 
-      if (input.refresh) {
-        if (entry?.inflight && entry.scanning) {
-          void pumpRunning();
-          return serve(user, entry, requestStarted, 'coalesced');
-        }
-        entry = startScan(user, input.scope, entry, true);
-        void pumpRunning();
-        return serve(user, entry, requestStarted, 'miss');
-      }
-
+    if (input.refresh) {
       if (entry?.inflight && entry.scanning) {
         void pumpRunning();
         return serve(user, entry, requestStarted, 'coalesced');
       }
-
-      if (entry && !entry.scanning && entry.completedAt && now() - entry.completedAt < ttlMs) {
-        // A soft partial snapshot is still useful. Keep it warm for the TTL;
-        // users can explicitly Refresh to resume its persisted job instead of
-        // each browser poll restarting private discovery work.
-        return serve(user, entry, requestStarted, 'hit');
-      }
-
-      entry = startScan(user, input.scope, entry);
+      entry = startScan(user, input.scope, entry, true);
       void pumpRunning();
       return serve(user, entry, requestStarted, 'miss');
-    },
+    }
+
+    if (entry?.inflight && entry.scanning) {
+      void pumpRunning();
+      return serve(user, entry, requestStarted, 'coalesced');
+    }
+
+    if (entry && !entry.scanning && entry.completedAt && now() - entry.completedAt < ttlMs) {
+      // A soft partial snapshot is still useful. Keep it warm for the TTL;
+      // users can explicitly Refresh to resume its persisted job instead of
+      // each browser poll restarting private discovery work.
+      return serve(user, entry, requestStarted, 'hit');
+    }
+
+    entry = startScan(user, input.scope, entry);
+    void pumpRunning();
+    return serve(user, entry, requestStarted, 'miss');
+  }
+
+  function exactEntryIsFresh(entry: CacheEntry): boolean {
+    // A running entry can contain a useful partial snapshot. A completed one
+    // is only reused for the same short window as getSnapshot(), after which
+    // the durable card (or ordinary scan fallback) is authoritative.
+    return entry.scanning || (entry.completedAt !== undefined && now() - entry.completedAt < ttlMs);
+  }
+
+  function itemMatchesScope(item: MeshengerVideo, scope: InventoryScope): boolean {
+    if (scope === 'all') return true;
+    return scope === 'owned' ? item.accessScope === 'personal' : item.accessScope === 'shared';
+  }
+
+  function publicExactItem(item: MeshengerVideo, entry?: CacheEntry): MeshengerVideo | undefined {
+    const publicItem = publicLibraryItems([item], entry?.sharedSourceNames)[0];
+    if (!publicItem) return undefined;
+    if (
+      entry &&
+      (entry.checkingSharedItemIds.has(item.id) ||
+        sharedItemNeedsRevalidation(item, entry, now(), cachedSharedAccessTtlMs))
+    ) {
+      // This does not trigger a revalidation: Watch is interactive and its
+      // media route performs the authoritative source proof. Preserve the
+      // existing catalogue state if a background check was already pending.
+      return { ...publicItem, sourceAccess: 'checking' };
+    }
+    return publicItem;
+  }
+
+  function exactItemFromMemory(
+    user: Pick<AuthUser, 'eName'>,
+    itemId: string,
+    scope: InventoryScope,
+  ): MeshengerVideo | undefined {
+    const scopes: InventoryScope[] = scope === 'all' ? ['all', 'owned', 'shared'] : [scope];
+    for (const candidateScope of scopes) {
+      const entry = entries.get(keyFor(user.eName, candidateScope));
+      if (!entry || !exactEntryIsFresh(entry)) continue;
+      const item = entry.snapshot.items.find(
+        (candidate) => candidate.id === itemId && itemMatchesScope(candidate, scope),
+      );
+      if (!item) continue;
+      return publicExactItem(item, entry);
+    }
+    return undefined;
+  }
+
+  async function getItem(
+    user: Pick<AuthUser, 'eName' | 'eVaultUri'>,
+    input: { itemId: string; scope: InventoryScope; refresh?: boolean },
+  ): Promise<MeshengerVideo | undefined> {
+    // An explicit refresh retains its existing semantics: bypass all retained
+    // cards and rebuild the viewer-authorized inventory snapshot. Ordinary
+    // Watch opens first use a bounded, exact memory/DB lookup and never start
+    // a source scan when a current card already exists.
+    if (!input.refresh) {
+      const inMemory = exactItemFromMemory(user, input.itemId, input.scope);
+      if (inMemory) return inMemory;
+
+      try {
+        const { getInventoryJobStore } = await import('./job-store');
+        const persisted = await getInventoryJobStore().getItemByOwner(user.eName, input.itemId);
+        if (persisted && itemMatchesScope(persisted, input.scope)) {
+          const publicItem = publicExactItem(persisted);
+          if (publicItem) return publicItem;
+        }
+      } catch {
+        // A persistence outage must not make an otherwise valid Watch card
+        // disappear. The normal coordinator path below can still seed or use
+        // an in-memory viewer-authorized snapshot.
+      }
+    }
+
+    const snapshot = await getSnapshot(user, {
+      scope: input.scope,
+      ...(input.refresh === true ? { refresh: true } : {}),
+    });
+    return snapshot.items.find((item) => item.id === input.itemId);
+  }
+
+  return {
+    getSnapshot,
+    getItem,
 
     /** Test helper: current in-memory keys, never tokens. */
     size() {
@@ -599,7 +755,7 @@ export function createInventoryCoordinator(options?: {
     reset() {
       entries.clear();
       scanner = undefined;
-      pumpChain = Promise.resolve();
+      activePump = undefined;
       pumpFailureReported = false;
     },
 
@@ -662,6 +818,37 @@ function withTimeout<T>(value: Promise<T>, timeoutMs: number): Promise<T> {
   });
 }
 
+/**
+ * Catalogue revalidation is deliberately bounded, but an ordinary timeout
+ * only stops awaiting a promise; the source request would continue to occupy
+ * the eVault long after the card had moved on. Abort the underlying probe as
+ * well, so `revalidateConcurrency` also bounds the real remote work.
+ */
+function withAbortTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+): Promise<T> {
+  const controller = new AbortController();
+  return new Promise<T>((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (callback: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      callback();
+    };
+    timer = setTimeout(() => {
+      controller.abort();
+      finish(() => reject(new Error('Timed out.')));
+    }, timeoutMs);
+    void operation(controller.signal).then(
+      (result) => finish(() => resolve(result)),
+      (error: unknown) => finish(() => reject(error)),
+    );
+  });
+}
+
 function spacesFromItems(
   items: readonly MeshengerVideo[],
   scope: InventoryScope,
@@ -669,7 +856,22 @@ function spacesFromItems(
   if (scope !== 'shared' && scope !== 'all') return [];
   const unique = new Map<string, SharedSpaceProbe>();
   for (const item of items) {
-    for (const probe of sharedItemProbes(item)) unique.set(sharedSpaceProbeKey(probe), probe);
+    for (const probe of sharedItemProbes(item)) {
+      const key = sharedSpaceProbeKey(probe);
+      const previous = unique.get(key);
+      // Multiple history cards can share one direct conversation. Keep the
+      // richer current viewer-Chat hint when one card has it; the probe key
+      // intentionally stays owner+chat because both forms prove the same
+      // authorization context.
+      if (
+        !previous ||
+        (probe.kind === 'direct' &&
+          Boolean(probe.viewerChatGrantId) &&
+          (previous.kind !== 'direct' || !previous.viewerChatGrantId))
+      ) {
+        unique.set(key, probe);
+      }
+    }
   }
   return [...unique.values()];
 }
@@ -708,7 +910,14 @@ function sharedItemProbes(item: MeshengerVideo): SharedSpaceProbe[] {
   }
   if (item.accessBasis === 'history' && item.sourceChatId) {
     return [
-      { eName: item.sourceSpaceKey, kind: 'direct', chatId: item.sourceChatId },
+      {
+        eName: item.sourceSpaceKey,
+        kind: 'direct',
+        chatId: item.sourceChatId,
+        ...(item.sourceViewerChatGrantId
+          ? { viewerChatGrantId: item.sourceViewerChatGrantId }
+          : {}),
+      },
       { eName: item.sourceSpaceKey, kind: 'group' },
     ];
   }

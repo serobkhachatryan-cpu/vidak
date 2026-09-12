@@ -1,8 +1,11 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NextRequest } from 'next/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('server-only', () => ({}));
+
 import { GET as liveGet } from '../app/api/health/live/route';
 import { GET as readyGet } from '../app/api/health/ready/route';
 import { authenticationErrorResponse } from './ops-http';
@@ -14,12 +17,17 @@ import {
 } from './ops-observability';
 import {
   checkReadiness,
+  probeFfmpegExecutable,
   REQUIRED_READINESS_TABLES,
   readinessFailureCategory,
   reportReadinessFailure,
 } from './ops-readiness';
 import { redactSensitiveText } from './ops-redaction';
 import { W3dsAuthError } from './w3ds-auth-errors';
+
+const playbackBridgeUrl =
+  'https://meshenger.example/api/integrations/vidak/recording-playback-grant';
+const playbackBridgeSecret = '0123456789abcdef0123456789abcdef';
 
 describe('ops redaction', () => {
   it('redacts cookies, bearer tokens, credentials, and sensitive configuration', () => {
@@ -85,8 +93,14 @@ describe('checkReadiness', () => {
     }
   });
 
-  it('requires the durable Awareness receipt migration before accepting traffic', () => {
-    expect(REQUIRED_READINESS_TABLES).toEqual(['w3ds_platform_users', 'w3ds_awareness_receipts']);
+  it('requires durable ingress and continuous-recording migrations before accepting traffic', () => {
+    expect(REQUIRED_READINESS_TABLES).toEqual([
+      'w3ds_platform_users',
+      'w3ds_awareness_receipts',
+      'recording_concat_tickets',
+      'recording_concat_ticket_locks',
+      'playback_resolution_cache',
+    ]);
   });
 
   it('succeeds for development config with accessible media storage', async () => {
@@ -104,9 +118,106 @@ describe('checkReadiness', () => {
         probeMigrations: async () => {
           throw new Error('migrations must not be probed in AUTH_PROVIDER=dev');
         },
+        probeFfmpeg: async () => undefined,
       },
     );
     expect(result).toEqual({ ready: true });
+  });
+
+  it('requires FFmpeg before accepting traffic', async () => {
+    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
+    const probeFfmpeg = vi.fn(async () => {
+      throw new Error('ffmpeg is not executable');
+    });
+
+    const result = await checkReadiness(
+      {
+        NODE_ENV: 'development',
+        AUTH_PROVIDER: 'dev',
+        MEDIA_STORAGE_ROOT: mediaRoot,
+      },
+      { probeFfmpeg },
+    );
+
+    expect(result.ready).toBe(false);
+    if (result.ready) return;
+    expect(result.failedDependency).toBe('ffmpeg');
+    expect(probeFfmpeg).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when a playback bridge is partial or invalid', async () => {
+    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
+    const probeFfmpeg = vi.fn(async () => undefined);
+    const base = {
+      NODE_ENV: 'development',
+      AUTH_PROVIDER: 'dev',
+      MEDIA_STORAGE_ROOT: mediaRoot,
+    };
+
+    for (const bridgeConfig of [
+      { MESHENGER_PLAYBACK_GRANT_URL: playbackBridgeUrl },
+      {
+        MESHENGER_PLAYBACK_GRANT_URL: 'https://meshenger.example/not-the-playback-bridge',
+        VIDAK_PLAYBACK_BRIDGE_SECRET: playbackBridgeSecret,
+      },
+    ]) {
+      const result = await checkReadiness({ ...base, ...bridgeConfig }, { probeFfmpeg });
+      expect(result.ready).toBe(false);
+      if (result.ready) continue;
+      expect(result.failedDependency).toBe('playback_bridge');
+    }
+    expect(probeFfmpeg).not.toHaveBeenCalled();
+  });
+
+  it('accepts a complete valid playback bridge configuration', async () => {
+    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
+    const probeFfmpeg = vi.fn(async () => undefined);
+    const probePlaybackBridge = vi.fn(async () => undefined);
+
+    const result = await checkReadiness(
+      {
+        NODE_ENV: 'development',
+        AUTH_PROVIDER: 'dev',
+        MEDIA_STORAGE_ROOT: mediaRoot,
+        MESHENGER_PLAYBACK_GRANT_URL: playbackBridgeUrl,
+        VIDAK_PLAYBACK_BRIDGE_SECRET: playbackBridgeSecret,
+      },
+      { probeFfmpeg, probePlaybackBridge },
+    );
+
+    expect(result).toEqual({ ready: true });
+    expect(probeFfmpeg).toHaveBeenCalledOnce();
+    expect(probePlaybackBridge).toHaveBeenCalledWith({
+      endpoint: playbackBridgeUrl,
+      secret: playbackBridgeSecret,
+    });
+  });
+
+  it('fails readiness when the configured source bridge does not authenticate its empty probe', async () => {
+    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
+    const probeFfmpeg = vi.fn(async () => undefined);
+    const bridgeFailure = new Error('source bridge returned 404');
+    const probePlaybackBridge = vi.fn(async () => {
+      throw bridgeFailure;
+    });
+
+    const result = await checkReadiness(
+      {
+        NODE_ENV: 'development',
+        AUTH_PROVIDER: 'dev',
+        MEDIA_STORAGE_ROOT: mediaRoot,
+        MESHENGER_PLAYBACK_GRANT_URL: playbackBridgeUrl,
+        VIDAK_PLAYBACK_BRIDGE_SECRET: playbackBridgeSecret,
+      },
+      { probeFfmpeg, probePlaybackBridge },
+    );
+
+    expect(result).toEqual({
+      ready: false,
+      failedDependency: 'playback_bridge',
+      cause: bridgeFailure,
+    });
+    expect(probeFfmpeg).not.toHaveBeenCalled();
   });
 
   it('fails closed when only part of the AaaS webhook configuration is supplied', async () => {
@@ -153,7 +264,7 @@ describe('checkReadiness', () => {
         W3DS_AAAS_WEBHOOK_SECRET: 'configured-webhook-secret',
         W3DS_AAAS_SIGNATURE_ENCODING: 'hex',
       },
-      { probeDatabase, probeMigrations },
+      { probeDatabase, probeMigrations, probeFfmpeg: async () => undefined },
     );
 
     expect(result).toEqual({ ready: true });
@@ -227,6 +338,8 @@ describe('checkReadiness', () => {
     expect(readinessFailureCategory('database')).toBe('migration_readiness');
     expect(readinessFailureCategory('config')).toBe('authentication');
     expect(readinessFailureCategory('awareness_webhook')).toBe('w3ds_sync');
+    expect(readinessFailureCategory('playback_bridge')).toBe('video_playback');
+    expect(readinessFailureCategory('ffmpeg')).toBe('video_playback');
   });
 
   it('fails when media storage is inaccessible', async () => {
@@ -259,6 +372,27 @@ describe('checkReadiness', () => {
     expect(logs[0]).toContain('"category":"w3ds_sync"');
     expect(logs[0]).not.toContain('tok_live_999');
     expect(logs[0]).not.toContain('user:pass@');
+  });
+});
+
+describe('FFmpeg readiness probe', () => {
+  let executableDir: string | undefined;
+
+  afterEach(async () => {
+    if (executableDir) {
+      await rm(executableDir, { recursive: true, force: true });
+      executableDir = undefined;
+    }
+  });
+
+  it('executes the configured binary and rejects a missing executable', async () => {
+    executableDir = await mkdtemp(join(tmpdir(), 'vidak-ffmpeg-ready-'));
+    const executable = join(executableDir, 'ffmpeg');
+    await writeFile(executable, '#!/bin/sh\nexit 0\n');
+    await chmod(executable, 0o755);
+
+    await expect(probeFfmpegExecutable(executable)).resolves.toBeUndefined();
+    await expect(probeFfmpegExecutable(join(executableDir, 'missing-ffmpeg'))).rejects.toThrow();
   });
 });
 
@@ -338,12 +472,39 @@ describe('health routes', () => {
     }
   });
 
+  it('does not expose incomplete playback-bridge configuration through readiness', async () => {
+    const mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-route-'));
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('AUTH_PROVIDER', 'dev');
+    vi.stubEnv('MEDIA_STORAGE_ROOT', mediaRoot);
+    vi.stubEnv('MESHENGER_PLAYBACK_GRANT_URL', playbackBridgeUrl);
+
+    try {
+      const response = await readyGet(new NextRequest('http://localhost/api/health/ready'));
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: 'not_ready', message: 'Service is not ready.' },
+      });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain('"category":"video_playback"');
+      expect(logs.join('\n')).not.toContain(playbackBridgeUrl);
+    } finally {
+      await rm(mediaRoot, { recursive: true, force: true });
+    }
+  });
+
   it('returns ready when dependency probes succeed', async () => {
     const mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-route-'));
     try {
+      const ffmpeg = join(mediaRoot, 'ffmpeg');
+      await writeFile(ffmpeg, '#!/bin/sh\nexit 0\n');
+      await chmod(ffmpeg, 0o755);
       vi.stubEnv('NODE_ENV', 'development');
       vi.stubEnv('AUTH_PROVIDER', 'dev');
       vi.stubEnv('MEDIA_STORAGE_ROOT', mediaRoot);
+      vi.stubEnv('PATH', mediaRoot);
 
       const response = await readyGet(new NextRequest('http://localhost/api/health/ready'));
       expect(response.status).toBe(200);
@@ -351,6 +512,31 @@ describe('health routes', () => {
       expect(response.headers.get(CORRELATION_HEADER)).toBeTruthy();
     } finally {
       await rm(mediaRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a missing FFmpeg dependency generic to readiness callers', async () => {
+    const mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-route-'));
+    const emptyPath = await mkdtemp(join(tmpdir(), 'vidak-no-ffmpeg-'));
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
+    vi.stubEnv('NODE_ENV', 'development');
+    vi.stubEnv('AUTH_PROVIDER', 'dev');
+    vi.stubEnv('MEDIA_STORAGE_ROOT', mediaRoot);
+    vi.stubEnv('PATH', emptyPath);
+
+    try {
+      const response = await readyGet(new NextRequest('http://localhost/api/health/ready'));
+      expect(response.status).toBe(503);
+      await expect(response.json()).resolves.toEqual({
+        error: { code: 'not_ready', message: 'Service is not ready.' },
+      });
+      expect(logs).toHaveLength(1);
+      expect(logs[0]).toContain('"category":"video_playback"');
+      expect(JSON.stringify(logs)).not.toContain(emptyPath);
+    } finally {
+      await rm(mediaRoot, { recursive: true, force: true });
+      await rm(emptyPath, { recursive: true, force: true });
     }
   });
 });

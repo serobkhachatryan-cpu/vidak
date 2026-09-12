@@ -1,6 +1,6 @@
 'use client';
 
-import { Button, ErrorState, Page, Spinner, Text } from '@w3ds/ui';
+import { Button, ErrorState, Page, Spinner } from '@w3ds/ui';
 import { useRouter } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
@@ -8,17 +8,29 @@ import { useCurrentUser } from '../auth/auth-provider';
 import { videoSpaceLibraryMemory } from '../home/video-space-library-memory';
 import {
   canPlayLibraryVideo,
-  formatSpaceDuration,
   type VideoSpaceLibraryItem,
   videoSpaceVisibilityLabels,
 } from '../home/video-space-model';
-import {
-  elapsedRecordingDuration,
-  recordingPositionAt,
-  recordingTimelineDuration,
-  totalRecordingDuration,
-} from '../meshenger/segmented-playback';
+import { libraryWatchItemLookupPath } from './library-watch-item-lookup';
 import { WatchRecoveryActions } from './watch-recovery-actions';
+
+const playbackSpeeds = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+
+function formatPlaybackSpeed(speed: number) {
+  return `${speed}×`;
+}
+
+function PrivateRecordingQualityIndicator() {
+  return (
+    <div
+      className="flex h-9 items-center gap-2 rounded-md bg-black/80 px-3 font-sans text-xs font-semibold text-white shadow-sm backdrop-blur"
+      data-testid="video-quality-indicator"
+    >
+      <span>Quality</span>
+      <span className="text-white/70">Original</span>
+    </div>
+  );
+}
 
 export function LibraryWatchPage({ itemId }: { itemId: string }) {
   const router = useRouter();
@@ -57,11 +69,12 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
     setStatus('loading');
     void (async () => {
       try {
-        const response = await fetch('/api/evault/videos?scope=all', { cache: 'no-store' });
+        const response = await fetch(libraryWatchItemLookupPath(itemId), { cache: 'no-store' });
         const body = (await response.json()) as { items?: VideoSpaceLibraryItem[] };
         if (!response.ok || !Array.isArray(body.items)) throw new Error();
         if (cancelled) return;
-        if (user?.id) videoSpaceLibraryMemory.set(user.id, body.items);
+        // This is an exact lookup, not a complete library snapshot. Do not
+        // replace the home-page memory catalogue with a one-item response.
         const found = body.items.find((candidate) => candidate.id === itemId);
         if (found) {
           setItem(found);
@@ -158,95 +171,81 @@ function LibraryWatchPlayer({
   onReturnToVideoSpace: () => void;
   onReportPlaybackProblem: () => void;
 }) {
-  const [segmentIndex, setSegmentIndex] = useState(0);
-  const [currentSegmentSeconds, setCurrentSegmentSeconds] = useState(0);
-  const [segmentDurations, setSegmentDurations] = useState<Array<number | undefined>>([]);
   const [playbackError, setPlaybackError] = useState(false);
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
   const [playerLoading, setPlayerLoading] = useState(true);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [muted, setMuted] = useState(false);
-  const continuePlayback = useRef(false);
-  const pendingSegmentSeek = useRef<number | undefined>(undefined);
-  const playerContainer = useRef<HTMLDivElement>(null);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1);
+  const [recordingPlaybackUrl, setRecordingPlaybackUrl] = useState<string | undefined>();
+  const [automaticTicketRetryUsed, setAutomaticTicketRetryUsed] = useState(false);
   const player = useRef<HTMLVideoElement>(null);
-  const streamId = video.streamIds?.[segmentIndex] ?? video.streamIds?.[0];
-  const totalDuration = totalRecordingDuration(video.durationSeconds, segmentDurations);
-  const timelineDuration = recordingTimelineDuration(segmentDurations);
-  const elapsedDuration = elapsedRecordingDuration(
-    segmentIndex,
-    currentSegmentSeconds,
-    segmentDurations,
-  );
+  const reachedCanPlay = useRef(false);
+  const streamIds = video.streamIds ?? [];
+  const streamId = streamIds[0];
+  const isContinuousRecording = streamIds.length > 1;
+  const streamIdsKey = streamIds.join('\u0000');
+  const playbackSource = isContinuousRecording
+    ? recordingPlaybackUrl
+    : streamId
+      ? `/api/evault/videos/${encodeURIComponent(streamId)}?attempt=${playbackAttempt}`
+      : undefined;
 
   useEffect(() => {
-    setSegmentIndex(0);
-    setCurrentSegmentSeconds(0);
-    setSegmentDurations([]);
     setPlaybackError(false);
     setPlaybackAttempt(0);
     setPlayerLoading(true);
-    setIsPlaying(false);
-    setMuted(false);
-    continuePlayback.current = false;
-    pendingSegmentSeek.current = undefined;
+    setPlaybackSpeed(1);
+    setAutomaticTicketRetryUsed(false);
+    setRecordingPlaybackUrl(undefined);
+    reachedCanPlay.current = false;
   }, [video.id]);
 
   useEffect(() => {
     setPlayerLoading(true);
-  }, [streamId, playbackAttempt]);
+    reachedCanPlay.current = false;
+  }, [playbackSource]);
 
   useEffect(() => {
-    const streamIds = video.streamIds ?? [];
-    if (streamIds.length < 2) return;
-
+    if (!isContinuousRecording) {
+      setRecordingPlaybackUrl(undefined);
+      return;
+    }
+    const controller = new AbortController();
     let cancelled = false;
-    const readDuration = (candidateStreamId: string) =>
-      new Promise<number | undefined>((resolve) => {
-        const probe = document.createElement('video');
-        let settled = false;
-        const finish = (duration: number | undefined) => {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timeout);
-          probe.removeAttribute('src');
-          probe.load();
-          resolve(duration);
-        };
-        const timeout = window.setTimeout(() => finish(undefined), 12_000);
-        probe.preload = 'metadata';
-        probe.muted = true;
-        probe.onloadedmetadata = () => {
-          const duration = probe.duration;
-          finish(Number.isFinite(duration) && duration > 0 ? duration : undefined);
-        };
-        probe.onerror = () => finish(undefined);
-        probe.src = `/api/evault/videos/${encodeURIComponent(candidateStreamId)}?metadata=1`;
-      });
-
+    setRecordingPlaybackUrl(undefined);
+    setPlayerLoading(true);
     void (async () => {
-      // Probe one source at a time after the viewer has opened the recording.
-      // This gives the player an exact, recording-level seek map without
-      // competing with interactive playback or downloading media bodies.
-      for (let index = 1; index < streamIds.length; index += 1) {
-        const candidateStreamId = streamIds[index];
-        if (!candidateStreamId) continue;
-        const duration = await readDuration(candidateStreamId);
-        if (cancelled) return;
-        if (duration === undefined) continue;
-        setSegmentDurations((current) => {
-          if (current[index] === duration) return current;
-          const next = [...current];
-          next[index] = duration;
-          return next;
+      try {
+        const response = await fetch('/api/evault/recordings/tickets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ streamIds }),
+          signal: controller.signal,
         });
+        const body = (await response.json().catch(() => undefined)) as
+          | { playbackUrl?: unknown }
+          | undefined;
+        const playbackUrl = body?.playbackUrl;
+        if (
+          !response.ok ||
+          typeof playbackUrl !== 'string' ||
+          !playbackUrl.startsWith('/api/evault/recordings/')
+        ) {
+          throw new Error('Continuous recording ticket is unavailable.');
+        }
+        if (!cancelled) setRecordingPlaybackUrl(playbackUrl);
+      } catch {
+        if (!cancelled && !controller.signal.aborted) {
+          setPlayerLoading(false);
+          setPlaybackError(true);
+        }
       }
     })();
-
     return () => {
       cancelled = true;
+      controller.abort();
     };
-  }, [video.id, video.streamIds]);
+  }, [isContinuousRecording, playbackAttempt, streamIdsKey]);
 
   if (!streamId) {
     return (
@@ -264,43 +263,9 @@ function LibraryWatchPlayer({
     );
   }
 
-  const hasMultipleSources = (video.streamIds?.length ?? 0) > 1;
-  const displayDuration = timelineDuration ?? totalDuration;
-  const playbackPosition = Math.min(elapsedDuration, displayDuration ?? elapsedDuration);
-
-  const togglePlayback = () => {
-    const element = player.current;
-    if (!element) return;
-    if (element.paused) {
-      void element.play().catch(() => setPlaybackError(true));
-      return;
-    }
-    element.pause();
-  };
-
-  const seekRecording = (nextSeconds: number) => {
-    const target = recordingPositionAt(nextSeconds, segmentDurations);
-    if (!target) return;
-    const element = player.current;
-    const shouldContinue = Boolean(element && !element.paused);
-    if (target.segmentIndex === segmentIndex && element) {
-      element.currentTime = target.seconds;
-      setCurrentSegmentSeconds(target.seconds);
-      return;
-    }
-    pendingSegmentSeek.current = target.seconds;
-    continuePlayback.current = shouldContinue;
-    setCurrentSegmentSeconds(target.seconds);
-    setPlayerLoading(true);
-    setSegmentIndex(target.segmentIndex);
-  };
-
-  const toggleFullscreen = () => {
-    if (document.fullscreenElement) {
-      void document.exitFullscreen();
-      return;
-    }
-    void playerContainer.current?.requestFullscreen().catch(() => undefined);
+  const changePlaybackSpeed = (speed: number) => {
+    setPlaybackSpeed(speed);
+    if (player.current) player.current.playbackRate = speed;
   };
 
   return (
@@ -318,6 +283,7 @@ function LibraryWatchPlayer({
               onPrimary={() => {
                 setPlaybackError(false);
                 setPlayerLoading(true);
+                setAutomaticTicketRetryUsed(false);
                 setPlaybackAttempt((attempt) => attempt + 1);
               }}
               secondaryLabel="Back to your video space"
@@ -327,60 +293,79 @@ function LibraryWatchPlayer({
           }
         />
       ) : (
-        <div ref={playerContainer} className="relative bg-black">
-          {/* biome-ignore lint/a11y/useMediaCaption: Historical source recordings do not include caption tracks. */}
+        <div className="relative overflow-hidden rounded-xl bg-black">
+          {/* biome-ignore lint/a11y/useMediaCaption: Source MP4 subtitle streams are preserved by the secure playback join. */}
           <video
-            key={`${streamId}:${playbackAttempt}`}
+            key={`${video.id}:${playbackAttempt}`}
             ref={player}
             aria-label={video.title}
-            className="aspect-video w-full rounded-xl bg-black"
-            controls={!hasMultipleSources}
-            muted={muted}
+            className="aspect-video w-full bg-black"
+            controls
             playsInline
-            preload="metadata"
-            src={`/api/evault/videos/${encodeURIComponent(streamId)}?attempt=${playbackAttempt}`}
+            preload="auto"
+            src={playbackSource}
             onCanPlay={() => {
+              reachedCanPlay.current = true;
               setPlayerLoading(false);
-              const pendingSeek = pendingSegmentSeek.current;
-              if (pendingSeek !== undefined && player.current) {
-                player.current.currentTime = pendingSeek;
-                pendingSegmentSeek.current = undefined;
-              }
-              if (!continuePlayback.current) return;
-              continuePlayback.current = false;
-              void player.current?.play().catch(() => undefined);
             }}
             onError={() => {
+              // A native video element can retry a non-seekable streamed
+              // response while it is still opening. Give a continuous
+              // recording one new opaque ticket before surfacing an error;
+              // once playback has started, do not silently restart it.
+              if (
+                isContinuousRecording &&
+                playbackSource &&
+                !reachedCanPlay.current &&
+                !automaticTicketRetryUsed
+              ) {
+                setAutomaticTicketRetryUsed(true);
+                setPlaybackAttempt((attempt) => attempt + 1);
+                return;
+              }
               setPlayerLoading(false);
               setPlaybackError(true);
             }}
-            onLoadedMetadata={() => {
-              const duration = player.current?.duration;
-              if (typeof duration !== 'number' || !Number.isFinite(duration) || duration < 0)
-                return;
-              setSegmentDurations((current) => {
-                if (current[segmentIndex] === duration) return current;
-                const next = [...current];
-                next[segmentIndex] = duration;
-                return next;
-              });
-            }}
-            onPlay={() => setIsPlaying(true)}
-            onPause={() => setIsPlaying(false)}
-            onTimeUpdate={() => {
-              const position = player.current?.currentTime;
-              if (typeof position === 'number' && Number.isFinite(position) && position >= 0) {
-                setCurrentSegmentSeconds(position);
-              }
-            }}
-            onEnded={() => {
-              if (segmentIndex >= (video.streamIds?.length ?? 1) - 1) return;
-              setCurrentSegmentSeconds(0);
-              setPlayerLoading(true);
-              continuePlayback.current = true;
-              setSegmentIndex((current) => current + 1);
+            onLoadedMetadata={(event) => {
+              event.currentTarget.playbackRate = playbackSpeed;
             }}
           />
+          <div className="absolute top-3 right-3 z-10 flex items-start gap-2">
+            <PrivateRecordingQualityIndicator />
+            <details>
+              <summary
+                aria-label="Playback speed"
+                className="flex h-9 cursor-pointer list-none items-center gap-2 rounded-md bg-black/80 px-3 text-xs font-semibold text-white shadow-sm backdrop-blur hover:bg-black focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white [&::-webkit-details-marker]:hidden"
+              >
+                <span>Speed</span>
+                <span className="text-white/70">{formatPlaybackSpeed(playbackSpeed)}</span>
+              </summary>
+              <div
+                role="menu"
+                className="absolute top-11 right-0 w-40 overflow-hidden rounded-lg bg-zinc-800 py-1 text-sm text-white shadow-xl ring-1 ring-white/15"
+              >
+                <p className="border-b border-white/15 px-4 py-3 text-sm font-semibold">
+                  Playback speed
+                </p>
+                {playbackSpeeds.map((speed) => (
+                  <button
+                    key={speed}
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={speed === playbackSpeed}
+                    onClick={(event) => {
+                      changePlaybackSpeed(speed);
+                      event.currentTarget.closest('details')?.removeAttribute('open');
+                    }}
+                    className="flex w-full items-center justify-between px-4 py-2.5 text-left hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-white"
+                  >
+                    <span>{formatPlaybackSpeed(speed)}</span>
+                    {speed === 1 ? <span className="text-xs text-white/60">Normal</span> : null}
+                  </button>
+                ))}
+              </div>
+            </details>
+          </div>
           {playerLoading ? (
             <div
               className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 rounded-xl bg-black/60 px-4 text-sm text-white"
@@ -393,54 +378,6 @@ function LibraryWatchPlayer({
           ) : null}
         </div>
       )}
-      {hasMultipleSources ? (
-        <div className="space-y-2" aria-label="Recording playback controls">
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              type="button"
-              onClick={togglePlayback}
-            >
-              {isPlaying ? 'Pause' : 'Play'} recording
-            </button>
-            <button
-              className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              type="button"
-              onClick={() => setMuted((current) => !current)}
-            >
-              {muted ? 'Unmute' : 'Mute'}
-            </button>
-            <button
-              className="rounded-md border border-border bg-background px-3 py-1.5 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              type="button"
-              onClick={toggleFullscreen}
-            >
-              Full screen
-            </button>
-            <Text size="sm" tone="muted">
-              {displayDuration !== undefined
-                ? `${formatSpaceDuration(playbackPosition)} / ${formatSpaceDuration(displayDuration)}`
-                : `${formatSpaceDuration(elapsedDuration)} elapsed`}
-            </Text>
-          </div>
-          <input
-            aria-label="Seek within recording"
-            className="h-2 w-full cursor-pointer accent-primary disabled:cursor-not-allowed"
-            disabled={timelineDuration === undefined}
-            max={timelineDuration ?? 0}
-            min={0}
-            step="any"
-            type="range"
-            value={Math.min(playbackPosition, timelineDuration ?? 0)}
-            onChange={(event) => seekRecording(Number(event.target.value))}
-          />
-          <Text size="sm" tone="muted">
-            {timelineDuration !== undefined
-              ? 'One continuous recording. Use the timeline to move anywhere in the call.'
-              : 'One continuous recording. Preparing the full timeline for seeking…'}
-          </Text>
-        </div>
-      ) : null}
     </div>
   );
 }

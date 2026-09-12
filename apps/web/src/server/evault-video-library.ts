@@ -46,4 +46,8 @@ export function createEVaultVideoLibrary(
 }
 
 export type EVaultVideoLibrary = ReturnType<typeof createEVaultVideoLibrary>;
+export type {
+  MediaAuthorizationTimingContext,
+  MediaResolutionTiming,
+} from './meshenger-video-library';
 export type { InventoryDiscovery, InventoryMetrics, InventoryScope } from './video-space/discovery';
