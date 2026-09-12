@@ -32,18 +32,23 @@ RUN if [ "${APP}" = "web" ]; then \
       ln -s "../../../node_modules/.pnpm/$(basename "${pg_target}")/node_modules/pg" "${standalone}/apps/${APP}/node_modules/pg"; \
     fi
 # Railway runs the migration in the standalone runner before the application
-# starts. Compile its TypeScript entrypoint during the image build so that
-# pre-deploy can execute it with Node without shipping the tsx dev tool.
+# starts. Bundle its TypeScript entrypoint into one Node 22 ESM file instead of
+# compiling a bare entrypoint: `tsc` preserves extensionless internal imports
+# and therefore produces a runner that Node cannot execute outside the source
+# tree. Keep pg and drizzle external because the standalone image already
+# provides the locked runtime copies used by the application itself.
 RUN if [ "${APP}" = "web" ]; then \
       set -eux; \
       migration_runtime="apps/${APP}/.next/migration-runtime"; \
-      pnpm exec tsc "apps/${APP}/src/server/db/migrate.ts" \
-        --target ES2022 \
-        --module ESNext \
-        --moduleResolution bundler \
-        --skipLibCheck \
-        --outDir "${migration_runtime}"; \
-      mv "${migration_runtime}/migrate.js" "${migration_runtime}/migrate.mjs"; \
+      pnpm exec esbuild "apps/${APP}/src/server/db/migrate.ts" \
+        --bundle \
+        --platform=node \
+        --format=esm \
+        --target=node22 \
+        --external:pg \
+        --external:drizzle-orm \
+        "--external:drizzle-orm/*" \
+        --outfile="${migration_runtime}/migrate.mjs"; \
     fi
 
 FROM node:22.16.0-alpine AS runner
@@ -61,7 +66,6 @@ COPY --from=builder /app/apps/${APP}/public ./apps/${APP}/public
 # Railway's builder accepts standard COPY stages but not BuildKit's
 # RUN --mount=from=<stage>. These files are needed only by the pre-deploy
 # migration command and remain inside the server-side standalone artifact.
-COPY --from=builder /app/apps/${APP}/src/server/db/migrate.ts ./apps/${APP}/src/server/db/migrate.ts
 COPY --from=builder /app/apps/${APP}/.next/migration-runtime/migrate.mjs ./apps/${APP}/src/server/db/migrate.mjs
 COPY --from=builder /app/apps/${APP}/drizzle ./apps/${APP}/drizzle
 EXPOSE 3000
