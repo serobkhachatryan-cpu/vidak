@@ -4,7 +4,7 @@ import 'server-only';
 import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
 import { and, eq, lte } from 'drizzle-orm';
 
-import { getW3dsDatabase, type W3dsDatabase } from './db/client';
+import { getPlaybackW3dsDatabase, type W3dsDatabase } from './db/client';
 import { playbackResolutionCache } from './db/schema';
 import { parseSafePrivateMediaUpstreamUrl } from './private-media-upstream';
 import {
@@ -324,7 +324,7 @@ export class InMemoryPlaybackResolutionCache implements PlaybackResolutionCache 
 
 /** Production factory: PostgreSQL only, with shared key derivation on every replica. */
 export function createPlaybackResolutionCache(
-  database: W3dsDatabase = getW3dsDatabase(),
+  database: W3dsDatabase = getPlaybackW3dsDatabase(),
   options: PlaybackResolutionCacheOptions = {},
 ): PlaybackResolutionCache {
   return new PostgresPlaybackResolutionCache(database, options);

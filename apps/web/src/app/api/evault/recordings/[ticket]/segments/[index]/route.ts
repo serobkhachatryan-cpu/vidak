@@ -114,9 +114,14 @@ export async function GET(
           );
           if (cachedMediaUrl) {
             // The encrypted handoff is only a very recent source-resolution
-            // result. Recheck the viewer-bound stream before using it; the
-            // receipt and cache binding are verified independently as well.
-            library.inspectBoundStream(segment.viewer, candidateStreamId);
+            // result. inspectBoundStream is metadata-only, so it cannot prove
+            // that a revoked source is still playable. Recheck the viewer's
+            // current source access before opening cached bytes; the receipt
+            // and cache binding are verified independently as well.
+            await library.inspectPlayableStream(segment.viewer, candidateStreamId, {
+              priority: 'interactive',
+              signal: request.signal,
+            });
             usedReceiptBoundResolutionCache = true;
             if (shouldReportInitialSegmentTiming)
               recordMediaResolutionTiming(cachedResolutionTiming());

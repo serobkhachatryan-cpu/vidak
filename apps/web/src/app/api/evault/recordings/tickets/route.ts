@@ -40,7 +40,17 @@ const maxTicketRequestBytes = 1_536 * 1_024;
  * that overlaps the browser navigation but never exposes a media URL or
  * opens any later segment.
  */
-export async function POST(request: NextRequest) {
+/**
+ * Shared implementation for the legacy /recordings/tickets endpoint and the
+ * stream-scoped endpoint used by the current player. The latter can receive
+ * only the first video's Path-isolated authorization receipt, so warming a
+ * different card never makes a continuous recording lose its source-zero
+ * handoff.
+ */
+export async function createRecordingConcatTicket(
+  request: NextRequest,
+  options?: { initialAuthorizationReceipt?: string; expectedFirstStreamId?: string },
+) {
   // This is intentionally server-generated instead of copying arbitrary
   // caller input. It joins the ticket, loopback source, and ffmpeg timings
   // without placing any source identity in a response or log.
@@ -82,6 +92,13 @@ export async function POST(request: NextRequest) {
         400,
       );
     }
+    if (options?.expectedFirstStreamId && firstStreamId !== options.expectedFirstStreamId) {
+      throw new RecordingConcatTicketError(
+        'This recording does not match the requested first source.',
+        'invalid_recording',
+        400,
+      );
+    }
     const firstSegmentValidationStartedAt = performance.now();
     const validFirstStreamId = await validateOrRenewStream(library, session.user, firstStreamId);
     firstSegmentValidationMs = elapsedMs(firstSegmentValidationStartedAt);
@@ -89,6 +106,7 @@ export async function POST(request: NextRequest) {
       request,
       session.user.eName,
       validFirstStreamId,
+      options?.initialAuthorizationReceipt,
     );
     const ticketIssuedStartedAt = performance.now();
     const ticketStreamIds = [validFirstStreamId, ...streamIds.slice(1)];
@@ -127,6 +145,10 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     return errorResponse(error, correlationId);
   }
+}
+
+export async function POST(request: NextRequest) {
+  return createRecordingConcatTicket(request);
 }
 
 /**
@@ -183,8 +205,10 @@ function verifiedInitialAuthorizationReceipt(
   request: NextRequest,
   viewerEName: string,
   streamId: string,
+  receiptOverride?: string,
 ): string | undefined {
-  const receipt = request.cookies.get(sharedVideoAuthorizationReceiptCookieName)?.value;
+  const receipt =
+    receiptOverride ?? request.cookies.get(sharedVideoAuthorizationReceiptCookieName)?.value;
   if (!receipt) return undefined;
   try {
     return verifySharedVideoAuthorizationReceipt({ receipt, viewerEName, streamId })

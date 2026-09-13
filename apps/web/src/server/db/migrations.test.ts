@@ -41,6 +41,7 @@ const requiredTables = [
   'recording_concat_tickets',
   'recording_concat_ticket_locks',
   'playback_resolution_cache',
+  'playback_source_refresh_epochs',
 ] as const;
 
 const requiredIndexes = [
@@ -123,6 +124,7 @@ const requiredIndexes = [
   'recording_concat_tickets_expires_idx',
   'recording_concat_tickets_viewer_expires_idx',
   'playback_resolution_cache_expires_idx',
+  'playback_source_refresh_epochs_expires_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -164,7 +166,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(28);
+    expect(applied.rows).toHaveLength(29);
 
     await client.query(
       `insert into video_preview_assets (
@@ -288,6 +290,26 @@ describe('database migrations (empty database → current set)', () => {
       expect.arrayContaining(['receipt_hash', 'encrypted_payload', 'expires_at']),
     );
     expect(playbackResolutionCacheColumns.rows.map((row) => row.column_name)).not.toEqual(
+      expect.arrayContaining(['viewer_e_name', 'stream_id', 'receipt', 'media_url']),
+    );
+
+    const playbackSourceRefreshEpochColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'playback_source_refresh_epochs'
+       order by 1`,
+    );
+    expect(playbackSourceRefreshEpochColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'binding_hash',
+        'epoch',
+        'status',
+        'lease_hash',
+        'lease_expires_at',
+        'encrypted_payload',
+        'expires_at',
+      ]),
+    );
+    expect(playbackSourceRefreshEpochColumns.rows.map((row) => row.column_name)).not.toEqual(
       expect.arrayContaining(['viewer_e_name', 'stream_id', 'receipt', 'media_url']),
     );
 
@@ -476,6 +498,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(28);
+    expect(Number(applied.rows[0]?.count)).toBe(29);
   });
 });

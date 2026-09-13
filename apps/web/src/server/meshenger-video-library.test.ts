@@ -11,6 +11,7 @@ import {
   resetMeshengerVideoLibraryCachesForTests,
   verifyMeshengerVideoStreamId,
 } from './meshenger-video-library';
+import { mintSharedVideoAuthorizationReceipt } from './shared-video-authorization-receipt';
 import { backgroundWorkDelayMs, beginBackgroundWork } from './video-space/background-work-priority';
 import { VIDEO_SPACE_CATALOGUE_VERSION } from './video-space/catalogue-version';
 import { emptyInventoryCoverage, emptyInventoryMediaCounts } from './video-space/completeness';
@@ -5051,6 +5052,789 @@ describe('Meshenger video library', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('requires a fresh shared proof before a forced recovery can invalidate media caches', async () => {
+    const library = configuredLibrary();
+    const streamId = historySharedStream('revoked-forced-recovery');
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    stubInteractivePlatformToken();
+
+    try {
+      // Seed the ordinary 60-second positive proof cache. A later forced
+      // recovery must not trust this completed result after membership changes.
+      await expect(
+        library.inspectPlayableStream({ eName: '@person.w3id' }, streamId, {
+          priority: 'interactive',
+        }),
+      ).resolves.toEqual({ fileUri: 'w3ds://file?id=@friend.w3id/revoked-forced-recovery' });
+
+      probe.mockReset();
+      probe.mockResolvedValue({ access: 'denied', member: false });
+      const beginForcedSourceRefresh = vi.spyOn(
+        library as unknown as { beginForcedSourceRefresh: () => unknown },
+        'beginForcedSourceRefresh',
+      );
+
+      await expect(
+        library.resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
+          forceSourceRefresh: true,
+        }),
+      ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied', status: 403 }));
+
+      expect(probe).toHaveBeenCalled();
+      expect(beginForcedSourceRefresh).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not join a pre-revocation shared proof when a source recovery starts', async () => {
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/pre-revocation-proof',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+    let completeOlderProof: ((access: SharedAccessResult) => void) | undefined;
+    const olderProof = new Promise<SharedAccessResult>((resolve) => {
+      completeOlderProof = resolve;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockReturnValueOnce(olderProof)
+      .mockResolvedValue({ access: 'denied', member: false });
+    stubInteractivePlatformToken();
+
+    try {
+      const ordinary = library.inspectPlayableStream({ eName: '@person.w3id' }, streamId, {
+        priority: 'interactive',
+      });
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+
+      await expect(
+        library.proveCurrentPlayableStreamForSourceRefresh({ eName: '@person.w3id' }, streamId, {
+          priority: 'interactive',
+        }),
+      ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied', status: 403 }));
+
+      // The forced proof must have its own post-invalidation source read;
+      // reusing the earlier pending positive result would permit a revoked
+      // viewer to clear a healthy source cache.
+      expect(probe).toHaveBeenCalledTimes(2);
+      completeOlderProof?.({ access: 'ok', member: true });
+      await expect(ordinary).resolves.toEqual({
+        fileUri: 'w3ds://file?id=@friend.w3id/pre-revocation-proof',
+      });
+
+      await expect(
+        library.inspectPlayableStream({ eName: '@person.w3id' }, streamId, {
+          priority: 'interactive',
+        }),
+      ).rejects.toThrow(expect.objectContaining({ code: 'authorization_denied', status: 403 }));
+      expect(probe).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not mint a recovery capability when its current proof is invalidated in flight', async () => {
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/in-flight-capability-proof',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+    let finishProof: ((access: SharedAccessResult) => void) | undefined;
+    const pendingProof = new Promise<SharedAccessResult>((resolve) => {
+      finishProof = resolve;
+    });
+    const probe = vi.spyOn(library, 'probeSharedSpaceAccess').mockReturnValue(pendingProof);
+    stubInteractivePlatformToken();
+
+    try {
+      const capability = library.proveCurrentPlayableStreamForSourceRefresh(
+        { eName: '@person.w3id' },
+        streamId,
+        { priority: 'interactive' },
+      );
+      await vi.waitFor(() => expect(probe).toHaveBeenCalledTimes(1));
+
+      // Model another recovery/revocation invalidating this exact source while
+      // the first remote ACL probe is still pending.
+      await library.invalidateMediaUrl({ eName: '@person.w3id' }, streamId);
+      finishProof?.({ access: 'ok', member: true });
+
+      await expect(capability).rejects.toThrow(
+        expect.objectContaining({ code: 'remote_unavailable', status: 503 }),
+      );
+      expect(probe).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('issues a durable-read receipt only after an exact current proof', async () => {
+    const library = configuredLibrary();
+    const streamId = historySharedStream('server-only-ready-handoff');
+    const otherStreamId = historySharedStream('different-ready-handoff');
+    vi.spyOn(library, 'probeSharedSpaceAccess').mockResolvedValue({ access: 'ok', member: true });
+    stubInteractivePlatformToken();
+
+    try {
+      const proof = await library.proveCurrentPlayableStreamForSourceRefresh(
+        { eName: '@person.w3id' },
+        streamId,
+        { priority: 'interactive' },
+      );
+
+      expect(
+        library.playbackSourceRefreshReadReceiptAfterCurrentProof(
+          { eName: '@person.w3id' },
+          streamId,
+          proof,
+        ),
+      ).toEqual(expect.any(String));
+      expect(
+        library.playbackSourceRefreshReadReceiptAfterCurrentProof(
+          { eName: '@person.w3id' },
+          otherStreamId,
+          proof,
+        ),
+      ).toBeUndefined();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses a fresh current proof when a supplied recovery capability was invalidated', async () => {
+    const refreshGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@friend.w3id/fallback-proof-file',
+      accessScope: 'shared' as const,
+      sourceSpaceKey: '@friend.w3id',
+      accessBasis: 'membership' as const,
+    };
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(refreshGrant, secret);
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL) => {
+        if (url.pathname === '/resolve') {
+          return Promise.resolve(
+            json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' }),
+          );
+        }
+        if (url.hostname === 'friend-vault.example' && url.pathname.startsWith('/files/')) {
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/fallback-proof.mp4' },
+            }),
+          );
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    try {
+      const staleProof = await library.proveCurrentPlayableStreamForSourceRefresh(
+        { eName: refreshGrant.eName },
+        streamId,
+        { priority: 'interactive' },
+      );
+      // Model a concurrent invalidation after the route obtained its
+      // capability but before it entered the forced resolver. The resolver
+      // must establish a new proof and validate that proof at completion,
+      // rather than rechecking the stale supplied object and failing late.
+      await library.invalidateMediaUrl({ eName: refreshGrant.eName }, streamId);
+
+      await expect(
+        library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId, {
+          forceSourceRefresh: true,
+          forcedSourceRefreshProof: staleProof,
+        }),
+      ).resolves.toBe('https://media.example/fallback-proof.mp4');
+      expect(probe).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not let a pre-refresh pending resolution overwrite the forced fresh source', async () => {
+    const refreshGrant = {
+      eName: '@generation-test.w3id',
+      fileUri: 'w3ds://file?id=@generation-test.w3id/generation-file',
+      accessScope: 'personal' as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    let fileReads = 0;
+    let releaseStaleSource: (() => void) | undefined;
+    let notifyFirstFileRead: (() => void) | undefined;
+    const firstFileRead = new Promise<void>((resolve) => {
+      notifyFirstFileRead = resolve;
+    });
+    const fetcher = vi.fn((url: URL) => {
+      if (url.pathname === '/resolve') {
+        return Promise.resolve(json({ ename: '@vault.w3id', uri: 'https://vault.example' }));
+      }
+      if (url.pathname.startsWith('/files/')) {
+        fileReads += 1;
+        if (fileReads === 1) {
+          notifyFirstFileRead?.();
+          return new Promise<Response>((resolve) => {
+            releaseStaleSource = () =>
+              resolve(
+                new Response(null, {
+                  status: 302,
+                  headers: { location: 'https://media.example/stale.mp4' },
+                }),
+              );
+          });
+        }
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/fresh.mp4' },
+          }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(refreshGrant, secret);
+    const staleResolution = library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId);
+    await firstFileRead;
+
+    const freshResolution = await library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId, {
+      forceSourceRefresh: true,
+    });
+    releaseStaleSource?.();
+
+    await expect(staleResolution).rejects.toMatchObject({ code: 'remote_unavailable' });
+    expect(freshResolution).toBe('https://media.example/fresh.mp4');
+    await expect(library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId)).resolves.toBe(
+      'https://media.example/fresh.mp4',
+    );
+    expect(fileReads).toBe(2);
+  });
+
+  it('adopts a ready cross-replica source without letting an older local resolver restore S', async () => {
+    const refreshGrant = {
+      eName: '@adopt-generation-test.w3id',
+      fileUri: 'w3ds://file?id=@adopt-generation-test.w3id/adopt-file',
+      accessScope: 'personal' as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    let releaseStaleSource: (() => void) | undefined;
+    let notifyFirstFileRead: (() => void) | undefined;
+    const firstFileRead = new Promise<void>((resolve) => {
+      notifyFirstFileRead = resolve;
+    });
+    let fileReads = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL) => {
+        if (url.pathname === '/resolve') {
+          return Promise.resolve(json({ ename: '@vault.w3id', uri: 'https://vault.example' }));
+        }
+        if (url.pathname.startsWith('/files/')) {
+          fileReads += 1;
+          notifyFirstFileRead?.();
+          return new Promise<Response>((resolve) => {
+            releaseStaleSource = () =>
+              resolve(
+                new Response(null, {
+                  status: 302,
+                  headers: { location: 'https://media.example/stale-adopt.mp4' },
+                }),
+              );
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(refreshGrant, secret);
+    const staleResolution = library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId);
+    await firstFileRead;
+    const proof = await library.proveCurrentPlayableStreamForSourceRefresh(
+      { eName: refreshGrant.eName },
+      streamId,
+    );
+
+    expect(
+      library.adoptReadyPlaybackSourceAfterCurrentProof(
+        { eName: refreshGrant.eName },
+        streamId,
+        proof,
+        'https://media.example/ready-from-other-replica.mp4',
+      ),
+    ).toBe(true);
+    releaseStaleSource?.();
+
+    await expect(staleResolution).rejects.toMatchObject({ code: 'remote_unavailable' });
+    await expect(library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId)).resolves.toBe(
+      'https://media.example/ready-from-other-replica.mp4',
+    );
+    expect(fileReads).toBe(1);
+  });
+
+  it('does not join a pre-refresh pending eVault lookup during a forced source refresh', async () => {
+    const refreshGrant = {
+      eName: '@generation-vault-test.w3id',
+      fileUri: 'w3ds://file?id=@generation-vault-test.w3id/generation-file',
+      accessScope: 'personal' as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    let registryReads = 0;
+    let releaseStaleVault: (() => void) | undefined;
+    let notifyFirstRegistryRead: (() => void) | undefined;
+    const firstRegistryRead = new Promise<void>((resolve) => {
+      notifyFirstRegistryRead = resolve;
+    });
+    const fetcher = vi.fn((url: URL) => {
+      if (url.pathname === '/resolve') {
+        registryReads += 1;
+        if (registryReads === 1) {
+          notifyFirstRegistryRead?.();
+          return new Promise<Response>((resolve) => {
+            releaseStaleVault = () =>
+              resolve(json({ ename: '@vault.w3id', uri: 'https://old-vault.example' }));
+          });
+        }
+        return Promise.resolve(json({ ename: '@vault.w3id', uri: 'https://fresh-vault.example' }));
+      }
+      if (url.hostname === 'old-vault.example' && url.pathname.startsWith('/files/')) {
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/stale-vault.mp4' },
+          }),
+        );
+      }
+      if (url.hostname === 'fresh-vault.example' && url.pathname.startsWith('/files/')) {
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/fresh-vault.mp4' },
+          }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(refreshGrant, secret);
+    const staleResolution = library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId);
+    await firstRegistryRead;
+
+    await expect(
+      library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId, {
+        forceSourceRefresh: true,
+      }),
+    ).resolves.toBe('https://media.example/fresh-vault.mp4');
+    releaseStaleVault?.();
+
+    await expect(staleResolution).rejects.toMatchObject({ code: 'remote_unavailable' });
+    // Resolve a different File so a stale directory write cannot hide behind
+    // the first File's fresh media-URL cache.
+    const secondStreamId = createMeshengerVideoStreamId(
+      { ...refreshGrant, fileUri: 'w3ds://file?id=@generation-vault-test.w3id/second-file' },
+      secret,
+    );
+    await expect(
+      library.resolveMediaUrl({ eName: refreshGrant.eName }, secondStreamId),
+    ).resolves.toBe('https://media.example/fresh-vault.mp4');
+    expect(registryReads).toBe(2);
+  });
+
+  it('lets different forced video recoveries share an eVault without cancelling either result', async () => {
+    const ownerEName = '@person.w3id';
+    const firstGrant = {
+      ...grant,
+      fileUri: `w3ds://file?id=${ownerEName}/first-file`,
+      accessScope: 'personal' as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    const secondGrant = {
+      ...firstGrant,
+      fileUri: `w3ds://file?id=${ownerEName}/second-file`,
+    };
+    let registryReads = 0;
+    let releaseFirstRegistry: (() => void) | undefined;
+    let firstRegistryStarted: (() => void) | undefined;
+    const firstRegistryPending = new Promise<void>((resolve) => {
+      firstRegistryStarted = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL) => {
+        if (url.pathname === '/resolve') {
+          registryReads += 1;
+          if (registryReads === 1) {
+            firstRegistryStarted?.();
+            return new Promise<Response>((resolve) => {
+              releaseFirstRegistry = () =>
+                resolve(json({ ename: ownerEName, uri: 'https://same-owner-vault.example' }));
+            });
+          }
+          return Promise.resolve(
+            json({ ename: ownerEName, uri: 'https://same-owner-vault.example' }),
+          );
+        }
+        if (url.hostname === 'same-owner-vault.example' && url.pathname === '/files/first-file') {
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/first-forced.mp4' },
+            }),
+          );
+        }
+        if (url.hostname === 'same-owner-vault.example' && url.pathname === '/files/second-file') {
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/second-forced.mp4' },
+            }),
+          );
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    const library = configuredLibrary();
+    const firstStream = createMeshengerVideoStreamId(firstGrant, secret);
+    const secondStream = createMeshengerVideoStreamId(secondGrant, secret);
+    try {
+      const first = library.resolveMediaUrl({ eName: firstGrant.eName }, firstStream, {
+        forceSourceRefresh: true,
+      });
+      await firstRegistryPending;
+
+      await expect(
+        library.resolveMediaUrl({ eName: secondGrant.eName }, secondStream, {
+          forceSourceRefresh: true,
+        }),
+      ).resolves.toBe('https://media.example/second-forced.mp4');
+      releaseFirstRegistry?.();
+
+      await expect(first).resolves.toBe('https://media.example/first-forced.mp4');
+      expect(registryReads).toBe(2);
+    } finally {
+      releaseFirstRegistry?.();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('adopts a ready handoff for one video while another video refreshes the same eVault', async () => {
+    const ownerEName = '@person.w3id';
+    const firstGrant = {
+      ...grant,
+      fileUri: `w3ds://file?id=${ownerEName}/adopt-first-file`,
+      accessScope: 'personal' as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    const secondGrant = {
+      ...firstGrant,
+      fileUri: `w3ds://file?id=${ownerEName}/adopt-second-file`,
+    };
+    let registryReads = 0;
+    let firstFileReads = 0;
+    let releaseSecondRegistry: (() => void) | undefined;
+    let secondRegistryStarted: (() => void) | undefined;
+    const secondRegistryPending = new Promise<void>((resolve) => {
+      secondRegistryStarted = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL) => {
+        if (url.pathname === '/resolve') {
+          registryReads += 1;
+          if (registryReads === 2) {
+            secondRegistryStarted?.();
+            return new Promise<Response>((resolve) => {
+              releaseSecondRegistry = () =>
+                resolve(json({ ename: ownerEName, uri: 'https://adopt-owner-vault.example' }));
+            });
+          }
+          return Promise.resolve(
+            json({ ename: ownerEName, uri: 'https://adopt-owner-vault.example' }),
+          );
+        }
+        if (
+          url.hostname === 'adopt-owner-vault.example' &&
+          url.pathname === '/files/adopt-first-file'
+        ) {
+          firstFileReads += 1;
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/adopt-stale.mp4' },
+            }),
+          );
+        }
+        if (
+          url.hostname === 'adopt-owner-vault.example' &&
+          url.pathname === '/files/adopt-second-file'
+        ) {
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/adopt-second.mp4' },
+            }),
+          );
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+
+    const library = configuredLibrary();
+    const firstStream = createMeshengerVideoStreamId(firstGrant, secret);
+    const secondStream = createMeshengerVideoStreamId(secondGrant, secret);
+    try {
+      await expect(library.resolveMediaUrl({ eName: firstGrant.eName }, firstStream)).resolves.toBe(
+        'https://media.example/adopt-stale.mp4',
+      );
+      const proof = await library.proveCurrentPlayableStreamForSourceRefresh(
+        { eName: firstGrant.eName },
+        firstStream,
+      );
+
+      const second = library.resolveMediaUrl({ eName: secondGrant.eName }, secondStream, {
+        forceSourceRefresh: true,
+      });
+      await secondRegistryPending;
+
+      expect(
+        library.adoptReadyPlaybackSourceAfterCurrentProof(
+          { eName: firstGrant.eName },
+          firstStream,
+          proof,
+          'https://media.example/adopt-fresh.mp4',
+        ),
+      ).toBe(true);
+      releaseSecondRegistry?.();
+      await expect(second).resolves.toBe('https://media.example/adopt-second.mp4');
+
+      await expect(library.resolveMediaUrl({ eName: firstGrant.eName }, firstStream)).resolves.toBe(
+        'https://media.example/adopt-fresh.mp4',
+      );
+      expect(firstFileReads).toBe(1);
+    } finally {
+      releaseSecondRegistry?.();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps a receipt-authorized durable handoff after the receipt-local window ends', async () => {
+    const receiptGrant = {
+      ...grant,
+      fileUri: 'w3ds://file?id=@person.w3id/receipt-adopt-file',
+      accessScope: 'personal' as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    let fileReads = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL) => {
+        if (url.pathname === '/resolve') {
+          return Promise.resolve(
+            json({ ename: '@person.w3id', uri: 'https://receipt-vault.example' }),
+          );
+        }
+        if (
+          url.hostname === 'receipt-vault.example' &&
+          url.pathname === '/files/receipt-adopt-file'
+        ) {
+          fileReads += 1;
+          return Promise.resolve(
+            new Response(null, {
+              status: 302,
+              headers: { location: 'https://media.example/receipt-stale.mp4' },
+            }),
+          );
+        }
+        throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+      }),
+    );
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(receiptGrant, secret);
+    const receipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: receiptGrant.eName,
+      streamId,
+      env: { W3DS_AUTH_JWT_SECRET: secret },
+    });
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: receiptGrant.eName }, streamId)).resolves.toBe(
+        'https://media.example/receipt-stale.mp4',
+      );
+      expect(
+        library.adoptReadyPlaybackSourceAfterAuthorizationReceipt(
+          { eName: receiptGrant.eName },
+          streamId,
+          receipt,
+          'https://media.example/receipt-fresh.mp4',
+        ),
+      ).toBe(true);
+
+      await expect(library.resolveMediaUrl({ eName: receiptGrant.eName }, streamId)).resolves.toBe(
+        'https://media.example/receipt-fresh.mp4',
+      );
+      expect(fileReads).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not let normal work that began during a forced refresh warm a stale source', async () => {
+    const refreshGrant = {
+      eName: '@active-refresh-test.w3id',
+      fileUri: 'w3ds://file?id=@active-refresh-test.w3id/active-refresh-file',
+      accessScope: 'personal' as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    let registryReads = 0;
+    let releaseForcedDirectory: (() => void) | undefined;
+    let releaseNormalFile: (() => void) | undefined;
+    let forcedDirectoryStarted: (() => void) | undefined;
+    let normalFileStarted: (() => void) | undefined;
+    const forcedDirectoryPending = new Promise<void>((resolve) => {
+      forcedDirectoryStarted = resolve;
+    });
+    const normalFilePending = new Promise<void>((resolve) => {
+      normalFileStarted = resolve;
+    });
+    const fetcher = vi.fn((url: URL) => {
+      if (url.pathname === '/resolve') {
+        registryReads += 1;
+        if (registryReads === 1) {
+          forcedDirectoryStarted?.();
+          return new Promise<Response>((resolve) => {
+            releaseForcedDirectory = () =>
+              resolve(json({ ename: '@vault.w3id', uri: 'https://fresh-vault.example' }));
+          });
+        }
+        return Promise.resolve(json({ ename: '@vault.w3id', uri: 'https://old-vault.example' }));
+      }
+      if (url.hostname === 'fresh-vault.example' && url.pathname.startsWith('/files/')) {
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/fresh-active.mp4' },
+          }),
+        );
+      }
+      if (url.hostname === 'old-vault.example' && url.pathname.startsWith('/files/')) {
+        normalFileStarted?.();
+        return new Promise<Response>((resolve) => {
+          releaseNormalFile = () =>
+            resolve(
+              new Response(null, {
+                status: 302,
+                headers: { location: 'https://media.example/stale-active.mp4' },
+              }),
+            );
+        });
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(refreshGrant, secret);
+    const forced = library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId, {
+      forceSourceRefresh: true,
+    });
+    await forcedDirectoryPending;
+    const normal = library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId, {
+      priority: 'background',
+    });
+    await normalFilePending;
+    releaseForcedDirectory?.();
+    await expect(forced).resolves.toBe('https://media.example/fresh-active.mp4');
+    releaseNormalFile?.();
+    await expect(normal).rejects.toMatchObject({ code: 'remote_unavailable' });
+    await expect(library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId)).resolves.toBe(
+      'https://media.example/fresh-active.mp4',
+    );
+  });
+
+  it('does not return an older forced source after a newer recovery supersedes it', async () => {
+    const refreshGrant = {
+      eName: '@superseded-refresh-test.w3id',
+      fileUri: 'w3ds://file?id=@superseded-refresh-test.w3id/superseded-refresh-file',
+      accessScope: 'personal' as const,
+      expiresAt: Date.now() + 60_000,
+    };
+    let fileReads = 0;
+    let releaseFirstFile: (() => void) | undefined;
+    let firstFileStarted: (() => void) | undefined;
+    const firstFilePending = new Promise<void>((resolve) => {
+      firstFileStarted = resolve;
+    });
+    const fetcher = vi.fn((url: URL) => {
+      if (url.pathname === '/resolve') {
+        return Promise.resolve(json({ ename: '@vault.w3id', uri: 'https://vault.example' }));
+      }
+      if (url.pathname.startsWith('/files/')) {
+        fileReads += 1;
+        if (fileReads === 1) {
+          firstFileStarted?.();
+          return new Promise<Response>((resolve) => {
+            releaseFirstFile = () =>
+              resolve(
+                new Response(null, {
+                  status: 302,
+                  headers: { location: 'https://media.example/older-forced.mp4' },
+                }),
+              );
+          });
+        }
+        return Promise.resolve(
+          new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/newer-forced.mp4' },
+          }),
+        );
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(refreshGrant, secret);
+    const first = library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId, {
+      forceSourceRefresh: true,
+    });
+    await firstFilePending;
+    await expect(
+      library.resolveMediaUrl({ eName: refreshGrant.eName }, streamId, {
+        forceSourceRefresh: true,
+      }),
+    ).resolves.toBe('https://media.example/newer-forced.mp4');
+    releaseFirstFile?.();
+    await expect(first).rejects.toMatchObject({ code: 'remote_unavailable' });
   });
 
   it('refreshes a cached eVault directory once when its old File location is missing', async () => {

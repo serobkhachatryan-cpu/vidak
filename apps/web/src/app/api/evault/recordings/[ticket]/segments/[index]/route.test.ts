@@ -28,6 +28,7 @@ vi.mock('../../../../../../../server/playback-resolution-cache', () => ({
   deletePlaybackResolutionCache: mocks.deletePlaybackResolutionCache,
 }));
 
+import { EVaultVideoLibraryError } from '../../../../../../../server/evault-video-library';
 import { setOperationalLogSinkForTests } from '../../../../../../../server/ops-observability';
 import { mintSharedVideoAuthorizationReceipt } from '../../../../../../../server/shared-video-authorization-receipt';
 import { GET } from './route';
@@ -305,7 +306,7 @@ describe('lazy recording segment route', () => {
     expect(JSON.stringify(mocks.fetch.mock.calls)).not.toContain(initialAuthorizationReceipt);
   });
 
-  it('uses a receipt-bound cache for source zero only after stream validation', async () => {
+  it('uses a receipt-bound cache for source zero only after current playable-access validation', async () => {
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', '12345678901234567890123456789012');
     const initialAuthorizationReceipt = mintSharedVideoAuthorizationReceipt({
       viewerEName: viewer.eName,
@@ -317,9 +318,9 @@ describe('lazy recording segment route', () => {
       correlationId: 'recording-correlation-7',
       initialAuthorizationReceipt,
     });
-    const inspectBoundStream = vi.fn();
+    const inspectPlayableStream = vi.fn().mockResolvedValue({ fileUri: 'w3ds://file/source-7' });
     const resolveMediaUrl = vi.fn();
-    mocks.createLibrary.mockReturnValue({ inspectBoundStream, resolveMediaUrl });
+    mocks.createLibrary.mockReturnValue({ inspectPlayableStream, resolveMediaUrl });
     mocks.getPlaybackResolutionCache.mockResolvedValue(
       'https://source.example/cached.mp4?source-token=kept-server-side',
     );
@@ -339,9 +340,57 @@ describe('lazy recording segment route', () => {
       viewerEName: viewer.eName,
       streamId: 'source-7',
     });
-    expect(inspectBoundStream).toHaveBeenCalledWith(viewer, 'source-7');
+    expect(inspectPlayableStream).toHaveBeenCalledWith(
+      viewer,
+      'source-7',
+      expect.objectContaining({ priority: 'interactive' }),
+    );
     expect(resolveMediaUrl).not.toHaveBeenCalled();
     expect(JSON.stringify(mocks.fetch.mock.calls)).not.toContain(initialAuthorizationReceipt);
+  });
+
+  it('does not proxy a cached source-zero URL after the viewer loses playable access', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', '12345678901234567890123456789012');
+    const initialAuthorizationReceipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'source-7',
+    });
+    mocks.readSegment.mockReturnValue({
+      viewer,
+      streamId: 'source-7',
+      correlationId: 'recording-correlation-7',
+      initialAuthorizationReceipt,
+    });
+    const inspectPlayableStream = vi
+      .fn()
+      .mockRejectedValue(
+        new EVaultVideoLibraryError(
+          'The viewer no longer has access.',
+          'authorization_denied',
+          403,
+        ),
+      );
+    const resolveMediaUrl = vi.fn();
+    mocks.createLibrary.mockReturnValue({ inspectPlayableStream, resolveMediaUrl });
+    mocks.getPlaybackResolutionCache.mockResolvedValue(
+      'https://source.example/cached.mp4?source-token=kept-server-side',
+    );
+
+    const response = await GET(
+      new NextRequest(
+        'https://vidak.example/api/evault/recordings/opaque-ticket/segments/0?key=internal-secret',
+      ),
+      { params: Promise.resolve({ ticket: 'opaque-ticket', index: '0' }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(inspectPlayableStream).toHaveBeenCalledWith(
+      viewer,
+      'source-7',
+      expect.objectContaining({ priority: 'interactive' }),
+    );
+    expect(resolveMediaUrl).not.toHaveBeenCalled();
+    expect(mocks.fetch).not.toHaveBeenCalled();
   });
 
   it('deletes a rejected source-zero cache entry and retries normal resolution once', async () => {
@@ -356,11 +405,11 @@ describe('lazy recording segment route', () => {
       correlationId: 'recording-correlation-7',
       initialAuthorizationReceipt,
     });
-    const inspectBoundStream = vi.fn();
+    const inspectPlayableStream = vi.fn().mockResolvedValue({ fileUri: 'w3ds://file/source-7' });
     const invalidateMediaUrl = vi.fn();
     const resolveMediaUrl = vi.fn().mockResolvedValue('https://source.example/fresh.mp4');
     mocks.createLibrary.mockReturnValue({
-      inspectBoundStream,
+      inspectPlayableStream,
       invalidateMediaUrl,
       resolveMediaUrl,
     });

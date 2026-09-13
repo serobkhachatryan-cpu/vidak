@@ -66,6 +66,9 @@ export const REQUIRED_READINESS_TABLES = [
   // resolution handoff is durable; otherwise a configured speedup silently
   // regresses back to remote authorization on another replica.
   'playback_resolution_cache',
+  // Explicit stale-source recovery uses this durable epoch fence. Accepting
+  // traffic before it exists would make only shared-video playback fail.
+  'playback_source_refresh_epochs',
 ] as const;
 
 /**

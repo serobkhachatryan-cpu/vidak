@@ -100,6 +100,7 @@ describe('checkReadiness', () => {
       'recording_concat_tickets',
       'recording_concat_ticket_locks',
       'playback_resolution_cache',
+      'playback_source_refresh_epochs',
     ]);
   });
 

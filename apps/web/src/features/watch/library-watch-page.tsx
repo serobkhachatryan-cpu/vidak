@@ -2,7 +2,7 @@
 
 import { Button, ErrorState, Page, Spinner } from '@w3ds/ui';
 import { useRouter } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApplicationShell } from '../../components/application-shell';
 import { useCurrentUser } from '../auth/auth-provider';
 import { videoSpaceLibraryMemory } from '../home/video-space-library-memory';
@@ -12,6 +12,14 @@ import {
   videoSpaceVisibilityLabels,
 } from '../home/video-space-model';
 import { libraryWatchItemLookupPath } from './library-watch-item-lookup';
+import {
+  isCurrentPlaybackGeneration,
+  type PlaybackFailure,
+  playbackFailureForAuthorizationCode,
+  sharedVideoHandoffRetryDelay,
+  shouldAwaitSharedVideoHandoff,
+  singleVideoSourceRecoveryAction,
+} from './watch-playback-recovery';
 import { WatchRecoveryActions } from './watch-recovery-actions';
 
 const playbackSpeeds = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
@@ -171,14 +179,26 @@ function LibraryWatchPlayer({
   onReturnToVideoSpace: () => void;
   onReportPlaybackProblem: () => void;
 }) {
-  const [playbackError, setPlaybackError] = useState(false);
+  const [playbackError, setPlaybackError] = useState<PlaybackFailure | undefined>();
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
+  const [playbackGeneration, setPlaybackGeneration] = useState(0);
   const [playerLoading, setPlayerLoading] = useState(true);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [recordingPlaybackUrl, setRecordingPlaybackUrl] = useState<string | undefined>();
   const [automaticTicketRetryUsed, setAutomaticTicketRetryUsed] = useState(false);
+  const [waitingForSourceHandoff, setWaitingForSourceHandoff] = useState(false);
   const player = useRef<HTMLVideoElement>(null);
   const reachedCanPlay = useRef(false);
+  const automaticSourceRecoveryUsed = useRef(false);
+  const sourceRecoveryController = useRef<AbortController | undefined>(undefined);
+  const sourceHandoffRetryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const sourceHandoffRetryPending = useRef(false);
+  const sourceHandoffRetryAttempt = useRef(0);
+  const currentPlaybackGeneration = useRef(0);
+  // This ref changes only after React commits a new video. An async recovery
+  // from a discarded concurrent render must never be able to decide that it
+  // belongs to the next player instance.
+  const committedVideoId = useRef(video.id);
   const streamIds = video.streamIds ?? [];
   const streamId = streamIds[0];
   const isContinuousRecording = streamIds.length > 1;
@@ -189,15 +209,93 @@ function LibraryWatchPlayer({
       ? `/api/evault/videos/${encodeURIComponent(streamId)}?attempt=${playbackAttempt}`
       : undefined;
 
-  useEffect(() => {
-    setPlaybackError(false);
+  const clearSourceHandoffRetry = useCallback(() => {
+    if (sourceHandoffRetryTimer.current !== undefined) {
+      clearTimeout(sourceHandoffRetryTimer.current);
+      sourceHandoffRetryTimer.current = undefined;
+    }
+    sourceHandoffRetryPending.current = false;
+    sourceHandoffRetryAttempt.current = 0;
+    setWaitingForSourceHandoff(false);
+  }, []);
+
+  const advancePlaybackAttempt = (): void => {
+    const nextGeneration = currentPlaybackGeneration.current + 1;
+    // Advance synchronously before React replaces the keyed media element.
+    // An old element may still dispatch `canplay` or `error` in that gap, but
+    // the event's data generation will no longer match this ref.
+    currentPlaybackGeneration.current = nextGeneration;
+    setPlaybackGeneration(nextGeneration);
+    setPlaybackAttempt((attempt) => attempt + 1);
+  };
+
+  const resetPlaybackAttempt = (): void => {
+    const nextGeneration = currentPlaybackGeneration.current + 1;
+    currentPlaybackGeneration.current = nextGeneration;
+    setPlaybackGeneration(nextGeneration);
     setPlaybackAttempt(0);
+  };
+
+  const isCurrentPlaybackElement = (element: HTMLVideoElement): boolean => {
+    return (
+      element === player.current &&
+      isCurrentPlaybackGeneration({
+        eventGeneration: element.dataset.playbackGeneration,
+        currentGeneration: currentPlaybackGeneration.current,
+      })
+    );
+  };
+
+  const scheduleSourceHandoffRetry = (): 'scheduled' | 'exhausted' => {
+    if (sourceHandoffRetryTimer.current !== undefined) return 'scheduled';
+    const delay = sharedVideoHandoffRetryDelay({
+      isContinuousRecording,
+      reachedCanPlay: reachedCanPlay.current,
+      retryAttempt: sourceHandoffRetryAttempt.current,
+    });
+    if (delay === undefined) {
+      sourceHandoffRetryPending.current = false;
+      setWaitingForSourceHandoff(false);
+      return 'exhausted';
+    }
+    sourceHandoffRetryPending.current = true;
+    sourceHandoffRetryAttempt.current += 1;
+    setWaitingForSourceHandoff(true);
+    sourceHandoffRetryTimer.current = setTimeout(() => {
+      sourceHandoffRetryTimer.current = undefined;
+      if (
+        !sourceHandoffRetryPending.current ||
+        reachedCanPlay.current ||
+        committedVideoId.current !== video.id
+      ) {
+        return;
+      }
+      // This deliberately reloads only the media GET. A different replica
+      // may have just published the durable winner, and it can be adopted
+      // without another forced proof or recovery POST.
+      advancePlaybackAttempt();
+    }, delay);
+    return 'scheduled';
+  };
+
+  useEffect(() => {
+    sourceRecoveryController.current?.abort();
+    sourceRecoveryController.current = undefined;
+    clearSourceHandoffRetry();
+    committedVideoId.current = video.id;
+    automaticSourceRecoveryUsed.current = false;
+    setPlaybackError(undefined);
+    resetPlaybackAttempt();
     setPlayerLoading(true);
     setPlaybackSpeed(1);
     setAutomaticTicketRetryUsed(false);
     setRecordingPlaybackUrl(undefined);
     reachedCanPlay.current = false;
-  }, [video.id]);
+    return () => {
+      sourceRecoveryController.current?.abort();
+      clearSourceHandoffRetry();
+    };
+  }, [clearSourceHandoffRetry, video.id]);
 
   useEffect(() => {
     setPlayerLoading(true);
@@ -209,19 +307,27 @@ function LibraryWatchPlayer({
       setRecordingPlaybackUrl(undefined);
       return;
     }
+    if (!streamId) return;
     const controller = new AbortController();
     let cancelled = false;
     setRecordingPlaybackUrl(undefined);
     setPlayerLoading(true);
     void (async () => {
       try {
-        const response = await fetch('/api/evault/recordings/tickets', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ streamIds }),
-          signal: controller.signal,
-        });
+        // Create the ticket under segment zero's API subtree. Its receipt
+        // cookie is scoped to this exact stream, so a later warmup for another
+        // shared card cannot overwrite the first source's fast handoff before
+        // a long continuous recording starts.
+        const response = await fetch(
+          `/api/evault/videos/${encodeURIComponent(streamId)}/recording-ticket`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ streamIds }),
+            signal: controller.signal,
+          },
+        );
         const body = (await response.json().catch(() => undefined)) as
           | { playbackUrl?: unknown }
           | undefined;
@@ -237,7 +343,7 @@ function LibraryWatchPlayer({
       } catch {
         if (!cancelled && !controller.signal.aborted) {
           setPlayerLoading(false);
-          setPlaybackError(true);
+          setPlaybackError(playbackFailureForAuthorizationCode('remote_unavailable'));
         }
       }
     })();
@@ -245,7 +351,7 @@ function LibraryWatchPlayer({
       cancelled = true;
       controller.abort();
     };
-  }, [isContinuousRecording, playbackAttempt, streamIdsKey]);
+  }, [isContinuousRecording, playbackAttempt, streamId, streamIdsKey]);
 
   if (!streamId) {
     return (
@@ -268,6 +374,73 @@ function LibraryWatchPlayer({
     if (player.current) player.current.playbackRate = speed;
   };
 
+  const retrySingleVideoAfterAuthorizationFailure = (): boolean => {
+    const recoveryAction = singleVideoSourceRecoveryAction({
+      hasStreamId: Boolean(streamId),
+      isContinuousRecording,
+      reachedCanPlay: reachedCanPlay.current,
+      automaticRecoveryUsed: automaticSourceRecoveryUsed.current,
+      recoveryInFlight:
+        Boolean(sourceRecoveryController.current) || sourceHandoffRetryTimer.current !== undefined,
+    });
+    if (recoveryAction === 'skip') return false;
+    // Browsers can emit more than one `error` event for the same failed
+    // resource (for example while cancelling a pending range request). Keep
+    // the first authenticated recovery in charge instead of letting a second
+    // event replace its eventual result with the generic error state.
+    if (recoveryAction === 'wait') return true;
+    if (!streamId) return false;
+    automaticSourceRecoveryUsed.current = true;
+    const controller = new AbortController();
+    sourceRecoveryController.current = controller;
+    const finishSourceRecovery = () => {
+      if (sourceRecoveryController.current === controller) {
+        sourceRecoveryController.current = undefined;
+      }
+    };
+    setPlayerLoading(true);
+    void (async () => {
+      try {
+        const response = await fetch(
+          `/api/evault/videos/${encodeURIComponent(streamId)}/authorize`,
+          {
+            method: 'POST',
+            cache: 'no-store',
+            credentials: 'same-origin',
+            signal: controller.signal,
+          },
+        );
+        const body = (await response.json().catch(() => undefined)) as
+          | { error?: { code?: unknown } }
+          | undefined;
+        if (controller.signal.aborted || committedVideoId.current !== video.id) return;
+        if (!response.ok) {
+          if (
+            shouldAwaitSharedVideoHandoff(body?.error?.code) &&
+            scheduleSourceHandoffRetry() === 'scheduled'
+          ) {
+            return;
+          }
+          setPlayerLoading(false);
+          setPlaybackError(playbackFailureForAuthorizationCode(body?.error?.code));
+          return;
+        }
+        setPlaybackError(undefined);
+        advancePlaybackAttempt();
+      } catch {
+        if (controller.signal.aborted || committedVideoId.current !== video.id) return;
+        setPlayerLoading(false);
+        setPlaybackError(playbackFailureForAuthorizationCode('remote_unavailable'));
+      } finally {
+        // A change of item or an aborted request may take either early return
+        // above. Releasing only this controller keeps a newer recovery intact
+        // while preventing the current player from being stuck as "in flight".
+        finishSourceRecovery();
+      }
+    })();
+    return true;
+  };
+
   return (
     <div className="space-y-4">
       <p className="text-xs font-semibold uppercase tracking-wide text-primary">
@@ -275,16 +448,20 @@ function LibraryWatchPlayer({
       </p>
       {playbackError ? (
         <ErrorState
-          title="Video source is unavailable"
-          description="The source link may have expired. Retry playback once, or report the problem if it continues."
+          title={playbackError.title}
+          description={playbackError.description}
           action={
             <WatchRecoveryActions
               primaryLabel="Retry playback"
               onPrimary={() => {
-                setPlaybackError(false);
+                sourceRecoveryController.current?.abort();
+                sourceRecoveryController.current = undefined;
+                clearSourceHandoffRetry();
+                automaticSourceRecoveryUsed.current = false;
+                setPlaybackError(undefined);
                 setPlayerLoading(true);
                 setAutomaticTicketRetryUsed(false);
-                setPlaybackAttempt((attempt) => attempt + 1);
+                advancePlaybackAttempt();
               }}
               secondaryLabel="Back to your video space"
               onSecondary={onReturnToVideoSpace}
@@ -296,19 +473,23 @@ function LibraryWatchPlayer({
         <div className="relative overflow-hidden rounded-xl bg-black">
           {/* biome-ignore lint/a11y/useMediaCaption: Source MP4 subtitle streams are preserved by the secure playback join. */}
           <video
-            key={`${video.id}:${playbackAttempt}`}
+            key={`${video.id}:${playbackGeneration}`}
             ref={player}
+            data-playback-generation={playbackGeneration}
             aria-label={video.title}
             className="aspect-video w-full bg-black"
             controls
             playsInline
             preload="auto"
             src={playbackSource}
-            onCanPlay={() => {
+            onCanPlay={(event) => {
+              if (!isCurrentPlaybackElement(event.currentTarget)) return;
               reachedCanPlay.current = true;
+              clearSourceHandoffRetry();
               setPlayerLoading(false);
             }}
-            onError={() => {
+            onError={(event) => {
+              if (!isCurrentPlaybackElement(event.currentTarget)) return;
               // A native video element can retry a non-seekable streamed
               // response while it is still opening. Give a continuous
               // recording one new opaque ticket before surfacing an error;
@@ -320,11 +501,22 @@ function LibraryWatchPlayer({
                 !automaticTicketRetryUsed
               ) {
                 setAutomaticTicketRetryUsed(true);
-                setPlaybackAttempt((attempt) => attempt + 1);
+                advancePlaybackAttempt();
                 return;
               }
+              // A recovery POST may lose a race to a healthy resolver on a
+              // different replica. Keep trying only the media GET while its
+              // finite handoff window remains; do not create a second POST
+              // or surface a generic error for the same expected race.
+              if (!isContinuousRecording && sourceHandoffRetryPending.current) {
+                if (scheduleSourceHandoffRetry() === 'scheduled') return;
+                setPlayerLoading(false);
+                setPlaybackError(playbackFailureForAuthorizationCode('remote_unavailable'));
+                return;
+              }
+              if (retrySingleVideoAfterAuthorizationFailure()) return;
               setPlayerLoading(false);
-              setPlaybackError(true);
+              setPlaybackError(playbackFailureForAuthorizationCode(undefined));
             }}
             onLoadedMetadata={(event) => {
               event.currentTarget.playbackRate = playbackSpeed;
@@ -373,7 +565,9 @@ function LibraryWatchPlayer({
               aria-live="polite"
             >
               <Spinner size="sm" aria-hidden="true" />
-              Opening private video…
+              {waitingForSourceHandoff
+                ? 'Waiting for the shared video source…'
+                : 'Opening private video…'}
             </div>
           ) : null}
         </div>

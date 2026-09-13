@@ -34,7 +34,7 @@ import {
   mintSharedVideoAuthorizationReceipt,
   sharedVideoAuthorizationReceiptCookieName,
 } from '../../../../../server/shared-video-authorization-receipt';
-import { POST } from './route';
+import { createRecordingConcatTicket, POST } from './route';
 
 const viewer = { eName: '@viewer.w3id' };
 let operationalLogs: string[] = [];
@@ -214,6 +214,47 @@ describe('continuous recording ticket route', () => {
         hasRecentSharedAuthorizationReceipt: true,
         onTiming: expect.any(Function),
       }),
+    );
+  });
+
+  it('accepts a verified Path-isolated first-source receipt for a continuous recording', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', '12345678901234567890123456789012');
+    const initialAuthorizationReceipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'source-1',
+    });
+    const inspectBoundStream = vi.fn();
+    const authorizePlayableStream = vi.fn().mockResolvedValue('https://private.example/source-1');
+    mocks.createLibrary.mockReturnValue({ inspectBoundStream, authorizePlayableStream });
+
+    const response = await createRecordingConcatTicket(
+      new NextRequest('https://vidak.example/api/evault/videos/source-1/recording-ticket', {
+        method: 'POST',
+        headers: {
+          authorization: 'Bearer access-token',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ streamIds: ['source-1', 'source-2'] }),
+      }),
+      {
+        initialAuthorizationReceipt,
+        expectedFirstStreamId: 'source-1',
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.issueTicket).toHaveBeenCalledWith(
+      viewer,
+      ['source-1', 'source-2'],
+      undefined,
+      expect.any(String),
+      undefined,
+      { initialAuthorizationReceipt },
+    );
+    expect(authorizePlayableStream).toHaveBeenCalledWith(
+      viewer,
+      'source-1',
+      expect.objectContaining({ hasRecentSharedAuthorizationReceipt: true }),
     );
   });
 

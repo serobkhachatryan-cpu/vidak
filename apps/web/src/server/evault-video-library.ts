@@ -47,6 +47,7 @@ export function createEVaultVideoLibrary(
 
 export type EVaultVideoLibrary = ReturnType<typeof createEVaultVideoLibrary>;
 export type {
+  ForcedSourceRefreshProof,
   MediaAuthorizationTimingContext,
   MediaResolutionTiming,
 } from './meshenger-video-library';

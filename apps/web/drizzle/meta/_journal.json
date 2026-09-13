@@ -197,6 +197,13 @@
       "when": 1788643200000,
       "tag": "0027_playback_resolution_cache",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1788729600000,
+      "tag": "0028_playback_source_refresh_epochs",
+      "breakpoints": true
     }
   ]
 }

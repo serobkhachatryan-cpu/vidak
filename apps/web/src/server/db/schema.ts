@@ -1017,6 +1017,29 @@ export const playbackResolutionCache = pgTable(
   (table) => [index('playback_resolution_cache_expires_idx').on(table.expiresAt)],
 );
 
+/**
+ * Cross-replica ordering state for an explicit shared-video source recovery.
+ * The primary key is a server-keyed fingerprint of the exact viewer and
+ * opaque stream grant. It contains no browser-readable identity, receipt, or
+ * media URL. A short `pending` epoch fences stale process-local redirects
+ * until the source refresh publishes a replacement encrypted payload.
+ */
+export const playbackSourceRefreshEpochs = pgTable(
+  'playback_source_refresh_epochs',
+  {
+    bindingHash: text('binding_hash').primaryKey(),
+    epoch: integer('epoch').notNull(),
+    status: text('status').$type<'resolving' | 'ready' | 'unavailable'>().notNull(),
+    leaseHash: text('lease_hash'),
+    leaseExpiresAt: timestamp('lease_expires_at', { withTimezone: true, mode: 'date' }),
+    encryptedPayload: text('encrypted_payload'),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('playback_source_refresh_epochs_expires_idx').on(table.expiresAt)],
+);
+
 export type ChannelImportOAuthStateRow = typeof channelImportOAuthStates.$inferSelect;
 export type VideoSpaceInventoryJobRow = typeof videoSpaceInventoryJobs.$inferSelect;
 export type VideoSpaceInventoryTaskRow = typeof videoSpaceInventoryTasks.$inferSelect;

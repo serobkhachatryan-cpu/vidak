@@ -17,6 +17,10 @@ import {
   requestMeshengerPlaybackGrant,
 } from './meshenger-playback-grant';
 import {
+  mintSharedVideoAuthorizationReceipt,
+  verifySharedVideoAuthorizationReceipt,
+} from './shared-video-authorization-receipt';
+import {
   type DiscoveredVideoRecord,
   discoverCallRecordingVideos,
   discoverFileRecordVideos,
@@ -80,8 +84,8 @@ import {
 import { collectPaginatedEnvelopes } from './video-space/pagination';
 import {
   coalesceSharedAccessProbe,
-  forgetVerifiedSharedAccess,
   hasVerifiedSharedAccess,
+  invalidateVerifiedSharedAccess,
   rememberVerifiedSharedAccess,
 } from './video-space/shared-access-cache';
 import { isGenericVideoSpaceTitle } from './video-space/titles';
@@ -169,6 +173,12 @@ const maxRejectedAttempts = 4;
 const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
 const maxRenewedStreams = 256;
+// Keep recovery generations far longer than the bounded interactive source
+// work (12s request / 8s proof), then prune only entries with no pending work,
+// active owner, or live completed cache. This prevents an old operation from
+// becoming "generation zero" while it can still complete.
+const sourceGenerationRetentionMs = 10 * 60_000;
+const maxTrackedSourceGenerations = maxCachedMediaUrls * 2;
 // A cold Watch action may collide with the single resumable preview worker.
 // Give the explicitly requested video a very short global head start; the
 // longer reservation below remains eVault-scoped so it never pauses unrelated
@@ -321,6 +331,32 @@ interface Config {
 interface CachedMediaUrl {
   url: string;
   expiresAt: number;
+  /** Logical source generation; stale in-flight work may not repopulate it. */
+  generation: number;
+}
+interface CacheGenerationState {
+  generation: number;
+  /** Bumps only for a forced recovery, not ordinary invalidation. */
+  refreshEpoch: number;
+  lastAdvancedAt: number;
+}
+interface CacheWriteContext {
+  key: string;
+  generation: number;
+  refreshEpoch: number;
+  /** Defined only for the force operation that owns this refresh epoch. */
+  forceOwnerId?: number;
+  /** A normal request that started under a force can never warm this cache. */
+  canWrite: boolean;
+}
+interface ActiveForcedRefresh {
+  id: number;
+  generation: number;
+  refreshEpoch: number;
+}
+interface ForcedSourceRefreshContext {
+  media: CacheWriteContext;
+  eVault: CacheWriteContext;
 }
 interface FastSharedCallPlayback {
   url: string;
@@ -359,6 +395,17 @@ type SourceReadPolicy =
   | 'inventory-cancellable';
 type ViewerIdentity = Pick<AuthUser, 'eName'> & Partial<Pick<AuthUser, 'eVaultUri'>>;
 export type MediaResolutionPriority = 'background' | 'warmup' | 'interactive';
+
+declare const forcedSourceRefreshProofBrand: unique symbol;
+
+/**
+ * An opaque, short-lived server-only capability produced immediately after a
+ * fresh shared-source proof. It lets the recovery route carry that proof past
+ * its durable lease claim without trusting a browser-supplied flag.
+ */
+export interface ForcedSourceRefreshProof {
+  readonly [forcedSourceRefreshProofBrand]: true;
+}
 
 /**
  * Both an explicit Watch and its cancellable hover warmup are foreground
@@ -409,6 +456,19 @@ export interface MediaResolutionOptions {
    * Never accept this from browser input directly.
    */
   hasRecentSharedAuthorizationReceipt?: boolean;
+  /**
+   * Server-only recovery after a private upstream rejected a previously
+   * resolved source. This advances the source generation before resolving,
+   * so a pre-refresh cache entry or pending resolution cannot be reused.
+   * Never map browser-controlled query input directly to this option.
+   */
+  forceSourceRefresh?: boolean;
+  /**
+   * Server-only capability returned by proveCurrentPlayableStreamForSourceRefresh.
+   * The library validates its exact viewer/stream binding before it can skip
+   * the duplicate forced-access proof. Never map browser input to this field.
+   */
+  forcedSourceRefreshProof?: ForcedSourceRefreshProof;
   /** Server-only, fixed-schema latency observation for the initial player open. */
   onTiming?: (timing: MediaResolutionTiming) => void;
   /** Server-only, fixed source-proof context with no identifying values. */
@@ -471,6 +531,8 @@ interface ResolvedVault {
 interface CachedEVaultResolution {
   vault: ResolvedVault;
   expiresAt: number;
+  /** Prevent an older directory request from replacing a forced refresh. */
+  generation: number;
 }
 
 interface ResolvedEVaultLookup {
@@ -628,6 +690,12 @@ const readQuery = `query MeshengerVideoEnvelope($id: ID!) { metaEnvelope(id: $id
 const cachedMediaUrls = new Map<string, CachedMediaUrl>();
 /** Source-issued grants are already exact, short-lived shared-access proofs. */
 const cachedMeshengerPlaybackGrantUrls = new Map<string, CachedMediaUrl>();
+// A source refresh must invalidate not only completed cache entries but also
+// a resolution which was already in flight when the upstream rejection was
+// observed. Keep a logical generation per complete authorization context;
+// every writer compares its captured generation before it can cache a URL.
+const mediaSourceCacheGenerations = new Map<string, CacheGenerationState>();
+const activeForcedMediaSourceRefreshes = new Map<string, ActiveForcedRefresh>();
 const pendingMeshengerPlaybackGrantResolutions = new Map<
   string,
   Promise<MeshengerPlaybackGrantResult>
@@ -645,6 +713,8 @@ const maxInteractiveVaultGates = 256;
 const pendingMediaUrlResolutions = new Map<string, PendingMediaUrlResolution>();
 const directFileFallbackPreferred = new Map<string, number>();
 const cachedEVaultResolutions = new Map<string, CachedEVaultResolution>();
+const eVaultResolutionCacheGenerations = new Map<string, CacheGenerationState>();
+const activeForcedEVaultRefreshes = new Map<string, ActiveForcedRefresh>();
 const pendingEVaultResolutions = new Map<string, Promise<ResolvedVault>>();
 const cachedPlatformTokens = new Map<string, { token: string; expiresAt: number }>();
 const pendingPlatformTokens = new Map<string, Promise<string>>();
@@ -654,11 +724,28 @@ const pendingPlatformTokens = new Map<string, Promise<string>>();
 const pendingPlatformTokenControllers = new Map<string, AbortController>();
 const platformTokenCacheTtlMs = 5 * 60_000;
 const maxCachedPlatformTokens = 16;
+// A proof must survive the bounded durable claim and the active 30-second
+// recovery lease. Its live shared-access revision is rechecked on every use,
+// so this server-only lifetime is a transport budget, not an access window.
+const forcedSourceRefreshProofTtlMs = 35_000;
+const forcedSourceRefreshProofs = new WeakMap<
+  ForcedSourceRefreshProof,
+  {
+    viewerEName: string;
+    streamId: string;
+    expiresAt: number;
+    /** Never sent to a browser; consumed only by the media route's bounded DB reader. */
+    sourceRefreshReadReceipt: string;
+    /** A current shared proof must remain current while this capability is used. */
+    sharedSources: SharedSpaceProbe[];
+  }
+>();
 // Native media elements retain their original `src` while issuing subsequent
 // Range requests. Retain the renewed opaque grant server-side so one expired
 // URL does not mint a fresh grant per range. Every request still calls
 // resolveMediaUrl and rechecks current source authorization.
 const renewedStreams = new Map<string, RenewedStream>();
+let nextForcedRefreshOwnerId = 1;
 
 class MediaResolutionAbortedError extends Error {
   constructor() {
@@ -691,6 +778,26 @@ function createMediaResolutionTiming(): MediaResolutionTiming {
     platformTokenMs: 0,
     metadataReadMs: 0,
   };
+}
+
+function hasForcedSourceRefreshProof(
+  proof: ForcedSourceRefreshProof | undefined,
+  viewerEName: string,
+  streamId: string,
+): boolean {
+  if (!proof) return false;
+  const binding = forcedSourceRefreshProofs.get(proof);
+  if (!binding || binding.expiresAt <= Date.now()) return false;
+  if (binding.viewerEName !== viewerEName || binding.streamId !== streamId) return false;
+  // A prior in-flight positive probe is not enough after another recovery
+  // invalidated the source evidence. `coalesceSharedAccessProbe` refuses to
+  // warm this cache from an obsolete revision, so a missing current positive
+  // entry fails this capability closed without another browser-controlled
+  // authorization path.
+  return (
+    binding.sharedSources.length === 0 ||
+    binding.sharedSources.some((source) => hasVerifiedSharedAccess(viewerEName, source))
+  );
 }
 
 async function measureMediaResolutionPhase<T>(
@@ -2046,6 +2153,8 @@ export class MeshengerVideoLibrary {
   private async resolveFastSharedCallPlayback(
     grant: StreamGrant,
     cacheKey: string,
+    sourceGeneration: number,
+    cacheWriteContext: CacheWriteContext,
     priority: MediaResolutionPriority,
     signal?: AbortSignal,
   ): Promise<FastSharedCallPlayback | undefined> {
@@ -2066,12 +2175,13 @@ export class MeshengerVideoLibrary {
     }
 
     const cached = cachedMeshengerPlaybackGrantUrls.get(cacheKey);
-    if (cached && cached.expiresAt > this.now()) {
+    if (cached && cached.generation === sourceGeneration && cached.expiresAt > this.now()) {
       return { url: cached.url, cacheHit: true };
     }
     if (cached) cachedMeshengerPlaybackGrantUrls.delete(cacheKey);
 
-    const pending = pendingMeshengerPlaybackGrantResolutions.get(cacheKey);
+    const pendingKey = mediaSourceResolutionKey(cacheKey, sourceGeneration);
+    const pending = pendingMeshengerPlaybackGrantResolutions.get(pendingKey);
     const resolution =
       pending ??
       requestMeshengerPlaybackGrant({
@@ -2087,9 +2197,9 @@ export class MeshengerVideoLibrary {
         ...(signal ? { signal } : {}),
         now: this.now,
       }).finally(() => {
-        pendingMeshengerPlaybackGrantResolutions.delete(cacheKey);
+        pendingMeshengerPlaybackGrantResolutions.delete(pendingKey);
       });
-    if (!pending) pendingMeshengerPlaybackGrantResolutions.set(cacheKey, resolution);
+    if (!pending) pendingMeshengerPlaybackGrantResolutions.set(pendingKey, resolution);
 
     const result = await awaitMediaResolution(resolution, signal);
     if (result.kind === 'granted') {
@@ -2097,6 +2207,8 @@ export class MeshengerVideoLibrary {
         cacheKey,
         result.mediaUrl,
         Math.min(grant.expiresAt, result.expiresAt),
+        sourceGeneration,
+        cacheWriteContext,
       );
       return { url: result.mediaUrl, cacheHit: false };
     }
@@ -2123,232 +2235,319 @@ export class MeshengerVideoLibrary {
     options?: MediaResolutionOptions,
   ): Promise<string> {
     throwIfMediaResolutionAborted(options?.signal);
-    const { grant, file } = this.requireBoundPlayableStreamGrant(user, streamId);
-    const cacheKey = mediaUrlCacheKey(grant);
-    const priority = options?.priority ?? 'interactive';
-    const hasRecentSharedAuthorizationReceipt =
-      grant.accessScope === 'shared' && options?.hasRecentSharedAuthorizationReceipt === true;
-    reportMediaAuthorizationContext(options, mediaAuthorizationTimingContext(grant, priority));
-    const interactive = priority === 'interactive';
-    const sourceReadPolicy: SourceReadPolicy =
-      priority === 'interactive'
-        ? 'interactive'
-        : priority === 'warmup'
-          ? 'warmup-cancellable'
-          : options?.signal
-            ? 'background-cancellable'
-            : 'backoff';
-    const sharedProbeOptions = {
-      priority:
-        priority === 'interactive'
-          ? ('interactive' as const)
-          : priority === 'warmup'
-            ? ('warmup' as const)
-            : ('background' as const),
-      ...(options?.signal ? { signal: options.signal } : {}),
-    };
-    const timing = createMediaResolutionTiming();
-    // Route-level diagnostics must retain the completed phases when a source
-    // read rejects. The observer is safe and fixed-schema, while the caller
-    // still receives the original authorization/source error unchanged.
-    const reportTimingOnFailure = async <T>(
-      operation: Promise<T>,
-      observedTiming: MediaResolutionTiming = timing,
-    ): Promise<T> => {
-      try {
-        return await operation;
-      } catch (error) {
-        reportMediaResolutionTiming(options, observedTiming);
-        throw error;
+    const bound = this.requireBoundPlayableStreamGrant(user, streamId);
+    const { grant, file } = bound;
+    // A forced source refresh invalidates cached private media before the
+    // normal resolver starts. Require a newly observed shared-source proof
+    // first, rather than accepting the ordinary 60-second positive proof
+    // cache, so a viewer whose membership was just revoked cannot churn an
+    // owner's media caches through recovery requests. A recovery POST can
+    // provide the opaque capability it obtained before claiming its durable
+    // lease; plain media GETs never can and therefore always prove here.
+    let preservesCurrentSharedAccessProof = false;
+    // A caller-provided capability is valid only at the instant it is
+    // checked. If it has expired or was invalidated before this resolver
+    // begins, we deliberately obtain a new current proof below. Keep track of
+    // which proof path won so the final post-I/O fence does not keep checking
+    // the stale capability after the fresh proof has succeeded.
+    let usesSuppliedForcedSourceRefreshProof = false;
+    if (options?.forceSourceRefresh && grant.accessScope === 'shared') {
+      if (hasForcedSourceRefreshProof(options.forcedSourceRefreshProof, user.eName, streamId)) {
+        preservesCurrentSharedAccessProof = true;
+        usesSuppliedForcedSourceRefreshProof = true;
+      } else {
+        this.invalidateSharedAccessProofs(user.eName, grant);
+        await this.requirePlayableStreamGrant(user, streamId, {
+          priority: options.priority ?? 'interactive',
+          ...(options.signal ? { signal: options.signal } : {}),
+          forceCurrentSharedAccessProof: true,
+        });
+        preservesCurrentSharedAccessProof = true;
       }
-    };
-    // For canonical shared call recordings, the source bridge can validate the
-    // exact viewer Chat / source Chat / CallSession / File relationship and
-    // issue the private URL in one source-local request. Try it *before* the
-    // Vidak-side exact proof so the configured fast path is actually the
-    // default on a cold Watch, not merely a fallback after several remote
-    // reads have already completed. A bridge miss still falls through to the
-    // existing verifier below; it never becomes authorization by itself.
-    const fastSharedCallPlayback =
-      grant.accessScope === 'shared' && !hasRecentSharedAuthorizationReceipt
-        ? await reportTimingOnFailure(
-            measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
-              this.resolveFastSharedCallPlayback(grant, cacheKey, priority, options?.signal),
-            ),
-          )
-        : undefined;
-    if (fastSharedCallPlayback) {
-      timing.mediaUrlCacheHit = fastSharedCallPlayback.cacheHit;
-      reportMediaResolutionTiming(options, timing);
-      return fastSharedCallPlayback.url;
     }
-    const exactSharedCallAuthorization =
-      grant.accessScope === 'shared' && !hasRecentSharedAuthorizationReceipt
-        ? await reportTimingOnFailure(
-            measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
-              this.resolveExactSharedCallAuthorization(user, grant, priority, options?.signal),
-            ),
-          )
-        : hasRecentSharedAuthorizationReceipt
-          ? 'verified'
-          : 'not_eligible';
-    if (exactSharedCallAuthorization === 'denied') {
+    const cacheKey = mediaUrlCacheKey(grant);
+    const forcedSourceRefreshContext = options?.forceSourceRefresh
+      ? this.beginForcedSourceRefresh(user, bound, {
+          preserveCurrentSharedAccessProof: preservesCurrentSharedAccessProof,
+        })
+      : undefined;
+    const sourceCacheWriteContext =
+      forcedSourceRefreshContext?.media ?? captureMediaSourceCacheWriteContext(cacheKey);
+    const sourceGeneration = mediaSourceCacheGeneration(cacheKey);
+    const assertForcedSourceAccessIsStillCurrent = (): void => {
+      if (!options?.forceSourceRefresh || grant.accessScope !== 'shared') return;
+      const proofIsCurrent = usesSuppliedForcedSourceRefreshProof
+        ? hasForcedSourceRefreshProof(options.forcedSourceRefreshProof, user.eName, streamId)
+        : sharedStreamProbes(grant).some((source) => hasVerifiedSharedAccess(user.eName, source));
+      if (proofIsCurrent) return;
       throw new MeshengerVideoLibraryError(
-        'This source cannot be played until its access is verified.',
-        'authorization_denied',
-        403,
-      );
-    }
-    if (exactSharedCallAuthorization === 'retry') {
-      throw new MeshengerVideoLibraryError(
-        'This shared source is temporarily unavailable. Please try again.',
+        'This shared source changed while it was being refreshed. Please try again.',
         'remote_unavailable',
         503,
       );
-    }
-    const cached = cachedMediaUrls.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      if (grant.accessScope === 'shared' && exactSharedCallAuthorization !== 'verified') {
-        const probes = sharedStreamProbes(grant);
-        const needsCurrentProof =
-          probes.length > 0 &&
-          !probes.some((source) => hasVerifiedSharedAccess(user.eName, source));
-        if (interactive && needsCurrentProof) {
-          // This branch used to begin the potentially slow remote proof before
-          // telling resumable inventory to yield. It is only a scheduling
-          // hint: the authoritative proof below still decides whether this
-          // cached redirect can be returned.
-          reserveInteractivePlayback(interactiveCachedSharedProofReservationMs, this.now());
+    };
+    const completeForcedSourceResolution = (mediaUrl: string): string => {
+      // Recheck after every awaited source path, before the caller can publish
+      // this URL into the cross-replica handoff. A concurrent revocation/cache
+      // invalidation makes the short-lived capability unusable immediately.
+      assertForcedSourceAccessIsStillCurrent();
+      return completeMediaSourceResolution(
+        mediaUrl,
+        cacheKey,
+        sourceGeneration,
+        sourceCacheWriteContext,
+        forcedSourceRefreshContext,
+      );
+    };
+    try {
+      const priority = options?.priority ?? 'interactive';
+      const hasRecentSharedAuthorizationReceipt =
+        grant.accessScope === 'shared' && options?.hasRecentSharedAuthorizationReceipt === true;
+      reportMediaAuthorizationContext(options, mediaAuthorizationTimingContext(grant, priority));
+      const interactive = priority === 'interactive';
+      const sourceReadPolicy: SourceReadPolicy =
+        priority === 'interactive'
+          ? 'interactive'
+          : priority === 'warmup'
+            ? 'warmup-cancellable'
+            : options?.signal
+              ? 'background-cancellable'
+              : 'backoff';
+      const sharedProbeOptions = {
+        priority:
+          priority === 'interactive'
+            ? ('interactive' as const)
+            : priority === 'warmup'
+              ? ('warmup' as const)
+              : ('background' as const),
+        ...(options?.signal ? { signal: options.signal } : {}),
+      };
+      const timing = createMediaResolutionTiming();
+      // Route-level diagnostics must retain the completed phases when a source
+      // read rejects. The observer is safe and fixed-schema, while the caller
+      // still receives the original authorization/source error unchanged.
+      const reportTimingOnFailure = async <T>(
+        operation: Promise<T>,
+        observedTiming: MediaResolutionTiming = timing,
+      ): Promise<T> => {
+        try {
+          return await operation;
+        } catch (error) {
+          reportMediaResolutionTiming(options, observedTiming);
+          throw error;
         }
-        // A cached redirect is not itself authorization. Reuse a short
-        // positive source proof when available, otherwise verify the share
-        // before reusing a URL that may outlive a revoked membership.
-        await reportTimingOnFailure(
-          measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
-            this.requirePlayableStreamGrant(user, streamId, sharedProbeOptions),
-          ),
+      };
+      // For canonical shared call recordings, the source bridge can validate the
+      // exact viewer Chat / source Chat / CallSession / File relationship and
+      // issue the private URL in one source-local request. Try it *before* the
+      // Vidak-side exact proof so the configured fast path is actually the
+      // default on a cold Watch, not merely a fallback after several remote
+      // reads have already completed. A bridge miss still falls through to the
+      // existing verifier below; it never becomes authorization by itself.
+      const fastSharedCallPlayback =
+        grant.accessScope === 'shared' &&
+        !hasRecentSharedAuthorizationReceipt &&
+        !options?.forceSourceRefresh
+          ? await reportTimingOnFailure(
+              measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
+                this.resolveFastSharedCallPlayback(
+                  grant,
+                  cacheKey,
+                  sourceGeneration,
+                  sourceCacheWriteContext,
+                  priority,
+                  options?.signal,
+                ),
+              ),
+            )
+          : undefined;
+      if (fastSharedCallPlayback) {
+        timing.mediaUrlCacheHit = fastSharedCallPlayback.cacheHit;
+        reportMediaResolutionTiming(options, timing);
+        return completeForcedSourceResolution(fastSharedCallPlayback.url);
+      }
+      const exactSharedCallAuthorization =
+        grant.accessScope === 'shared' && !hasRecentSharedAuthorizationReceipt
+          ? await reportTimingOnFailure(
+              measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
+                this.resolveExactSharedCallAuthorization(user, grant, priority, options?.signal),
+              ),
+            )
+          : hasRecentSharedAuthorizationReceipt
+            ? 'verified'
+            : 'not_eligible';
+      if (exactSharedCallAuthorization === 'denied') {
+        throw new MeshengerVideoLibraryError(
+          'This source cannot be played until its access is verified.',
+          'authorization_denied',
+          403,
         );
       }
-      timing.mediaUrlCacheHit = true;
-      reportMediaResolutionTiming(options, timing);
-      return cached.url;
-    }
-    if (cached) cachedMediaUrls.delete(cacheKey);
-    const pendingKey = `${cacheKey}\u0000${sourceReadPolicyPendingKey(sourceReadPolicy)}`;
-    const pending = pendingMediaUrlResolutions.get(pendingKey);
-    if (pending) {
-      const mediaUrl = await reportTimingOnFailure(
-        awaitMediaResolution(pending.promise, options?.signal),
-        pending.timing,
-      );
-      reportMediaResolutionTiming(options, pending.timing);
-      return mediaUrl;
-    }
-    // Only a source-cache miss opens remote work. Avoid extending global
-    // preview priority for every normal media range while retaining a longer,
-    // source-scoped quiet window for a genuinely cold video start.
-    const playbackStartedAt = interactive ? this.now() : 0;
-    const playbackUntil = interactive ? playbackStartedAt + interactiveVaultReservationMs : 0;
-    if (interactive) {
-      // Poster extraction is resumable. Stop it briefly so its ffmpeg and
-      // source read cannot compete with an explicit first playback request.
-      reserveInteractivePlayback(interactivePreviewReservationMs, playbackStartedAt);
-      reserveInteractiveSourceWork(
-        file.ownerEName,
-        interactiveVaultReservationMs,
-        playbackStartedAt,
-      );
-      reserveInteractiveVaultGate(file.ownerEName, playbackUntil, playbackStartedAt);
-    }
-
-    const resolution = (async () => {
-      throwIfMediaResolutionAborted(options?.signal);
+      if (exactSharedCallAuthorization === 'retry') {
+        throw new MeshengerVideoLibraryError(
+          'This shared source is temporarily unavailable. Please try again.',
+          'remote_unavailable',
+          503,
+        );
+      }
+      const cached = cachedMediaUrls.get(cacheKey);
+      if (cached && cached.generation === sourceGeneration && cached.expiresAt > Date.now()) {
+        if (grant.accessScope === 'shared' && exactSharedCallAuthorization !== 'verified') {
+          const probes = sharedStreamProbes(grant);
+          const needsCurrentProof =
+            probes.length > 0 &&
+            !probes.some((source) => hasVerifiedSharedAccess(user.eName, source));
+          if (interactive && needsCurrentProof) {
+            // This branch used to begin the potentially slow remote proof before
+            // telling resumable inventory to yield. It is only a scheduling
+            // hint: the authoritative proof below still decides whether this
+            // cached redirect can be returned.
+            reserveInteractivePlayback(interactiveCachedSharedProofReservationMs, this.now());
+          }
+          // A cached redirect is not itself authorization. Reuse a short
+          // positive source proof when available, otherwise verify the share
+          // before reusing a URL that may outlive a revoked membership.
+          await reportTimingOnFailure(
+            measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
+              this.requirePlayableStreamGrant(user, streamId, sharedProbeOptions),
+            ),
+          );
+        }
+        timing.mediaUrlCacheHit = true;
+        reportMediaResolutionTiming(options, timing);
+        return completeForcedSourceResolution(cached.url);
+      }
+      if (cached) cachedMediaUrls.delete(cacheKey);
+      const pendingKey = `${mediaSourceResolutionKey(cacheKey, sourceGeneration)}\u0000${sourceReadPolicyPendingKey(sourceReadPolicy)}`;
+      const pending = pendingMediaUrlResolutions.get(pendingKey);
+      if (pending) {
+        const mediaUrl = await reportTimingOnFailure(
+          awaitMediaResolution(pending.promise, options?.signal),
+          pending.timing,
+        );
+        reportMediaResolutionTiming(options, pending.timing);
+        return completeForcedSourceResolution(mediaUrl);
+      }
+      // Only a source-cache miss opens remote work. Avoid extending global
+      // preview priority for every normal media range while retaining a longer,
+      // source-scoped quiet window for a genuinely cold video start.
+      const playbackStartedAt = interactive ? this.now() : 0;
+      const playbackUntil = interactive ? playbackStartedAt + interactiveVaultReservationMs : 0;
       if (interactive) {
-        // This is a scheduling hint for resumable inventory work, not an
-        // authorization decision. Do not put an extra database round trip on
-        // the first-byte path; the in-process reservation above is immediate.
-        void this.jobStore.setVaultGate(file.ownerEName, playbackUntil).catch(() => undefined);
-      }
-      // An eVault directory mapping is not authorization evidence. Start this
-      // cacheable lookup after the signed viewer-bound grant has been checked,
-      // but overlap it with the authoritative shared-source check below. The
-      // File dereference and any media URL cache write remain strictly after a
-      // successful authorization result.
-      const vaultResolution = this.resolveEVaultLookup(
-        file.ownerEName,
-        sourceReadPolicy,
-        options?.signal,
-      );
-      // If the authorization check rejects first, retain a rejection handler
-      // for the speculative directory lookup. Awaiting the original promise
-      // below still preserves its normal error when authorization succeeds.
-      void vaultResolution.catch(() => undefined);
-      if (grant.accessScope === 'shared' && exactSharedCallAuthorization !== 'verified') {
-        // The documented File dereference endpoint resolves a File URI; it
-        // is not a documented source-membership check. Verify the signed
-        // source context before either returning or caching its redirect.
-        await measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
-          this.requirePlayableStreamGrant(user, streamId, sharedProbeOptions),
+        // Poster extraction is resumable. Stop it briefly so its ffmpeg and
+        // source read cannot compete with an explicit first playback request.
+        reserveInteractivePlayback(interactivePreviewReservationMs, playbackStartedAt);
+        reserveInteractiveSourceWork(
+          file.ownerEName,
+          interactiveVaultReservationMs,
+          playbackStartedAt,
         );
+        reserveInteractiveVaultGate(file.ownerEName, playbackUntil, playbackStartedAt);
       }
-      // A user has explicitly requested this source. The foreground request
-      // uses its own priority key, while an interactive shared-source probe
-      // above can reuse this same directory lookup.
-      const initialVault = await measureMediaResolutionPhase(
-        timing,
-        'eVaultResolutionMs',
-        () => vaultResolution,
-      );
-      const resolveFromVault = async (vault: ResolvedVault): Promise<string> => {
-        const dereferenced = await measureMediaResolutionPhase(
+
+      const resolution = (async () => {
+        throwIfMediaResolutionAborted(options?.signal);
+        if (interactive) {
+          // This is a scheduling hint for resumable inventory work, not an
+          // authorization decision. Do not put an extra database round trip on
+          // the first-byte path; the in-process reservation above is immediate.
+          void this.jobStore.setVaultGate(file.ownerEName, playbackUntil).catch(() => undefined);
+        }
+        // An eVault directory mapping is not authorization evidence. Start this
+        // cacheable lookup after the signed viewer-bound grant has been checked,
+        // but overlap it with the authoritative shared-source check below. The
+        // File dereference and any media URL cache write remain strictly after a
+        // successful authorization result.
+        const vaultResolution = this.resolveEVaultLookup(
+          file.ownerEName,
+          sourceReadPolicy,
+          options?.signal,
+          forcedSourceRefreshContext
+            ? { cacheWriteContext: forcedSourceRefreshContext.eVault }
+            : undefined,
+        );
+        // If the authorization check rejects first, retain a rejection handler
+        // for the speculative directory lookup. Awaiting the original promise
+        // below still preserves its normal error when authorization succeeds.
+        void vaultResolution.catch(() => undefined);
+        if (grant.accessScope === 'shared' && exactSharedCallAuthorization !== 'verified') {
+          // The documented File dereference endpoint resolves a File URI; it
+          // is not a documented source-membership check. Verify the signed
+          // source context before either returning or caching its redirect.
+          await measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
+            this.requirePlayableStreamGrant(user, streamId, sharedProbeOptions),
+          );
+        }
+        // A user has explicitly requested this source. The foreground request
+        // uses its own priority key, while an interactive shared-source probe
+        // above can reuse this same directory lookup.
+        const initialVault = await measureMediaResolutionPhase(
           timing,
-          'directFileDereferenceMs',
-          () =>
-            this.tryDereferenceFileMediaUrl(
+          'eVaultResolutionMs',
+          () => vaultResolution,
+        );
+        const resolveFromVault = async (vault: ResolvedVault): Promise<string> => {
+          const dereferenced = await measureMediaResolutionPhase(
+            timing,
+            'directFileDereferenceMs',
+            () =>
+              this.tryDereferenceFileMediaUrl(
+                vault,
+                file.metaEnvelopeId,
+                sourceReadPolicy,
+                options?.signal,
+              ),
+          );
+          return (
+            dereferenced ??
+            (await this.resolveMediaUrlFromEnvelope(
               vault,
               file.metaEnvelopeId,
+              user.eName,
               sourceReadPolicy,
               options?.signal,
-            ),
+              timing,
+            ))
+          );
+        };
+        let mediaUrl: string;
+        try {
+          mediaUrl = await resolveFromVault(initialVault.vault);
+        } catch (error) {
+          // Directory data is cacheable but a source may move. A 404 from a
+          // previously cached vault is the one unambiguous signal to refresh its
+          // mapping. Do that once only, after the ordinary shared-access check
+          // above has succeeded; the refreshed mapping is still not permission
+          // and the File/metadata access check remains authoritative.
+          if (!initialVault.cacheHit || !isStaleEVaultNotFound(error)) throw error;
+          const freshVault = await measureMediaResolutionPhase(timing, 'eVaultResolutionMs', () =>
+            this.resolveEVaultLookup(file.ownerEName, sourceReadPolicy, options?.signal, {
+              forceRefresh: true,
+            }),
+          );
+          mediaUrl = await resolveFromVault(freshVault.vault);
+        }
+        assertForcedSourceAccessIsStillCurrent();
+        cacheMediaUrl(
+          cacheKey,
+          mediaUrl,
+          grant.expiresAt,
+          sourceGeneration,
+          sourceCacheWriteContext,
         );
-        return (
-          dereferenced ??
-          (await this.resolveMediaUrlFromEnvelope(
-            vault,
-            file.metaEnvelopeId,
-            user.eName,
-            sourceReadPolicy,
-            options?.signal,
-            timing,
-          ))
-        );
-      };
-      let mediaUrl: string;
-      try {
-        mediaUrl = await resolveFromVault(initialVault.vault);
-      } catch (error) {
-        // Directory data is cacheable but a source may move. A 404 from a
-        // previously cached vault is the one unambiguous signal to refresh its
-        // mapping. Do that once only, after the ordinary shared-access check
-        // above has succeeded; the refreshed mapping is still not permission
-        // and the File/metadata access check remains authoritative.
-        if (!initialVault.cacheHit || !isStaleEVaultNotFound(error)) throw error;
-        const freshVault = await measureMediaResolutionPhase(timing, 'eVaultResolutionMs', () =>
-          this.resolveEVaultLookup(file.ownerEName, sourceReadPolicy, options?.signal, {
-            forceRefresh: true,
-          }),
-        );
-        mediaUrl = await resolveFromVault(freshVault.vault);
-      }
-      cacheMediaUrl(cacheKey, mediaUrl, grant.expiresAt);
-      return mediaUrl;
-    })().finally(() => {
-      pendingMediaUrlResolutions.delete(pendingKey);
-    });
-    pendingMediaUrlResolutions.set(pendingKey, { promise: resolution, timing });
-    const mediaUrl = await reportTimingOnFailure(awaitMediaResolution(resolution, options?.signal));
-    reportMediaResolutionTiming(options, timing);
-    return mediaUrl;
+        return mediaUrl;
+      })().finally(() => {
+        pendingMediaUrlResolutions.delete(pendingKey);
+      });
+      pendingMediaUrlResolutions.set(pendingKey, { promise: resolution, timing });
+      const mediaUrl = await reportTimingOnFailure(
+        awaitMediaResolution(resolution, options?.signal),
+      );
+      reportMediaResolutionTiming(options, timing);
+      return completeForcedSourceResolution(mediaUrl);
+    } finally {
+      if (forcedSourceRefreshContext) finishForcedSourceRefresh(forcedSourceRefreshContext);
+    }
   }
 
   /**
@@ -2485,6 +2684,164 @@ export class MeshengerVideoLibrary {
   }
 
   /**
+   * Performs the one fresh shared-source proof required before an explicit
+   * recovery lease can be claimed. The returned capability is kept only in
+   * server memory and is bound to this exact viewer and sealed stream, so the
+   * subsequent forced resolver can avoid proving the same access twice.
+   */
+  async proveCurrentPlayableStreamForSourceRefresh(
+    user: ViewerIdentity,
+    streamId: string,
+    options?: Pick<MediaResolutionOptions, 'priority' | 'signal'>,
+  ): Promise<ForcedSourceRefreshProof> {
+    const bound = this.requireBoundPlayableStreamGrant(user, streamId);
+    const sharedSources =
+      bound.grant.accessScope === 'shared' ? sharedStreamProbes(bound.grant) : [];
+    if (bound.grant.accessScope === 'shared') {
+      this.invalidateSharedAccessProofs(user.eName, bound.grant);
+      await this.requirePlayableStreamGrant(user, streamId, {
+        ...options,
+        forceCurrentSharedAccessProof: true,
+      });
+      // The pending operation that began before the invalidation may still
+      // resolve for its original caller, but it cannot repopulate the shared
+      // positive-proof cache. Require a current completed entry before
+      // minting a capability, otherwise an obsolete in-flight result could be
+      // carried across the durable handoff boundary.
+      if (!sharedSources.some((source) => hasVerifiedSharedAccess(user.eName, source))) {
+        throw new MeshengerVideoLibraryError(
+          'This shared source is temporarily unavailable. Please try again.',
+          'remote_unavailable',
+          503,
+        );
+      }
+    }
+    const proof = Object.freeze({}) as ForcedSourceRefreshProof;
+    forcedSourceRefreshProofs.set(proof, {
+      viewerEName: user.eName,
+      streamId,
+      expiresAt: Date.now() + forcedSourceRefreshProofTtlMs,
+      sourceRefreshReadReceipt: mintSharedVideoAuthorizationReceipt({
+        viewerEName: user.eName,
+        streamId,
+        env: { W3DS_AUTH_JWT_SECRET: this.config.signingSecret },
+      }),
+      sharedSources,
+    });
+    return proof;
+  }
+
+  /**
+   * Returns a server-only receipt for the route's existing bounded durable
+   * handoff reader after this server has established a fresh source proof.
+   * The opaque value never becomes a Set-Cookie header; an ordinary browser
+   * media GET cannot obtain it after its browser handoff has expired.
+   */
+  playbackSourceRefreshReadReceiptAfterCurrentProof(
+    user: ViewerIdentity,
+    streamId: string,
+    proof: ForcedSourceRefreshProof,
+  ): string | undefined {
+    if (!hasForcedSourceRefreshProof(proof, user.eName, streamId)) {
+      return undefined;
+    }
+    return forcedSourceRefreshProofs.get(proof)?.sourceRefreshReadReceipt;
+  }
+
+  /**
+   * Replaces this replica's rejected source cache with a ready handoff from
+   * another replica. The exact current-proof capability prevents a bare
+   * signed stream from installing an arbitrary durable URL, and the normal
+   * generation/active-refresh fence prevents an older recovery from writing
+   * over a local forced refresh that already owns this source.
+   */
+  adoptReadyPlaybackSourceAfterCurrentProof(
+    user: ViewerIdentity,
+    streamId: string,
+    proof: ForcedSourceRefreshProof,
+    mediaUrl: string,
+  ): boolean {
+    if (!hasForcedSourceRefreshProof(proof, user.eName, streamId)) return false;
+    const bound = this.requireBoundPlayableStreamGrant(user, streamId);
+    return this.adoptReadyPlaybackSource(user, bound, mediaUrl);
+  }
+
+  /**
+   * Installs a durable source handoff after the media route has verified its
+   * short-lived, viewer-and-stream-bound receipt and rechecked playable
+   * access. This prevents a receipt-era F1 from disappearing at cookie expiry
+   * and exposing the older process-local S again. Never call it with a
+   * browser-controlled receipt without those route checks.
+   */
+  adoptReadyPlaybackSourceAfterAuthorizationReceipt(
+    user: ViewerIdentity,
+    streamId: string,
+    receipt: string,
+    mediaUrl: string,
+  ): boolean {
+    if (
+      !verifySharedVideoAuthorizationReceipt({
+        receipt,
+        viewerEName: user.eName,
+        streamId,
+        env: { W3DS_AUTH_JWT_SECRET: this.config.signingSecret },
+      })
+    ) {
+      return false;
+    }
+    const bound = this.requireBoundPlayableStreamGrant(user, streamId);
+    return this.adoptReadyPlaybackSource(user, bound, mediaUrl);
+  }
+
+  private adoptReadyPlaybackSource(
+    user: ViewerIdentity,
+    bound: {
+      grant: StreamGrant;
+      file: NonNullable<ReturnType<typeof parseW3dsFileUri>>;
+    },
+    mediaUrl: string,
+  ): boolean {
+    let safeUrl: string;
+    try {
+      safeUrl = safeMediaUrl(mediaUrl);
+    } catch {
+      return false;
+    }
+    const cacheKey = mediaUrlCacheKey(bound.grant);
+    const eVaultCacheKey = normalizeEName(bound.file.ownerEName);
+    // Do not advance a generation owned by a newer local forced recovery of
+    // this *same* source. A forced eVault refresh for a different video can
+    // share the owner key, but it must not leave this media key on rejected S
+    // after a durable F1 handoff has arrived.
+    if (activeForcedMediaSourceRefreshes.has(cacheKey)) {
+      return true;
+    }
+    // F1 arrived from another replica while this one still had S cached or
+    // resolving. Advance the local source generation before installing F1 so
+    // an older S resolver cannot finish later and overwrite the handoff.
+    // The capability already carries a current shared proof, so retain that
+    // proof while invalidating only source/eVault cache domains.
+    this.invalidateBoundMediaUrl(user, bound, {
+      forcedSourceRefresh: true,
+      preserveCurrentSharedAccessProof: true,
+      // Another stream may currently own the common eVault cache generation.
+      // Fence and install this media source without perturbing that unrelated
+      // resolver's directory cache ownership.
+      ...(activeForcedEVaultRefreshes.has(eVaultCacheKey)
+        ? { skipEVaultCacheInvalidation: true }
+        : {}),
+    });
+    const generation = mediaSourceCacheGeneration(cacheKey);
+    const cacheWriteContext = captureMediaSourceCacheWriteContext(cacheKey);
+    // A newer local force owner may already be resolving. The generation
+    // fence above still protects it from S; leave that newer owner's cache
+    // write authoritative instead of replacing it with this older handoff.
+    if (!canWriteMediaSourceCache(cacheKey, generation, cacheWriteContext)) return true;
+    cacheMediaUrl(cacheKey, safeUrl, bound.grant.expiresAt, generation, cacheWriteContext);
+    return true;
+  }
+
+  /**
    * Confirms that a short-lived stream token belongs to this viewer without
    * dereferencing its source. Callers may use this only for local metadata;
    * actual media access must go through inspectPlayableStream.
@@ -2527,28 +2884,118 @@ export class MeshengerVideoLibrary {
    * media URL. The next request resolves the File envelope again.
    */
   async invalidateMediaUrl(user: ViewerIdentity, streamId: string): Promise<void> {
-    const { grant, file } = this.requireBoundPlayableStreamGrant(user, streamId);
-    const cacheKey = mediaUrlCacheKey(grant);
+    const bound = this.requireBoundPlayableStreamGrant(user, streamId);
+    this.invalidateBoundMediaUrl(user, bound);
+  }
+
+  /**
+   * Fences a source that this replica resolved under a forced recovery lease
+   * but could not publish durably. A different replica may already have won
+   * the lease, so the local URL must not remain warm for later ranges. Keep
+   * the fence limited to this media key: an unrelated eVault lookup and a
+   * current shared proof are not evidence that this source is stale.
+   */
+  discardLocalForcedSourceResult(user: ViewerIdentity, streamId: string): void {
+    const bound = this.requireBoundPlayableStreamGrant(user, streamId);
+    const cacheKey = mediaUrlCacheKey(bound.grant);
+    // A newer recovery for this exact source has already advanced the local
+    // generation and is the only cache writer. Do not erase its result while
+    // cleaning up the older lease that lost the durable publish race.
+    if (activeForcedMediaSourceRefreshes.has(cacheKey)) return;
+    advanceMediaSourceCacheGeneration(cacheKey, true);
     cachedMediaUrls.delete(cacheKey);
     cachedMeshengerPlaybackGrantUrls.delete(cacheKey);
-    const cachedVault = cachedEVaultResolutions.get(normalizeEName(file.ownerEName))?.vault;
-    if (cachedVault) {
-      // A transient File redirect failure can have made the GraphQL URL the
-      // preferred fallback for this eVault. An upstream rejection is an
-      // explicit recovery signal, so clear that non-authorizing fast-path
-      // hint as well and let the next resolution try /files/:id once more.
-      directFileFallbackPreferred.delete(`${cachedVault.eVaultUri}\u0000endpoint`);
-      directFileFallbackPreferred.delete(`${cachedVault.eVaultUri}\u0000${file.metaEnvelopeId}`);
+  }
+
+  /**
+   * Claims both cache domains for one explicit source recovery. Another
+   * recovery supersedes this owner; this operation may finish its I/O for the
+   * original caller, but it must not return a URL for a later receipt write.
+   */
+  private beginForcedSourceRefresh(
+    user: ViewerIdentity,
+    bound: {
+      grant: StreamGrant;
+      file: NonNullable<ReturnType<typeof parseW3dsFileUri>>;
+    },
+    options?: { preserveCurrentSharedAccessProof?: boolean },
+  ): ForcedSourceRefreshContext {
+    this.invalidateBoundMediaUrl(user, bound, {
+      forcedSourceRefresh: true,
+      preserveCurrentSharedAccessProof: options?.preserveCurrentSharedAccessProof === true,
+    });
+    const mediaKey = mediaUrlCacheKey(bound.grant);
+    const eVaultKey = normalizeEName(bound.file.ownerEName);
+    return {
+      media: activateForcedCacheRefresh(
+        activeForcedMediaSourceRefreshes,
+        mediaKey,
+        mediaSourceCacheGeneration(mediaKey),
+        mediaSourceRefreshEpoch(mediaKey),
+      ),
+      eVault: activateForcedCacheRefresh(
+        activeForcedEVaultRefreshes,
+        eVaultKey,
+        eVaultResolutionCacheGeneration(eVaultKey),
+        eVaultResolutionRefreshEpoch(eVaultKey),
+      ),
+    };
+  }
+
+  /**
+   * Moves this exact authorization context to a new logical source generation.
+   * Outstanding reads in the older generation may complete for their own
+   * caller, but cannot repopulate a cache that a recovery has explicitly
+   * invalidated.
+   */
+  private invalidateBoundMediaUrl(
+    user: ViewerIdentity,
+    bound: {
+      grant: StreamGrant;
+      file: NonNullable<ReturnType<typeof parseW3dsFileUri>>;
+    },
+    options?: {
+      forcedSourceRefresh?: boolean;
+      preserveCurrentSharedAccessProof?: boolean;
+      skipEVaultCacheInvalidation?: boolean;
+    },
+  ): void {
+    const { grant, file } = bound;
+    const cacheKey = mediaUrlCacheKey(grant);
+    advanceMediaSourceCacheGeneration(cacheKey, options?.forcedSourceRefresh === true);
+    cachedMediaUrls.delete(cacheKey);
+    cachedMeshengerPlaybackGrantUrls.delete(cacheKey);
+    if (!options?.skipEVaultCacheInvalidation) {
+      const eVaultCacheKey = normalizeEName(file.ownerEName);
+      const cachedVault = cachedEVaultResolutions.get(eVaultCacheKey)?.vault;
+      if (cachedVault) {
+        // A transient File redirect failure can have made the GraphQL URL the
+        // preferred fallback for this eVault. An upstream rejection is an
+        // explicit recovery signal, so clear that non-authorizing fast-path
+        // hint as well and let the next resolution try /files/:id once more.
+        directFileFallbackPreferred.delete(`${cachedVault.eVaultUri}\u0000endpoint`);
+        directFileFallbackPreferred.delete(`${cachedVault.eVaultUri}\u0000${file.metaEnvelopeId}`);
+      }
+      // A denied/missing upstream can also mean the owner's eVault moved
+      // after the directory mapping was cached. Force the recovery path to
+      // ask the registry again instead of retaining a stale destination for
+      // its TTL.
+      advanceEVaultResolutionCacheGeneration(eVaultCacheKey, options?.forcedSourceRefresh === true);
+      cachedEVaultResolutions.delete(eVaultCacheKey);
     }
-    // A denied/missing upstream can also mean the owner's eVault moved after
-    // the directory mapping was cached. Force the recovery path to ask the
-    // registry again instead of retaining a stale destination for its TTL.
-    cachedEVaultResolutions.delete(normalizeEName(file.ownerEName));
     // An upstream 401/403/404 can mean its authorization changed. Do not let
     // the short shared-source optimization mask that signal on the recovery
-    // attempt.
+    // attempt. A successful current proof was already deliberately created
+    // immediately before this forced invalidation, however, and advancing its
+    // revision a second time would erase that proof and force duplicate I/O.
+    if (!options?.preserveCurrentSharedAccessProof) {
+      this.invalidateSharedAccessProofs(user.eName, grant);
+    }
+  }
+
+  private invalidateSharedAccessProofs(viewerEName: string, grant: StreamGrant): void {
     for (const source of sharedStreamProbes(grant)) {
-      forgetVerifiedSharedAccess(user.eName, source);
+      invalidateVerifiedSharedAccess(viewerEName, source);
     }
   }
 
@@ -2629,6 +3076,7 @@ export class MeshengerVideoLibrary {
       allowExpired?: boolean;
       priority?: MediaResolutionPriority;
       signal?: AbortSignal;
+      forceCurrentSharedAccessProof?: boolean;
     },
   ): Promise<{ grant: StreamGrant; file: NonNullable<ReturnType<typeof parseW3dsFileUri>> }> {
     throwIfMediaResolutionAborted(options?.signal);
@@ -2638,7 +3086,12 @@ export class MeshengerVideoLibrary {
       return bound;
     }
     const probes = sharedStreamProbes(grant);
-    if (probes.some((source) => hasVerifiedSharedAccess(user.eName, source))) return bound;
+    if (
+      !options?.forceCurrentSharedAccessProof &&
+      probes.some((source) => hasVerifiedSharedAccess(user.eName, source))
+    ) {
+      return bound;
+    }
 
     const priority = options?.priority ?? 'interactive';
     const sourceReadPolicy: SourceReadPolicy =
@@ -2697,7 +3150,10 @@ export class MeshengerVideoLibrary {
         },
         Date.now(),
         () => Date.now(),
-        { priority },
+        {
+          priority,
+          ...(options?.forceCurrentSharedAccessProof ? { bypassVerifiedAccess: true } : {}),
+        },
       );
 
     let retrying = false;
@@ -6146,13 +6602,21 @@ export class MeshengerVideoLibrary {
     eName: string,
     rateLimit: SourceReadPolicy = 'fail-fast',
     signal?: AbortSignal,
-    options?: { forceRefresh?: boolean },
+    options?: { forceRefresh?: boolean; cacheWriteContext?: CacheWriteContext },
   ): Promise<ResolvedEVaultLookup> {
     throwIfMediaResolutionAborted(signal);
     const requested = normalizeEName(eName);
+    if (options?.forceRefresh) advanceEVaultResolutionCacheGeneration(requested, true);
+    const generation = eVaultResolutionCacheGeneration(requested);
+    const cacheWriteContext =
+      options?.forceRefresh || !options?.cacheWriteContext
+        ? captureEVaultCacheWriteContext(requested)
+        : options.cacheWriteContext;
     const now = Date.now();
-    const cached = options?.forceRefresh ? undefined : cachedEVaultResolutions.get(requested);
-    if (cached && cached.expiresAt > now) return { vault: cached.vault, cacheHit: true };
+    const cached = cachedEVaultResolutions.get(requested);
+    if (cached && cached.generation === generation && cached.expiresAt > now) {
+      return { vault: cached.vault, cacheHit: true };
+    }
     if (cached) cachedEVaultResolutions.delete(requested);
     // A durable inventory lease is independently cancellable. Sharing its
     // pending resolver would let aborting one job reject another job's source
@@ -6160,14 +6624,12 @@ export class MeshengerVideoLibrary {
     const pendingKey =
       rateLimit === 'inventory-cancellable'
         ? undefined
-        : `${requested}\u0000${sourceReadPolicyPendingKey(rateLimit)}${
-            options?.forceRefresh ? '\u0000fresh' : ''
-          }`;
+        : `${requested}\u0000${sourceReadPolicyPendingKey(rateLimit)}\u0000directory-generation:${generation}`;
     const pending = pendingKey ? pendingEVaultResolutions.get(pendingKey) : undefined;
     if (pending) return { vault: await awaitMediaResolution(pending, signal), cacheHit: false };
     const resolution = this.resolveEVaultUncached(requested, rateLimit, signal)
       .then((vault) => {
-        cacheEVaultResolution(requested, vault, Date.now());
+        cacheEVaultResolution(requested, vault, Date.now(), generation, cacheWriteContext);
         return vault;
       })
       .finally(() => {
@@ -6468,18 +6930,23 @@ export function createMeshengerVideoLibrary(
 export function resetMeshengerVideoLibraryCachesForTests(): void {
   cachedMediaUrls.clear();
   cachedMeshengerPlaybackGrantUrls.clear();
+  mediaSourceCacheGenerations.clear();
+  activeForcedMediaSourceRefreshes.clear();
   pendingMeshengerPlaybackGrantResolutions.clear();
   interactiveVaultGates.clear();
   pendingMediaUrlResolutions.clear();
   directFileFallbackPreferred.clear();
   setViewerChatGrantPointerStoreForTests();
   cachedEVaultResolutions.clear();
+  eVaultResolutionCacheGenerations.clear();
+  activeForcedEVaultRefreshes.clear();
   pendingEVaultResolutions.clear();
   cachedPlatformTokens.clear();
   for (const controller of pendingPlatformTokenControllers.values()) controller.abort();
   pendingPlatformTokenControllers.clear();
   pendingPlatformTokens.clear();
   renewedStreams.clear();
+  nextForcedRefreshOwnerId = 1;
   resetBackgroundWorkPriorityForTests();
 }
 
@@ -6995,22 +7462,70 @@ function combineSharedAccess(
 function invalidStream(): never {
   throw new MeshengerVideoLibraryError('The video link is invalid.', 'invalid_stream', 401);
 }
-function cacheMediaUrl(key: string, url: string, expiresAt: number): void {
+function cacheMediaUrl(
+  key: string,
+  url: string,
+  expiresAt: number,
+  generation: number,
+  context: CacheWriteContext,
+): void {
+  // A rejected source can finish resolving after its replacement has begun.
+  // Keep that old result available to its original caller, but never let it
+  // become the cache entry for the newer source generation.
+  if (!canWriteMediaSourceCache(key, generation, context)) return;
   const now = Date.now();
   for (const [cachedKey, cached] of cachedMediaUrls) {
     if (cached.expiresAt <= now || cachedMediaUrls.size >= maxCachedMediaUrls)
       cachedMediaUrls.delete(cachedKey);
   }
-  cachedMediaUrls.set(key, { url, expiresAt });
+  cachedMediaUrls.set(key, { url, expiresAt, generation });
 }
-function cacheMeshengerPlaybackGrantUrl(key: string, url: string, expiresAt: number): void {
+function cacheMeshengerPlaybackGrantUrl(
+  key: string,
+  url: string,
+  expiresAt: number,
+  generation: number,
+  context: CacheWriteContext,
+): void {
+  if (!canWriteMediaSourceCache(key, generation, context)) return;
   const now = Date.now();
   for (const [cachedKey, cached] of cachedMeshengerPlaybackGrantUrls) {
     if (cached.expiresAt <= now || cachedMeshengerPlaybackGrantUrls.size >= maxCachedMediaUrls) {
       cachedMeshengerPlaybackGrantUrls.delete(cachedKey);
     }
   }
-  cachedMeshengerPlaybackGrantUrls.set(key, { url, expiresAt });
+  cachedMeshengerPlaybackGrantUrls.set(key, { url, expiresAt, generation });
+}
+
+function mediaSourceCacheGeneration(key: string): number {
+  return mediaSourceCacheGenerations.get(key)?.generation ?? 0;
+}
+
+function mediaSourceRefreshEpoch(key: string): number {
+  return mediaSourceCacheGenerations.get(key)?.refreshEpoch ?? 0;
+}
+
+function advanceMediaSourceCacheGeneration(key: string, forcedSourceRefresh = false): number {
+  const now = Date.now();
+  pruneSourceCacheGenerationStates(now);
+  const current = mediaSourceCacheGenerations.get(key);
+  // Reaching MAX_SAFE_INTEGER would require an implausible number of
+  // authenticated upstream-rejection recoveries in a single process. Retain
+  // a non-zero generation if it ever happens so a pre-refresh default (zero)
+  // still cannot be mistaken for the new state.
+  const next = advanceCacheGeneration(current?.generation ?? 0);
+  mediaSourceCacheGenerations.set(key, {
+    generation: next,
+    refreshEpoch: forcedSourceRefresh
+      ? advanceCacheGeneration(current?.refreshEpoch ?? 0)
+      : (current?.refreshEpoch ?? 0),
+    lastAdvancedAt: now,
+  });
+  return next;
+}
+
+function mediaSourceResolutionKey(key: string, generation: number): string {
+  return `${key}\u0000source-generation:${generation}`;
 }
 function cacheDirectFileFallback(key: string, now: number, ttlMs = directFileFallbackTtlMs): void {
   for (const [cachedKey, expiresAt] of directFileFallbackPreferred) {
@@ -7020,13 +7535,282 @@ function cacheDirectFileFallback(key: string, now: number, ttlMs = directFileFal
   }
   directFileFallbackPreferred.set(key, now + ttlMs);
 }
-function cacheEVaultResolution(key: string, vault: ResolvedVault, now: number): void {
+function cacheEVaultResolution(
+  key: string,
+  vault: ResolvedVault,
+  now: number,
+  generation: number,
+  context: CacheWriteContext,
+): void {
+  if (!canWriteEVaultResolutionCache(key, generation, context)) return;
   for (const [cachedKey, cached] of cachedEVaultResolutions) {
     if (cached.expiresAt <= now || cachedEVaultResolutions.size >= maxCachedEVaultResolutions) {
       cachedEVaultResolutions.delete(cachedKey);
     }
   }
-  cachedEVaultResolutions.set(key, { vault, expiresAt: now + eVaultResolutionTtlMs });
+  cachedEVaultResolutions.set(key, {
+    vault,
+    expiresAt: now + eVaultResolutionTtlMs,
+    generation,
+  });
+}
+
+function eVaultResolutionCacheGeneration(key: string): number {
+  return eVaultResolutionCacheGenerations.get(key)?.generation ?? 0;
+}
+
+function eVaultResolutionRefreshEpoch(key: string): number {
+  return eVaultResolutionCacheGenerations.get(key)?.refreshEpoch ?? 0;
+}
+
+function advanceEVaultResolutionCacheGeneration(key: string, forcedSourceRefresh = false): number {
+  const now = Date.now();
+  pruneSourceCacheGenerationStates(now);
+  const current = eVaultResolutionCacheGenerations.get(key);
+  const next = advanceCacheGeneration(current?.generation ?? 0);
+  eVaultResolutionCacheGenerations.set(key, {
+    generation: next,
+    refreshEpoch: forcedSourceRefresh
+      ? advanceCacheGeneration(current?.refreshEpoch ?? 0)
+      : (current?.refreshEpoch ?? 0),
+    lastAdvancedAt: now,
+  });
+  return next;
+}
+
+function captureMediaSourceCacheWriteContext(key: string): CacheWriteContext {
+  return captureCacheWriteContext(
+    key,
+    mediaSourceCacheGeneration(key),
+    mediaSourceRefreshEpoch(key),
+    activeForcedMediaSourceRefreshes,
+  );
+}
+
+function captureEVaultCacheWriteContext(key: string): CacheWriteContext {
+  return captureCacheWriteContext(
+    key,
+    eVaultResolutionCacheGeneration(key),
+    eVaultResolutionRefreshEpoch(key),
+    activeForcedEVaultRefreshes,
+  );
+}
+
+function captureCacheWriteContext(
+  key: string,
+  generation: number,
+  refreshEpoch: number,
+  activeRefreshes: ReadonlyMap<string, ActiveForcedRefresh>,
+): CacheWriteContext {
+  return {
+    key,
+    generation,
+    refreshEpoch,
+    canWrite: !activeRefreshes.has(key),
+  };
+}
+
+function activateForcedCacheRefresh(
+  activeRefreshes: Map<string, ActiveForcedRefresh>,
+  key: string,
+  generation: number,
+  refreshEpoch: number,
+): CacheWriteContext {
+  const ownerId = nextForcedRefreshOwnerId;
+  nextForcedRefreshOwnerId = advanceCacheGeneration(nextForcedRefreshOwnerId);
+  activeRefreshes.set(key, { id: ownerId, generation, refreshEpoch });
+  return { key, generation, refreshEpoch, forceOwnerId: ownerId, canWrite: true };
+}
+
+function canWriteMediaSourceCache(
+  key: string,
+  generation: number,
+  context: CacheWriteContext,
+): boolean {
+  return canWriteCache(
+    key,
+    generation,
+    context,
+    mediaSourceCacheGeneration(key),
+    mediaSourceRefreshEpoch(key),
+    activeForcedMediaSourceRefreshes,
+  );
+}
+
+function canWriteEVaultResolutionCache(
+  key: string,
+  generation: number,
+  context: CacheWriteContext,
+): boolean {
+  return canWriteCache(
+    key,
+    generation,
+    context,
+    eVaultResolutionCacheGeneration(key),
+    eVaultResolutionRefreshEpoch(key),
+    activeForcedEVaultRefreshes,
+  );
+}
+
+function canWriteCache(
+  key: string,
+  generation: number,
+  context: CacheWriteContext,
+  currentGeneration: number,
+  currentRefreshEpoch: number,
+  activeRefreshes: ReadonlyMap<string, ActiveForcedRefresh>,
+): boolean {
+  if (
+    context.key !== key ||
+    context.generation !== generation ||
+    currentGeneration !== generation ||
+    currentRefreshEpoch !== context.refreshEpoch
+  ) {
+    return false;
+  }
+  const active = activeRefreshes.get(key);
+  if (context.forceOwnerId !== undefined) return active?.id === context.forceOwnerId;
+  // A normal operation that began while a force owner existed remains barred
+  // even if that owner settles just before this old work tries to write.
+  return context.canWrite && !active;
+}
+
+function completeMediaSourceResolution(
+  mediaUrl: string,
+  key: string,
+  generation: number,
+  cacheWriteContext: CacheWriteContext,
+  forcedContext: ForcedSourceRefreshContext | undefined,
+): string {
+  // Any source generation transition invalidates a result which was already
+  // resolving. This prevents a pre-refresh ordinary authorize request from
+  // receiving a stale URL that it could later place into a new receipt cache.
+  if (mediaSourceCacheGeneration(key) !== generation || !cacheWriteContext.canWrite) {
+    throw new MeshengerVideoLibraryError(
+      'The video source changed while it was being resolved. Please retry playback.',
+      'remote_unavailable',
+      503,
+    );
+  }
+  if (!forcedContext) return mediaUrl;
+  if (
+    activeForcedMediaSourceRefreshes.get(forcedContext.media.key)?.id !==
+    forcedContext.media.forceOwnerId
+  ) {
+    // A newer recovery for this exact media source already invalidated this
+    // result. Do not allow the old caller to mint a later receipt or write
+    // its URL into a durable handoff. A different stream may concurrently
+    // refresh the same owner's eVault mapping; that can make this lookup
+    // non-cacheable, but must not reject this independently authorized media
+    // result or its per-stream durable recovery lease.
+    throw new MeshengerVideoLibraryError(
+      'The video source changed while it was being refreshed. Please retry playback.',
+      'remote_unavailable',
+      503,
+    );
+  }
+  return mediaUrl;
+}
+
+function finishForcedSourceRefresh(context: ForcedSourceRefreshContext): void {
+  if (activeForcedMediaSourceRefreshes.get(context.media.key)?.id === context.media.forceOwnerId) {
+    activeForcedMediaSourceRefreshes.delete(context.media.key);
+  }
+  if (activeForcedEVaultRefreshes.get(context.eVault.key)?.id === context.eVault.forceOwnerId) {
+    activeForcedEVaultRefreshes.delete(context.eVault.key);
+  }
+  pruneSourceCacheGenerationStates(Date.now());
+}
+
+function advanceCacheGeneration(current: number): number {
+  return current < Number.MAX_SAFE_INTEGER ? current + 1 : 1;
+}
+
+function pruneSourceCacheGenerationStates(now: number): void {
+  pruneMediaSourceGenerationStates(now);
+  pruneEVaultSourceGenerationStates(now);
+}
+
+function pruneMediaSourceGenerationStates(now: number): void {
+  for (const [key, state] of mediaSourceCacheGenerations) {
+    const cached = cachedMediaUrls.get(key);
+    if (cached && cached.expiresAt <= now) cachedMediaUrls.delete(key);
+    const bridge = cachedMeshengerPlaybackGrantUrls.get(key);
+    if (bridge && bridge.expiresAt <= now) cachedMeshengerPlaybackGrantUrls.delete(key);
+    if (
+      state.lastAdvancedAt + sourceGenerationRetentionMs <= now &&
+      !activeForcedMediaSourceRefreshes.has(key) &&
+      !hasPendingMediaSourceWork(key) &&
+      !cachedMediaUrls.has(key) &&
+      !cachedMeshengerPlaybackGrantUrls.has(key)
+    ) {
+      mediaSourceCacheGenerations.delete(key);
+    }
+  }
+  pruneOldestInactiveGenerationStates(
+    mediaSourceCacheGenerations,
+    maxTrackedSourceGenerations,
+    (key) =>
+      activeForcedMediaSourceRefreshes.has(key) ||
+      hasPendingMediaSourceWork(key) ||
+      cachedMediaUrls.has(key) ||
+      cachedMeshengerPlaybackGrantUrls.has(key),
+  );
+}
+
+function pruneEVaultSourceGenerationStates(now: number): void {
+  for (const [key, state] of eVaultResolutionCacheGenerations) {
+    const cached = cachedEVaultResolutions.get(key);
+    if (cached && cached.expiresAt <= now) cachedEVaultResolutions.delete(key);
+    if (
+      state.lastAdvancedAt + sourceGenerationRetentionMs <= now &&
+      !activeForcedEVaultRefreshes.has(key) &&
+      !hasPendingEVaultSourceWork(key) &&
+      !cachedEVaultResolutions.has(key)
+    ) {
+      eVaultResolutionCacheGenerations.delete(key);
+    }
+  }
+  pruneOldestInactiveGenerationStates(
+    eVaultResolutionCacheGenerations,
+    maxTrackedSourceGenerations,
+    (key) =>
+      activeForcedEVaultRefreshes.has(key) ||
+      hasPendingEVaultSourceWork(key) ||
+      cachedEVaultResolutions.has(key),
+  );
+}
+
+function pruneOldestInactiveGenerationStates(
+  generations: Map<string, CacheGenerationState>,
+  maxEntries: number,
+  isActive: (key: string) => boolean,
+): void {
+  while (generations.size > maxEntries) {
+    let oldest: [string, CacheGenerationState] | undefined;
+    for (const entry of generations) {
+      if (isActive(entry[0])) continue;
+      if (!oldest || entry[1].lastAdvancedAt < oldest[1].lastAdvancedAt) oldest = entry;
+    }
+    if (!oldest) return;
+    generations.delete(oldest[0]);
+  }
+}
+
+function hasPendingMediaSourceWork(key: string): boolean {
+  const prefix = `${key}\u0000source-generation:`;
+  return (
+    [...pendingMediaUrlResolutions.keys()].some((pendingKey) => pendingKey.startsWith(prefix)) ||
+    [...pendingMeshengerPlaybackGrantResolutions.keys()].some((pendingKey) =>
+      pendingKey.startsWith(prefix),
+    )
+  );
+}
+
+function hasPendingEVaultSourceWork(key: string): boolean {
+  return [...pendingEVaultResolutions.keys()].some((pendingKey) =>
+    pendingKey.startsWith(`${key}\u0000`),
+  );
 }
 function cacheRenewedStream(key: string, renewed: RenewedStream, now: number): void {
   for (const [cachedKey, cached] of renewedStreams) {

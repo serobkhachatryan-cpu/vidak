@@ -21,6 +21,8 @@ const keyDomain = 'vidak.shared-video-authorization-receipt.key.v1';
 const signatureDomain = 'vidak.shared-video-authorization-receipt.signature.v1';
 const viewerFingerprintDomain = 'vidak.shared-video-authorization-receipt.viewer.v1';
 const streamFingerprintDomain = 'vidak.shared-video-authorization-receipt.stream.v1';
+const localResolutionFingerprintDomain =
+  'vidak.shared-video-authorization-receipt.local-resolution-cache.v1';
 const maxReceiptLength = 1_024;
 const maxPayloadBytes = 512;
 const nonceBytes = 16;
@@ -41,12 +43,50 @@ export const sharedVideoAuthorizationReceiptCookieName =
   '__Secure-vidak-shared-video-authorization';
 export const sharedVideoAuthorizationReceiptCookiePath = '/api';
 
+/**
+ * eVault playback has its own receipt cookie name and a stream-specific Path.
+ * The compatibility cookie above is still needed by the recording-ticket and
+ * legacy Meshenger routes, but it is necessarily overwritten as a viewer
+ * warms another video. A browser therefore sends this cookie only to the
+ * matching eVault player/authorization route, so warming video B cannot make
+ * video A lose its short source-generation handoff.
+ */
+export const sharedVideoStreamAuthorizationReceiptCookieName =
+  '__Secure-vidak-shared-video-stream-authorization';
+
+/**
+ * Set only by the explicit recovery endpoint. Its value is the same opaque,
+ * viewer-and-stream-bound receipt as the authorization cookie; the separate
+ * name marks the next eVault player request as a source-refresh recovery.
+ * Keeping its path narrow means ordinary Meshenger playback never receives
+ * this one-shot hint.
+ */
+export const sharedVideoSourceRefreshCookieName = '__Secure-vidak-shared-video-source-refresh';
+export const sharedVideoSourceRefreshCookiePath = '/api/evault/videos';
+export const sharedVideoSourceRefreshCookieTtlSeconds = 15;
+
 export interface SharedVideoAuthorizationReceiptCookieOptions {
   httpOnly: true;
   secure: true;
   sameSite: 'lax';
   path: typeof sharedVideoAuthorizationReceiptCookiePath;
   maxAge: typeof sharedVideoAuthorizationReceiptTtlSeconds;
+}
+
+export interface SharedVideoStreamAuthorizationReceiptCookieOptions {
+  httpOnly: true;
+  secure: true;
+  sameSite: 'lax';
+  path: string;
+  maxAge: typeof sharedVideoAuthorizationReceiptTtlSeconds;
+}
+
+export interface SharedVideoSourceRefreshCookieOptions {
+  httpOnly: true;
+  secure: true;
+  sameSite: 'lax';
+  path: typeof sharedVideoSourceRefreshCookiePath;
+  maxAge: typeof sharedVideoSourceRefreshCookieTtlSeconds;
 }
 
 export interface SharedVideoAuthorizationReceiptInput {
@@ -141,6 +181,22 @@ export function verifySharedVideoAuthorizationReceipt(
   return constantTimeEqual(claims.u, expectedViewer) && constantTimeEqual(claims.s, expectedStream);
 }
 
+/**
+ * Server-only, domain-separated lookup key for process-local receipt caches.
+ * It is intentionally not a raw hash: an opaque receipt still never becomes
+ * a dictionary key in RAM, metrics, or a diagnostic string.
+ */
+export function fingerprintSharedVideoAuthorizationReceipt(
+  receipt: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return createHmac('sha256', receiptKey(env))
+    .update(localResolutionFingerprintDomain)
+    .update('\u0000')
+    .update(receipt)
+    .digest('base64url');
+}
+
 /** Cookie attributes for writing the opaque receipt from a Route Handler. */
 export function sharedVideoAuthorizationReceiptCookieOptions(): SharedVideoAuthorizationReceiptCookieOptions {
   return {
@@ -149,6 +205,56 @@ export function sharedVideoAuthorizationReceiptCookieOptions(): SharedVideoAutho
     sameSite: 'lax',
     path: sharedVideoAuthorizationReceiptCookiePath,
     maxAge: sharedVideoAuthorizationReceiptTtlSeconds,
+  };
+}
+
+/**
+ * Returns the exact API subtree for an opaque eVault stream. Stream IDs are
+ * validated before they become part of a Set-Cookie Path; their accepted
+ * alphabet is URL-path-safe, and encoding keeps this contract explicit.
+ */
+export function sharedVideoStreamAuthorizationReceiptCookiePath(streamId: string): string {
+  return `/api/evault/videos/${encodeURIComponent(requireOpaqueStreamId(streamId))}`;
+}
+
+/** Cookie attributes for the eVault stream-isolated authorization receipt. */
+export function sharedVideoStreamAuthorizationReceiptCookieOptions(
+  streamId: string,
+): SharedVideoStreamAuthorizationReceiptCookieOptions {
+  return {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: sharedVideoStreamAuthorizationReceiptCookiePath(streamId),
+    maxAge: sharedVideoAuthorizationReceiptTtlSeconds,
+  };
+}
+
+/** Cookie contract for the short one-shot source-refresh recovery marker. */
+export function sharedVideoSourceRefreshCookieOptions(): SharedVideoSourceRefreshCookieOptions {
+  return {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: sharedVideoSourceRefreshCookiePath,
+    maxAge: sharedVideoSourceRefreshCookieTtlSeconds,
+  };
+}
+
+/** Use the same narrow scope when consuming the recovery marker. */
+export function clearSharedVideoSourceRefreshCookieOptions(): {
+  httpOnly: true;
+  secure: true;
+  sameSite: 'lax';
+  path: typeof sharedVideoSourceRefreshCookiePath;
+  maxAge: 0;
+} {
+  return {
+    httpOnly: true,
+    secure: true,
+    sameSite: 'lax',
+    path: sharedVideoSourceRefreshCookiePath,
+    maxAge: 0,
   };
 }
 

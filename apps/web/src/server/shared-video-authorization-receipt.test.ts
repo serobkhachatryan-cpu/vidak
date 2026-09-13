@@ -1,11 +1,20 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  clearSharedVideoSourceRefreshCookieOptions,
+  fingerprintSharedVideoAuthorizationReceipt,
   mintSharedVideoAuthorizationReceipt,
   sharedVideoAuthorizationReceiptCookieName,
   sharedVideoAuthorizationReceiptCookieOptions,
   sharedVideoAuthorizationReceiptCookiePath,
   sharedVideoAuthorizationReceiptTtlMs,
   sharedVideoAuthorizationReceiptTtlSeconds,
+  sharedVideoSourceRefreshCookieName,
+  sharedVideoSourceRefreshCookieOptions,
+  sharedVideoSourceRefreshCookiePath,
+  sharedVideoSourceRefreshCookieTtlSeconds,
+  sharedVideoStreamAuthorizationReceiptCookieName,
+  sharedVideoStreamAuthorizationReceiptCookieOptions,
+  sharedVideoStreamAuthorizationReceiptCookiePath,
   verifySharedVideoAuthorizationReceipt,
 } from './shared-video-authorization-receipt';
 
@@ -36,6 +45,16 @@ describe('shared-video authorization receipts', () => {
     expect(
       verifySharedVideoAuthorizationReceipt({ receipt, viewerEName, streamId, env, now }),
     ).toBe(true);
+  });
+
+  it('derives a secret-keyed local cache fingerprint without retaining the receipt', () => {
+    const receipt = mint();
+    const fingerprint = fingerprintSharedVideoAuthorizationReceipt(receipt, env);
+
+    expect(fingerprint).not.toContain(receipt);
+    expect(fingerprint).not.toContain(viewerEName);
+    expect(fingerprintSharedVideoAuthorizationReceipt(receipt, env)).toBe(fingerprint);
+    expect(fingerprintSharedVideoAuthorizationReceipt(`${receipt}x`, env)).not.toBe(fingerprint);
   });
 
   it('rejects a receipt for a different viewer or stream', () => {
@@ -141,6 +160,44 @@ describe('shared-video authorization receipts', () => {
       sameSite: 'lax',
       path: sharedVideoAuthorizationReceiptCookiePath,
       maxAge: sharedVideoAuthorizationReceiptTtlSeconds,
+    });
+  });
+
+  it('isolates eVault authorization receipts to the exact stream route', () => {
+    expect(sharedVideoStreamAuthorizationReceiptCookieName).toBe(
+      '__Secure-vidak-shared-video-stream-authorization',
+    );
+    expect(sharedVideoStreamAuthorizationReceiptCookiePath(streamId)).toBe(
+      `/api/evault/videos/${streamId}`,
+    );
+    expect(sharedVideoStreamAuthorizationReceiptCookieOptions(streamId)).toEqual({
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: `/api/evault/videos/${streamId}`,
+      maxAge: sharedVideoAuthorizationReceiptTtlSeconds,
+    });
+    expect(() => sharedVideoStreamAuthorizationReceiptCookiePath('not/a-stream')).toThrow(
+      /opaque stream ID/i,
+    );
+  });
+
+  it('provides a short, narrowly scoped one-shot source-refresh marker', () => {
+    expect(sharedVideoSourceRefreshCookieName).toBe('__Secure-vidak-shared-video-source-refresh');
+    expect(sharedVideoSourceRefreshCookiePath).toBe('/api/evault/videos');
+    expect(sharedVideoSourceRefreshCookieOptions()).toEqual({
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: sharedVideoSourceRefreshCookiePath,
+      maxAge: sharedVideoSourceRefreshCookieTtlSeconds,
+    });
+    expect(clearSharedVideoSourceRefreshCookieOptions()).toEqual({
+      httpOnly: true,
+      secure: true,
+      sameSite: 'lax',
+      path: sharedVideoSourceRefreshCookiePath,
+      maxAge: 0,
     });
   });
 });
