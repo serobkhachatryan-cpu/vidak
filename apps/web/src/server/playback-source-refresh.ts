@@ -332,35 +332,36 @@ export class PostgresPlaybackSourceRefreshStore implements PlaybackSourceRefresh
   async read(input: PlaybackSourceRefreshReadInput): Promise<PlaybackSourceRefreshState> {
     const authorized = this.authorizeReceipt(input);
     if (!authorized) return { kind: 'unavailable' };
-    try {
-      const [row] = await this.db
-        .select()
-        .from(playbackSourceRefreshEpochs)
-        .where(eq(playbackSourceRefreshEpochs.bindingHash, authorized.bindingHash))
-        .limit(1);
-      if (!row || row.expiresAt.getTime() <= authorized.now) return { kind: 'absent' };
-      if (row.status === 'resolving') {
-        // An active pending row fences stale receipt-cache fallback. A lease
-        // expiry is not terminal, however: claim() already permits a new
-        // epoch at that point, so expose a retryable state rather than making
-        // playback wait for the much longer state-retention TTL.
-        if (!row.leaseExpiresAt || row.leaseExpiresAt.getTime() <= authorized.now) {
-          return { kind: 'retryable', epoch: row.epoch };
-        }
-        return { kind: 'resolving', epoch: row.epoch };
+    // Keep a storage failure distinct from a valid durable `unavailable`
+    // state. The playback route may safely resolve a fresh authorized source
+    // on an initial open when Postgres is temporarily unavailable, but it
+    // must never do that after an upstream source URL was rejected. Collapsing
+    // both cases here forced ordinary opens into the latter, terminal path.
+    const [row] = await this.db
+      .select()
+      .from(playbackSourceRefreshEpochs)
+      .where(eq(playbackSourceRefreshEpochs.bindingHash, authorized.bindingHash))
+      .limit(1);
+    if (!row || row.expiresAt.getTime() <= authorized.now) return { kind: 'absent' };
+    if (row.status === 'resolving') {
+      // An active pending row fences stale receipt-cache fallback. A lease
+      // expiry is not terminal, however: claim() already permits a new
+      // epoch at that point, so expose a retryable state rather than making
+      // playback wait for the much longer state-retention TTL.
+      if (!row.leaseExpiresAt || row.leaseExpiresAt.getTime() <= authorized.now) {
+        return { kind: 'retryable', epoch: row.epoch };
       }
-      if (row.status !== 'ready' || !row.encryptedPayload) return { kind: 'unavailable' };
-      const mediaUrl = decryptPayload(
-        row.encryptedPayload,
-        authorized.bindingHash,
-        row.epoch,
-        this.encryptionKey,
-      );
-      if (!mediaUrl) return { kind: 'unavailable' };
-      return { kind: 'ready', epoch: row.epoch, mediaUrl };
-    } catch {
-      return { kind: 'unavailable' };
+      return { kind: 'resolving', epoch: row.epoch };
     }
+    if (row.status !== 'ready' || !row.encryptedPayload) return { kind: 'unavailable' };
+    const mediaUrl = decryptPayload(
+      row.encryptedPayload,
+      authorized.bindingHash,
+      row.epoch,
+      this.encryptionKey,
+    );
+    if (!mediaUrl) return { kind: 'unavailable' };
+    return { kind: 'ready', epoch: row.epoch, mediaUrl };
   }
 
   private authorizeBinding(input: PlaybackSourceRefreshBinding): AuthorizedBinding | undefined {

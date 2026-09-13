@@ -72,6 +72,15 @@ interface CachedSourceRefreshState {
   state: PlaybackSourceRefreshState;
   expiresAt: number;
 }
+/**
+ * `unavailable` is a real durable fence: invalid/corrupt state must never
+ * permit stale-source fallback. A database error or deadline is different:
+ * an initial request has not observed a rejected source yet, so it can obtain
+ * a fresh currently authorized source without weakening that fence.
+ */
+type BoundSourceRefreshStateRead =
+  | { kind: 'state'; state: PlaybackSourceRefreshState }
+  | { kind: 'store_unavailable' };
 interface ReceiptResolutionRevision {
   revision: number;
   // A rejection must outlive every resolver that could already have captured
@@ -81,7 +90,7 @@ interface ReceiptResolutionRevision {
   expiresAt: number;
 }
 interface PendingSourceRefreshStateRead {
-  promise: Promise<PlaybackSourceRefreshState>;
+  promise: Promise<BoundSourceRefreshStateRead>;
   active: boolean;
   expiresAt: number;
 }
@@ -220,40 +229,55 @@ export async function GET(
           // replica. Once this receipt has a local source generation, later
           // ranges use its 45-second bounded authorization window instead of
           // synchronously reading Postgres for every seek.
-          const refreshState = await readBoundSourceRefreshState(
+          const refreshRead = await readBoundSourceRefreshState(
             authorizationReceipt,
             session.user.eName,
             candidateStreamId,
           );
-          if (refreshState.kind === 'ready') {
-            await library.inspectPlayableStream(session.user, candidateStreamId, {
-              priority: 'interactive',
-              signal: request.signal,
+          if (refreshRead.kind === 'store_unavailable') {
+            // There is no rejected media URL on this initial path. Fall
+            // through to a fresh, currently authorized resolver rather than
+            // pretending an unavailable database is a durable stale-source
+            // fence. Any actual upstream rejection below still takes the
+            // strict cross-replica recovery path and fails closed if its
+            // durable state cannot be read.
+            reportOperationalEvent({
+              category: 'video_playback',
+              correlationId,
+              code: 'source_refresh_store_unavailable_initial',
             });
-            if (
-              library.adoptReadyPlaybackSourceAfterAuthorizationReceipt?.(
-                session.user,
-                candidateStreamId,
-                authorizationReceipt,
-                refreshState.mediaUrl,
-              ) === false
-            ) {
+          } else {
+            const refreshState = refreshRead.state;
+            if (refreshState.kind === 'ready') {
+              await library.inspectPlayableStream(session.user, candidateStreamId, {
+                priority: 'interactive',
+                signal: request.signal,
+              });
+              if (
+                library.adoptReadyPlaybackSourceAfterAuthorizationReceipt?.(
+                  session.user,
+                  candidateStreamId,
+                  authorizationReceipt,
+                  refreshState.mediaUrl,
+                ) === false
+              ) {
+                throw sourceRefreshUnavailable();
+              }
+              usedReceiptBoundResolutionCache = authorizationReceipt;
+              rememberReceiptResolution(authorizationReceipt, refreshState.mediaUrl);
+              recordMediaResolutionTiming(cachedResolutionTiming());
+              return refreshState.mediaUrl;
+            }
+            if (refreshState.kind === 'retryable') {
+              // The former owner died after it fenced the old source. Take a
+              // new epoch instead of falling back to that source or waiting for
+              // the state-retention TTL to elapse.
+              library.inspectBoundStream(session.user, candidateStreamId);
+              return resolveFreshSource(candidateStreamId);
+            }
+            if (refreshState.kind === 'resolving' || refreshState.kind === 'unavailable') {
               throw sourceRefreshUnavailable();
             }
-            usedReceiptBoundResolutionCache = authorizationReceipt;
-            rememberReceiptResolution(authorizationReceipt, refreshState.mediaUrl);
-            recordMediaResolutionTiming(cachedResolutionTiming());
-            return refreshState.mediaUrl;
-          }
-          if (refreshState.kind === 'retryable') {
-            // The former owner died after it fenced the old source. Take a
-            // new epoch instead of falling back to that source or waiting for
-            // the state-retention TTL to elapse.
-            library.inspectBoundStream(session.user, candidateStreamId);
-            return resolveFreshSource(candidateStreamId);
-          }
-          if (refreshState.kind === 'resolving' || refreshState.kind === 'unavailable') {
-            throw sourceRefreshUnavailable();
           }
         }
         if (authorizationReceipt && !options?.bypassLegacyReceiptResolutionCache) {
@@ -445,12 +469,14 @@ export async function GET(
             proof,
           );
           if (!readReceipt) return { kind: 'unavailable' };
-          const state = await readBoundSourceRefreshState(
+          const refreshRead = await readBoundSourceRefreshState(
             readReceipt,
             session.user.eName,
             candidateStreamId,
             options,
           );
+          const state =
+            refreshRead.kind === 'state' ? refreshRead.state : ({ kind: 'unavailable' } as const);
           return library.playbackSourceRefreshReadReceiptAfterCurrentProof(
             session.user,
             candidateStreamId,
@@ -507,11 +533,16 @@ export async function GET(
       // this replica was still using its receipt-local source generation. On
       // a rejection, read the epoch once before claiming: consume a different
       // ready handoff rather than needlessly creating a third recovery epoch.
-      const refreshState = await readBoundSourceRefreshState(
+      const refreshRead = await readBoundSourceRefreshState(
         authorizationReceipt,
         session.user.eName,
         candidateStreamId,
       );
+      // Once an upstream URL has actually failed, an unreadable durable store
+      // cannot safely fall back to the stale source. Preserve the fence and
+      // let the bounded browser retry surface a recoverable failure instead.
+      if (refreshRead.kind === 'store_unavailable') throw sourceRefreshUnavailable();
+      const refreshState = refreshRead.state;
       if (refreshState.kind === 'ready' && refreshState.mediaUrl !== rejectedMediaUrl) {
         await library.inspectPlayableStream(session.user, candidateStreamId, {
           priority: 'interactive',
@@ -533,12 +564,14 @@ export async function GET(
         return refreshState.mediaUrl;
       }
       const readDifferentReadySource = async (): Promise<string | undefined> => {
-        const state = await readBoundSourceRefreshState(
+        const refreshRead = await readBoundSourceRefreshState(
           authorizationReceipt,
           session.user.eName,
           candidateStreamId,
           { forceFresh: true },
         );
+        if (refreshRead.kind === 'store_unavailable') return undefined;
+        const state = refreshRead.state;
         if (state.kind === 'ready' && state.mediaUrl !== rejectedMediaUrl) {
           await library.inspectPlayableStream(session.user, candidateStreamId, {
             priority: 'interactive',
@@ -935,7 +968,7 @@ async function readBoundSourceRefreshState(
   viewerEName: string,
   streamId: string,
   options?: { forceFresh?: boolean },
-): Promise<PlaybackSourceRefreshState> {
+): Promise<BoundSourceRefreshStateRead> {
   const now = Date.now();
   pruneReceiptLocalState(now);
   const baseKey = receiptResolutionCacheKey(receipt);
@@ -946,7 +979,9 @@ async function readBoundSourceRefreshState(
     ? `${baseKey}\u0000force-refresh-read:${nextForcedSourceRefreshReadId++}`
     : baseKey;
   const cached = cachedSourceRefreshStates.get(key);
-  if (!options?.forceFresh && cached && cached.expiresAt > now) return cached.state;
+  if (!options?.forceFresh && cached && cached.expiresAt > now) {
+    return { kind: 'state', state: cached.state };
+  }
 
   const existing = pendingSourceRefreshStateReads.get(key);
   // Keep a timed-out database operation tracked until it truly settles. A
@@ -954,24 +989,27 @@ async function readBoundSourceRefreshState(
   // let every later range create another live query and exhaust the pool.
   if (existing) return existing.promise;
   if (pendingSourceRefreshStateReads.size >= maxPendingReceiptResolutionReads) {
-    return { kind: 'unavailable' };
+    return { kind: 'store_unavailable' };
   }
 
   const entry: PendingSourceRefreshStateRead = {
-    promise: Promise.resolve({ kind: 'unavailable' }),
+    promise: Promise.resolve({ kind: 'store_unavailable' }),
     active: true,
     expiresAt: now + sourceRefreshReadTimeoutMs,
   };
   const databaseRead = Promise.resolve()
     .then(() => readPlaybackSourceRefresh({ receipt, viewerEName, streamId }))
-    .catch((): PlaybackSourceRefreshState => ({ kind: 'unavailable' }));
+    .then((state): BoundSourceRefreshStateRead => ({ kind: 'state', state }))
+    .catch((): BoundSourceRefreshStateRead => ({ kind: 'store_unavailable' }));
   const completed = databaseRead
-    .then((state) => {
+    .then((result) => {
       if (!entry.active || pendingSourceRefreshStateReads.get(key) !== entry) {
-        return { kind: 'unavailable' } as PlaybackSourceRefreshState;
+        return { kind: 'store_unavailable' } as BoundSourceRefreshStateRead;
       }
-      if (!options?.forceFresh) rememberSourceRefreshStateByKey(key, state, Date.now());
-      return state;
+      if (result.kind === 'state' && !options?.forceFresh) {
+        rememberSourceRefreshStateByKey(key, result.state, Date.now());
+      }
+      return result;
     })
     .finally(() => {
       if (pendingSourceRefreshStateReads.get(key) === entry) {
@@ -980,10 +1018,10 @@ async function readBoundSourceRefreshState(
     });
 
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<PlaybackSourceRefreshState>((resolve) => {
+  const deadline = new Promise<BoundSourceRefreshStateRead>((resolve) => {
     timeout = setTimeout(() => {
       entry.active = false;
-      resolve({ kind: 'unavailable' });
+      resolve({ kind: 'store_unavailable' });
     }, sourceRefreshReadTimeoutMs);
   });
   // Store the deadline-wrapped promise, not the raw database read. Every

@@ -234,6 +234,19 @@ describe('playback source-refresh store', () => {
     });
   });
 
+  it('surfaces a durable storage read failure instead of misrepresenting it as a source fence', async () => {
+    const unavailableDatabase = {
+      select: vi.fn(() => {
+        throw new Error('playback source refresh storage unavailable');
+      }),
+    } as unknown as W3dsDatabase;
+    const store = new PostgresPlaybackSourceRefreshStore(unavailableDatabase, { env });
+
+    await expect(store.read({ ...binding(), receipt: receipt() })).rejects.toThrow(
+      'playback source refresh storage unavailable',
+    );
+  });
+
   it('rejects a ciphertext transplanted to another viewer-stream binding', async () => {
     const { database, replicaA, replicaB } = await createStorePair();
     const first = acquired(await replicaA.claim(binding(streamA)));

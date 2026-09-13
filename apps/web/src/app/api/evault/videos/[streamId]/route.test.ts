@@ -144,6 +144,47 @@ describe('eVault video stream route', () => {
     );
   });
 
+  it('resolves a fresh authorized source when the initial durable fence lookup fails', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
+    const receipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'initial-store-fallback',
+      env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
+    });
+    const resolveMediaUrl = vi
+      .fn()
+      .mockResolvedValue('https://media.example/initial-store-fallback.mp4');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
+    mocks.readPlaybackSourceRefresh.mockRejectedValue(new Error('temporary Postgres outage'));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response('fresh bytes', { status: 206 }))),
+    );
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/evault/videos/initial-store-fallback', {
+        headers: {
+          authorization: 'Bearer access-token',
+          cookie: `${sharedVideoAuthorizationReceiptCookieName}=${receipt}`,
+        },
+      }),
+      { params: Promise.resolve({ streamId: 'initial-store-fallback' }) },
+    );
+
+    expect(response.status).toBe(206);
+    expect(resolveMediaUrl).toHaveBeenCalledWith(
+      viewer,
+      'initial-store-fallback',
+      expect.objectContaining({ hasRecentSharedAuthorizationReceipt: true }),
+    );
+    expect(operationalLogs.map((line) => JSON.parse(line))).toContainEqual(
+      expect.objectContaining({
+        category: 'video_playback',
+        code: 'source_refresh_store_unavailable_initial',
+      }),
+    );
+  });
+
   it('keeps video A warm after video B overwrites the legacy receipt cookie', async () => {
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
     const receiptForA = mintSharedVideoAuthorizationReceipt({
@@ -309,6 +350,31 @@ describe('eVault video stream route', () => {
 
     expect(response.status).toBe(503);
     expect(mocks.getPlaybackResolutionCache).not.toHaveBeenCalled();
+    expect(resolveMediaUrl).not.toHaveBeenCalled();
+  });
+
+  it('keeps an explicit unavailable durable state fenced on an initial source request', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
+    const receipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'explicit-durable-fence',
+      env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
+    });
+    const resolveMediaUrl = vi.fn();
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
+    mocks.readPlaybackSourceRefresh.mockResolvedValue({ kind: 'unavailable' });
+
+    const response = await GET(
+      new NextRequest('https://vidak.example/api/evault/videos/explicit-durable-fence', {
+        headers: {
+          authorization: 'Bearer access-token',
+          cookie: `${sharedVideoAuthorizationReceiptCookieName}=${receipt}`,
+        },
+      }),
+      { params: Promise.resolve({ streamId: 'explicit-durable-fence' }) },
+    );
+
+    expect(response.status).toBe(503);
     expect(resolveMediaUrl).not.toHaveBeenCalled();
   });
 
@@ -650,7 +716,7 @@ describe('eVault video stream route', () => {
     expect(fetcher).toHaveBeenNthCalledWith(3, freshUrl, expect.anything());
   });
 
-  it('bounds a shared stalled durable read for every concurrent range', async () => {
+  it('falls back to a fresh source when a shared initial durable read stalls', async () => {
     vi.useFakeTimers();
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
     const receipt = mintSharedVideoAuthorizationReceipt({
@@ -658,8 +724,15 @@ describe('eVault video stream route', () => {
       streamId: 'stalled-state-read',
       env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
     });
-    mocks.createLibrary.mockReturnValue({ resolveMediaUrl: vi.fn() });
+    const resolveMediaUrl = vi
+      .fn()
+      .mockResolvedValue('https://media.example/stalled-state-read-fallback.mp4');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
     mocks.readPlaybackSourceRefresh.mockReturnValue(new Promise(() => undefined));
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => Promise.resolve(new Response('fresh bytes', { status: 206 }))),
+    );
     const request = () =>
       GET(
         new NextRequest('https://vidak.example/api/evault/videos/stalled-state-read', {
@@ -676,9 +749,10 @@ describe('eVault video stream route', () => {
       await vi.advanceTimersByTimeAsync(0);
       const second = request();
       await vi.advanceTimersByTimeAsync(500);
-      await expect(first).resolves.toMatchObject({ status: 503 });
-      await expect(second).resolves.toMatchObject({ status: 503 });
+      await expect(first).resolves.toMatchObject({ status: 206 });
+      await expect(second).resolves.toMatchObject({ status: 206 });
       expect(mocks.readPlaybackSourceRefresh).toHaveBeenCalledTimes(1);
+      expect(resolveMediaUrl).toHaveBeenCalledTimes(2);
     } finally {
       vi.useRealTimers();
     }
