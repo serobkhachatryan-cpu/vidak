@@ -9561,6 +9561,25 @@ function sharedStreamProbes(grant: StreamGrant): SharedSpaceProbe[] {
         },
       ];
     }
+    // A sealed direct-chat context identifies the only current authority for
+    // this share. A GroupManifest belongs to a different conversation model;
+    // probing it as well doubles the eVault work for every direct Watch and
+    // can exhaust a platform-wide source quota before the direct proof wins.
+    // Keep the compatibility pair solely for pre-context legacy grants where
+    // Vidak genuinely cannot distinguish a historic direct share from a
+    // historic group share.
+    if (grant.sourceChatKind === 'direct') {
+      return [
+        {
+          eName: sourceSpaceKey,
+          kind: 'direct',
+          chatId: grant.sourceChatId,
+          ...(grant.sourceViewerChatGrantId
+            ? { viewerChatGrantId: grant.sourceViewerChatGrantId }
+            : {}),
+        },
+      ];
+    }
     return [
       {
         eName: sourceSpaceKey,
