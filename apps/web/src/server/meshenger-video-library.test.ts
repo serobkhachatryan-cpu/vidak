@@ -2025,6 +2025,49 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('uses only the direct-chat proof for a known direct shared recording', async () => {
+    const library = configuredLibrary();
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/direct-recording',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'direct-chat',
+        sourceChatKind: 'direct',
+        sourceViewerChatGrantId: 'viewer-direct-chat-grant',
+        accessBasis: 'history',
+      },
+      secret,
+    );
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockResolvedValue({ access: 'ok', member: true });
+    stubInteractivePlatformToken();
+
+    try {
+      await expect(
+        library.inspectPlayableStream({ eName: '@person.w3id' }, streamId, {
+          priority: 'interactive',
+        }),
+      ).resolves.toEqual({ fileUri: 'w3ds://file?id=@friend.w3id/direct-recording' });
+      expect(probe).toHaveBeenCalledTimes(1);
+      expect(probe).toHaveBeenCalledWith(
+        { eName: '@person.w3id' },
+        {
+          eName: '@friend.w3id',
+          kind: 'direct',
+          chatId: 'direct-chat',
+          viewerChatGrantId: 'viewer-direct-chat-grant',
+        },
+        'interactive',
+        { signal: expect.any(AbortSignal) },
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('opens a fully addressed group CallSession without a GroupManifest proof', async () => {
     const viewer = { eName: '@person.w3id' };
     const streamId = exactGroupCallHistoryStream('group-full-recording');
