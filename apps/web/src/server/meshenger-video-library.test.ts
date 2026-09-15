@@ -29,6 +29,7 @@ import {
   documentedAuthorizationOntologies,
   documentedOntologyId,
 } from './video-space/documented-sources';
+import { beginInteractiveEVaultTrafficSession } from './video-space/evault-traffic-governor';
 import { createMemoryInventoryJobStore } from './video-space/job-store';
 import {
   rememberVerifiedSharedAccess,
@@ -11353,6 +11354,131 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('checkpoints active and queued eVault-preempted durable reads instead of treating them as scan failures', async () => {
+    const store = createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      status: 'running',
+      ledger: {
+        queue: [
+          {
+            type: 'group-chats',
+            spaceKey: '@group-a.w3id',
+            groupEName: '@group-a.w3id',
+            owner: '@group-a.w3id',
+            eVaultUri: 'https://group-a-vault.example',
+            after: 'resume-active-after-preemption',
+            attempts: 0,
+          },
+          {
+            type: 'group-chats',
+            spaceKey: '@group-b.w3id',
+            groupEName: '@group-b.w3id',
+            owner: '@group-b.w3id',
+            eVaultUri: 'https://group-b-vault.example',
+            after: 'resume-queued-after-preemption',
+            attempts: 0,
+          },
+        ],
+        drainFinished: false,
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
+      },
+    });
+    const inventoryController = new AbortController();
+    let notifySourceReadStarted: () => void = () => undefined;
+    const sourceReadStarted = new Promise<void>((resolve) => {
+      notifySourceReadStarted = resolve;
+    });
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification')
+          return Promise.resolve(json({ token: 'registry-platform-token' }));
+        if (url.host === 'group-a-vault.example' || url.host === 'group-b-vault.example') {
+          notifySourceReadStarted();
+          return new Promise<Response>((_resolve, reject) => {
+            const abort = () => reject(new DOMException('aborted', 'AbortError'));
+            if (init?.signal?.aborted) abort();
+            else init?.signal?.addEventListener('abort', abort, { once: true });
+          });
+        }
+        throw new Error(`Unexpected request: ${url.toString()}`);
+      }),
+    );
+    try {
+      const phases: string[] = [];
+      const pending = createMeshengerVideoLibrary(
+        {
+          W3DS_AUTH_PLATFORM_NAME: 'vidak',
+          W3DS_AUTH_JWT_SECRET: secret,
+          W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        },
+        { jobStore: store },
+      ).scanLibrary(
+        { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+        {
+          scope: 'all',
+          drain: true,
+          maxVaultsPerWave: 2,
+          onSnapshot: (_library, phase) => phases.push(phase),
+          signal: inventoryController.signal,
+        },
+      );
+
+      await sourceReadStarted;
+      const playback = beginInteractiveEVaultTrafficSession();
+      try {
+        await pending;
+      } finally {
+        playback.release();
+      }
+
+      const saved = await store.getByOwner('@person.w3id');
+      const open = saved ? await store.loadOpenTasks(saved.id) : [];
+      const resumed = Array.isArray(saved?.ledger.queue) ? saved.ledger.queue : [];
+
+      expect(phases.at(-1)).toBe('batch');
+      expect(saved?.status).toBe('running');
+      expect(saved?.ledger.drainFinished).toBe(false);
+      expect(saved?.completeness.retryNeeded).toBe(false);
+      expect(resumed).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'group-chats',
+            after: 'resume-active-after-preemption',
+            attempts: 0,
+          }),
+          expect.objectContaining({
+            type: 'group-chats',
+            after: 'resume-queued-after-preemption',
+            attempts: 0,
+          }),
+        ]),
+      );
+      expect(open.map((task) => task.payload)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            type: 'group-chats',
+            after: 'resume-active-after-preemption',
+            attempts: 0,
+          }),
+          expect.objectContaining({
+            type: 'group-chats',
+            after: 'resume-queued-after-preemption',
+            attempts: 0,
+          }),
+        ]),
+      );
+    } finally {
+      inventoryController.abort();
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('durably prewarms only the first source of retained shared call recordings', async () => {
     const store = createMemoryInventoryJobStore();
     const job = await store.createJob({
@@ -11363,11 +11489,13 @@ describe('Meshenger video library', () => {
     const secondSegment = 'w3ds://file?id=@media.w3id/retained-call-part-2';
     await store.saveJob({
       ...job,
-      status: 'complete',
+      // A production job remains running only because this optional warmup
+      // is queued. Pressure mode must finish it, not reseed the catalogue.
+      status: 'running',
       completeness: { ...completeInventory },
       ledger: {
         catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
-        drainFinished: true,
+        drainFinished: false,
         queue: [],
         found: [
           {
@@ -11706,5 +11834,89 @@ describe('Meshenger video library', () => {
       recordKey: 'call:@group.w3id/waiting-retained-call',
     });
     expect(warm).toHaveBeenCalledTimes(1);
+  });
+
+  it('removes optional retained shared-call warmups without removing the recording card', async () => {
+    const store = createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://person-vault.example',
+    });
+    const firstSegment = 'w3ds://file?id=@media.w3id/pressure-mode-call-part-1';
+    const recordKey = 'call:@group.w3id/pressure-mode-call';
+    const prewarm = {
+      type: 'prewarm-call-media',
+      recordKey,
+      fileUri: firstSegment,
+      attempts: 0,
+      notBefore: 0,
+    };
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: { ...completeInventory },
+      ledger: {
+        catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
+        drainFinished: true,
+        queue: [prewarm],
+        found: [
+          {
+            key: recordKey,
+            fileUris: [firstSegment],
+            kind: 'call-recording',
+            title: 'Retained recording remains visible',
+            accessScope: 'shared',
+            sourceId: 'call-recording',
+            sourceSpaceKey: '@group.w3id',
+            sourceGroupManifestId: 'current-group-manifest',
+            sourceChatId: 'group-chat',
+            sourceCallSessionId: 'group-call-1',
+            sourceCallSessionVault: '@group.w3id',
+            sourceRecordingVault: '@media.w3id',
+            sourceChatKind: 'group',
+            accessBasis: 'history',
+          },
+        ],
+      },
+    });
+    await store.enqueueTask({
+      jobId: job.id,
+      taskKey: 'prewarm:pressure-mode-call',
+      kind: 'prewarm-call-media',
+      vaultKey: '@group.w3id',
+      cursorAfter: null,
+      attempts: 0,
+      notBefore: 0,
+      priority: 0,
+      payload: prewarm,
+    });
+    const syncOpenTasks = vi.spyOn(store, 'syncOpenTasks');
+    const library = createMeshengerVideoLibrary(
+      {
+        W3DS_AUTH_PLATFORM_NAME: 'vidak',
+        W3DS_REGISTRY_BASE_URL: 'https://registry.example',
+        W3DS_AUTH_JWT_SECRET: secret,
+        VIDAK_SHARED_MEDIA_PREWARM_ENABLED: 'false',
+      },
+      { jobStore: store },
+    );
+
+    const result = await library.scanLibrary(
+      { eName: '@person.w3id', eVaultUri: 'https://person-vault.example' },
+      { scope: 'shared', drain: false, onSnapshot: () => undefined },
+    );
+    const saved = await store.getByOwner('@person.w3id');
+    const openTasks = await store.loadOpenTasks(job.id);
+
+    expect(result.items.map((item) => item.id)).toContain(recordKey);
+    expect(saved?.status).toBe('complete');
+    expect(saved?.ledger.drainFinished).toBe(true);
+    expect(saved?.ledger.queue).toEqual([]);
+    expect(openTasks).toEqual([]);
+    expect(syncOpenTasks).toHaveBeenCalledWith(
+      job.id,
+      [expect.objectContaining({ kind: 'prewarm-call-media' })],
+      [],
+    );
   });
 });
