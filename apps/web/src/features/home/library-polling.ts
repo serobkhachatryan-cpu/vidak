@@ -3,9 +3,13 @@ import type { InventoryCompleteness, InventoryDiscovery } from './video-space-mo
 // Discovery now continues on the server-side durable queue. The browser only
 // needs occasional progress updates; polling the full private catalogue every
 // couple of seconds makes the library compete with video playback.
-const activePollingDelayMs = 15_000;
-const deferredPollingDelayMs = 20_000;
-const rateLimitedPollingDelayMs = 30_000;
+// The durable server pump advances at most one eVault wave every 30 seconds.
+// Polling faster cannot produce new cards, but it can repeatedly hydrate a
+// large private catalogue and schedule source checks on the same host as the
+// player. Keep the UI observant without turning it into background pressure.
+const activePollingDelayMs = 30_000;
+const deferredPollingDelayMs = 45_000;
+const rateLimitedPollingDelayMs = 60_000;
 
 /**
  * Poll only while the server has background work to report. A terminal partial

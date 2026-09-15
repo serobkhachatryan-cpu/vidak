@@ -25,8 +25,8 @@ const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../..
 const env = { W3DS_AUTH_JWT_SECRET: 'playback-resolution-cache-test-secret-0123456789' };
 const viewerEName = '@viewer.w3id';
 const streamId = 'v2.opaque-stream-id_12345.signature';
-const mediaUrl = 'https://media.example.test/video.mp4?signature=source-token';
 const now = 1_750_000_000_000;
+const mediaUrl = signedMediaUrl('video.mp4');
 
 let databaseClient: PGlite | undefined;
 
@@ -42,6 +42,10 @@ function receipt(at = now): string {
 
 function binding(receiptValue = receipt(), at = now) {
   return { receipt: receiptValue, viewerEName, streamId, now: at };
+}
+
+function signedMediaUrl(path: string, expiresAt = now + 10 * 60_000): string {
+  return `https://media.example.test/${path}?expires=${Math.floor(expiresAt / 1000)}&signature=source-token`;
 }
 
 async function createPgliteCache(): Promise<{
@@ -131,12 +135,27 @@ describe('playback-resolution cache', () => {
     await expect(
       writer.put({
         ...binding(nextReceipt, nextNow),
-        mediaUrl: 'https://media.example.test/replacement.mp4?signature=second-token',
+        mediaUrl: signedMediaUrl('replacement.mp4', nextNow + 10 * 60_000),
       }),
     ).resolves.toBe(true);
     const rows = await database.select().from(playbackResolutionCache);
     expect(rows).toHaveLength(1);
     await expect(reader.get(binding(firstReceipt, nextNow))).resolves.toBeUndefined();
+  });
+
+  it('expires a durable handoff before its explicitly signed source URL expires', async () => {
+    const { writer, reader } = await createPgliteCache();
+    const receiptValue = receipt();
+    const sourceExpiresAt = now + 30_000;
+    const shortLivedUrl = signedMediaUrl('short-lived.mp4', sourceExpiresAt);
+
+    await expect(writer.put({ ...binding(receiptValue), mediaUrl: shortLivedUrl })).resolves.toBe(
+      true,
+    );
+    // The cache leaves the source-opening safety margin, rather than trusting
+    // the receipt's longer 45-second lifetime.
+    await expect(reader.get(binding(receiptValue, now + 14_999))).resolves.toBe(shortLivedUrl);
+    await expect(reader.get(binding(receiptValue, now + 15_000))).resolves.toBeUndefined();
   });
 
   it('declines unsafe URL shapes and never turns them into cache entries', async () => {
@@ -149,6 +168,17 @@ describe('playback-resolution cache', () => {
     ]) {
       await expect(cache.put({ ...binding(), mediaUrl: unsafeUrl })).resolves.toBe(false);
     }
+    await expect(cache.get(binding())).resolves.toBeUndefined();
+  });
+
+  it('does not persist a redirect without a portable source-expiry deadline', async () => {
+    const cache = new InMemoryPlaybackResolutionCache({ env });
+    await expect(
+      cache.put({
+        ...binding(),
+        mediaUrl: 'https://media.example.test/video.mp4?signature=opaque-source-token',
+      }),
+    ).resolves.toBe(false);
     await expect(cache.get(binding())).resolves.toBeUndefined();
   });
 

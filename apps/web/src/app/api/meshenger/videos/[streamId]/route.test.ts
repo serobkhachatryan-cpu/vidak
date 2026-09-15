@@ -6,8 +6,6 @@ vi.mock('server-only', () => ({}));
 const mocks = vi.hoisted(() => ({
   createLibrary: vi.fn(),
   getAuthService: vi.fn(),
-  getPlaybackResolutionCache: vi.fn(),
-  deletePlaybackResolutionCache: vi.fn(),
 }));
 
 vi.mock('../../../../../server/meshenger-video-library', async (importOriginal) => ({
@@ -18,11 +16,6 @@ vi.mock('../../../../../server/meshenger-video-library', async (importOriginal) 
 vi.mock('../../../../../server/w3ds-auth', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../../server/w3ds-auth')>()),
   getW3dsAuthService: mocks.getAuthService,
-}));
-
-vi.mock('../../../../../server/playback-resolution-cache', () => ({
-  getPlaybackResolutionCache: mocks.getPlaybackResolutionCache,
-  deletePlaybackResolutionCache: mocks.deletePlaybackResolutionCache,
 }));
 
 import { MeshengerVideoLibraryError } from '../../../../../server/meshenger-video-library';
@@ -39,10 +32,6 @@ describe('Meshenger video stream route', () => {
   beforeEach(() => {
     mocks.createLibrary.mockReset();
     mocks.getAuthService.mockReset();
-    mocks.getPlaybackResolutionCache.mockReset();
-    mocks.getPlaybackResolutionCache.mockResolvedValue(undefined);
-    mocks.deletePlaybackResolutionCache.mockReset();
-    mocks.deletePlaybackResolutionCache.mockResolvedValue(false);
     mocks.getAuthService.mockReturnValue({
       getSession: vi.fn().mockResolvedValue({ user: viewer }),
     });
@@ -85,20 +74,16 @@ describe('Meshenger video stream route', () => {
     });
   });
 
-  it('uses a receipt-bound cache only after locally validating the signed stream', async () => {
+  it('uses the canonical resolver for a receipt-bearing legacy playback request', async () => {
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
     const receipt = mintSharedVideoAuthorizationReceipt({
       viewerEName: viewer.eName,
       streamId: 'stream-1',
       env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
     });
-    const inspectBoundStream = vi.fn();
-    const resolveMediaUrl = vi.fn();
-    mocks.createLibrary.mockReturnValue({ inspectBoundStream, resolveMediaUrl });
-    mocks.getPlaybackResolutionCache.mockResolvedValue(
-      'https://media.example/cached-private.mp4?source-token=server-only',
-    );
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('cached', { status: 206 })));
+    const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/canonical.mp4');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('canonical', { status: 206 })));
 
     const response = await GET(
       new NextRequest('https://vidak.example/api/meshenger/videos/stream-1', {
@@ -111,34 +96,28 @@ describe('Meshenger video stream route', () => {
     );
 
     expect(response.status).toBe(206);
-    await expect(response.text()).resolves.toBe('cached');
-    expect(mocks.getPlaybackResolutionCache).toHaveBeenCalledWith({
-      receipt,
-      viewerEName: viewer.eName,
-      streamId: 'stream-1',
+    await expect(response.text()).resolves.toBe('canonical');
+    expect(resolveMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1', {
+      hasRecentSharedAuthorizationReceipt: true,
     });
-    expect(inspectBoundStream).toHaveBeenCalledWith(viewer, 'stream-1');
-    expect(resolveMediaUrl).not.toHaveBeenCalled();
   });
 
-  it('deletes a rejected receipt-bound URL and resolves once without rereading it', async () => {
+  it('invalidates a rejected canonical URL and resolves it once more', async () => {
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
     const receipt = mintSharedVideoAuthorizationReceipt({
       viewerEName: viewer.eName,
       streamId: 'stream-1',
       env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
     });
-    const inspectBoundStream = vi.fn();
     const invalidateMediaUrl = vi.fn();
-    const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/refreshed.mp4');
+    const resolveMediaUrl = vi
+      .fn()
+      .mockResolvedValueOnce('https://media.example/rejected.mp4')
+      .mockResolvedValueOnce('https://media.example/refreshed.mp4');
     mocks.createLibrary.mockReturnValue({
-      inspectBoundStream,
       invalidateMediaUrl,
       resolveMediaUrl,
     });
-    mocks.getPlaybackResolutionCache.mockResolvedValue(
-      'https://media.example/rejected.mp4?source-token=server-only',
-    );
     vi.stubGlobal(
       'fetch',
       vi
@@ -159,20 +138,16 @@ describe('Meshenger video stream route', () => {
 
     expect(response.status).toBe(206);
     await expect(response.text()).resolves.toBe('fresh');
-    expect(mocks.deletePlaybackResolutionCache).toHaveBeenCalledWith({
-      receipt,
-      viewerEName: viewer.eName,
-      streamId: 'stream-1',
-    });
-    expect(mocks.getPlaybackResolutionCache).toHaveBeenCalledTimes(1);
-    expect(inspectBoundStream).toHaveBeenCalledWith(viewer, 'stream-1');
     expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1');
-    expect(resolveMediaUrl).toHaveBeenCalledWith(viewer, 'stream-1', {
+    expect(resolveMediaUrl).toHaveBeenNthCalledWith(1, viewer, 'stream-1', {
+      hasRecentSharedAuthorizationReceipt: true,
+    });
+    expect(resolveMediaUrl).toHaveBeenNthCalledWith(2, viewer, 'stream-1', {
       hasRecentSharedAuthorizationReceipt: true,
     });
   });
 
-  it('falls back to normal resolution when the receipt cache cannot be read', async () => {
+  it('does not depend on a legacy receipt cache for a receipt-bearing request', async () => {
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', receiptSecret);
     const receipt = mintSharedVideoAuthorizationReceipt({
       viewerEName: viewer.eName,
@@ -181,7 +156,6 @@ describe('Meshenger video stream route', () => {
     });
     const resolveMediaUrl = vi.fn().mockResolvedValue('https://media.example/recording.mp4');
     mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
-    mocks.getPlaybackResolutionCache.mockRejectedValue(new Error('cache unavailable'));
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('segment', { status: 206 })));
 
     const response = await GET(

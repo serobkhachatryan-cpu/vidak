@@ -11,11 +11,12 @@ import 'server-only';
 
 import type { AuthUser } from '@w3ds/auth';
 import {
-  type MeshengerPlaybackGrantConfig,
-  type MeshengerPlaybackGrantResult,
-  readMeshengerPlaybackGrantConfig,
-  requestMeshengerPlaybackGrant,
-} from './meshenger-playback-grant';
+  type EVaultMediaUrlCacheLookup,
+  getEVaultMediaUrlCache,
+  invalidateEVaultMediaUrlCache,
+  putEVaultMediaUrlCache,
+} from './evault-media-url-cache';
+import { resolvePrivateMediaUrlCacheExpiry } from './private-media-upstream';
 import {
   mintSharedVideoAuthorizationReceipt,
   verifySharedVideoAuthorizationReceipt,
@@ -38,7 +39,10 @@ import {
   resetBackgroundWorkPriorityForTests,
 } from './video-space/background-work-priority';
 import { parseRetryAfter, retryDelayMs, retryWithExponentialBackoff } from './video-space/backoff';
-import { assembleVideoSpaceCatalogue } from './video-space/catalogue';
+import {
+  assembleVideoSpaceCatalogue,
+  type VideoSpaceStreamGrantInput,
+} from './video-space/catalogue';
 import {
   hasCatalogueVersion,
   isStaleCatalogueVersion,
@@ -64,6 +68,13 @@ import {
   documentedAuthorizationOntologies,
   documentedOntologyId,
 } from './video-space/documented-sources';
+import {
+  coalesceGroupCallAccessProof,
+  type GroupCallAccessProof,
+  hasVerifiedGroupCallAccess,
+  invalidateVerifiedGroupCallAccess,
+  resetGroupCallAccessCacheForTests,
+} from './video-space/group-call-access-cache';
 import {
   inventoryTaskKey,
   inventoryVaultKey,
@@ -104,7 +115,12 @@ import {
 import { parseW3dsFileUri } from './w3ds-official-file-client';
 
 const callSessionOntology = documentedOntologyId('call-recording');
+// W3DS has two deployed GroupManifest schema identifiers. The primary writer
+// historically used the Chat ontology id, so every candidate is shape- and
+// eName-validated before membership is considered.
+const primaryGroupManifestOntology = documentedAuthorizationOntologies.groupManifestPrimary;
 const groupManifestOntology = documentedAuthorizationOntologies.groupManifest;
+const groupManifestOntologies = [primaryGroupManifestOntology, groupManifestOntology] as const;
 const chatOntology = documentedAuthorizationOntologies.chat;
 // Canonical W3DS User ontology. Legacy Chat participantIds can contain a
 // User envelope id (or the User body's `id`) instead of an eName. Resolving
@@ -117,6 +133,12 @@ const w3dsFileOntology = documentedOntologyId('w3ds-file');
 const pageSize = 100;
 const maxPages = 30;
 const requestTimeoutMs = 12_000;
+// Catalogue inventory is durable and resumable; a Watch request is not.
+// Never let a background eVault read occupy a constrained source for the
+// normal 12-second foreground budget. The durable task is checkpointed and
+// retried with backoff, while an interactive source read retains its own
+// bounded timeout below.
+const backgroundSourceRequestTimeoutMs = 2_500;
 // A shared Watch authorization can otherwise spend one 12-second request on
 // the indexed Chat query and another 12 seconds on each legacy-history page.
 // Bound one interactive proof as a whole so a slow, inconclusive remote source
@@ -129,6 +151,7 @@ const interactiveSharedProofTimeoutMs = 8_000;
 // outage we return a retryable result instead of silently beginning the old
 // multi-page history scan.
 const interactiveExactSharedCallProofTimeoutMs = 2_500;
+const interactiveGroupManifestHedgeDelayMs = 200;
 // Older eVaults can leave the indexed Chat lookup on a bounded legacy-history
 // scan. Give the normal indexed path a brief head start, then ask for the
 // known Chat envelope directly. The direct read is only a positive hedge: a
@@ -139,10 +162,9 @@ const interactiveDirectChatEnvelopeHedgeDelayMs = 250;
 // database into another foreground dependency: when this small budget expires
 // the existing remote proof begins exactly as it did before the pointer index.
 const viewerChatGrantPointerLookupBudgetMs = 25;
-// A cached shared redirect still needs a current source proof after the
-// positive-proof cache expires. Keep resumable inventory out of that bounded
-// foreground check, with a small scheduling margin, without extending the
-// pause for normal native-player Range requests that can reuse a proof.
+// Rechecking an already-cached redirect can be the only remaining foreground
+// source operation. Keep resumable inventory out of that bounded proof long
+// enough for its deadline without extending the ordinary cold-open head start.
 const interactiveCachedSharedProofReservationMs = interactiveSharedProofTimeoutMs + 1_000;
 // A source eVault address is only directory metadata, never permission. Keep
 // it long enough to cover a realistic browsing session so every cold Watch
@@ -155,6 +177,26 @@ const maxCachedEVaultResolutions = 256;
 // not let that optional attempt consume the whole interactive playback budget
 // before the proven metadata fallback starts.
 const directFileDereferenceTimeoutMs = 2_000;
+// Some older eVaults have a valid GraphQL File record but a slow or unavailable
+// HTTP File redirect. Start that compatibility read shortly after the direct
+// request instead of serially paying both budgets. The first validated owner-
+// eVault result wins; this is deliberately not a source-app fallback.
+const directFileMetadataHedgeDelayMs = 250;
+// A few legacy eVaults reply with `Retry-After: 0` while their rate limiter
+// is still draining the request that triggered it. Retrying in the same turn
+// merely turns one rate limit into a burst. Keep every retry short enough for
+// playback, but leave a real scheduling boundary before reopening that eVault.
+const rateLimitBackoffFloorMs = 250;
+// The `/files/:id` route is an optional compatibility fast path. When that
+// route itself is throttled, wait only a tiny bounded grace before moving to
+// the canonical metadata route; a long upstream Retry-After belongs to the
+// normal caller retry rather than an indefinitely spinning Watch request.
+const directFileRateLimitFallbackDelayMaxMs = 1_000;
+// The explicit Watch authorization runs immediately before the browser's
+// media GET. Give the encrypted cross-replica eVault handoff one small,
+// bounded opportunity to commit so a load balancer does not turn a completed
+// warmup into a second cold owner-eVault read on another replica.
+const eVaultMediaUrlHandoffBudgetMs = 150;
 const directFileFallbackTtlMs = 5 * 60_000;
 // A network timeout is not proof that the endpoint is permanently absent, but
 // retrying that optional fast path for every card makes a slow eVault feel
@@ -172,6 +214,32 @@ const maxRejectedAttempts = 4;
 // route still verifies the current user on every request.
 const streamLifetimeMs = 4 * 60 * 60 * 1000;
 const maxCachedMediaUrls = 256;
+// A catalogue resolver may already hold a canonical File URL. It can be used
+// only for the URL's own signed lifetime, never merely for the four-hour
+// playback grant. This is the caller ceiling passed to the shared cache
+// lifetime parser; unknown signed redirects remain an immediate short burst.
+const inventoryMediaUrlPrewarmMaxTtlMs = streamLifetimeMs;
+// Bump only when the durable CallSession first-byte warmer changes shape.
+// Existing completed catalogues then receive one bounded eVault-native warmup
+// pass without a destructive reindex or repeated work on every page load.
+const callMediaPrewarmVersion = 1;
+// A background cache fill may outlive one transient eVault request, but it is
+// never allowed to keep the catalogue incomplete or reserve the source for an
+// interactive Watch. Four total attempts match the established bounded source
+// retry budget while leaving each retry durable and independently preemptible.
+const maxInventoryMediaPrewarmAttempts = 4;
+// Older File records can return a fast 404 from the documented /files route
+// while their GraphQL metadata remains available. Never let the interactive
+// compatibility read enter the generic four-attempt retry chain: it used to
+// hold the player on "Opening private video" for roughly 35 seconds.
+const interactiveLegacyFileMetadataTimeoutMs = 5_000;
+// A ticket is the one user-confirmed opening of a continuous recording. When
+// its first source was not already warmed, let its canonical eVault metadata
+// request use the normal bounded source deadline rather than converting a
+// merely slow legacy File endpoint into an immediate unavailable player.
+// This is a fallback only; ordinary Watch starts stay fast through the
+// durable first-source warmer above.
+const initialRecordingLegacyFileMetadataTimeoutMs = requestTimeoutMs;
 const maxRenewedStreams = 256;
 // Keep recovery generations far longer than the bounded interactive source
 // work (12s request / 8s proof), then prune only entries with no pending work,
@@ -228,6 +296,8 @@ export interface MeshengerVideo {
   sourceReferenceId?: string;
   /** Server-only canonical File id that the reference must still target. */
   sourceReferenceFileId?: string;
+  /** Server-only HMAC for suppressing a confirmed stale shared card. */
+  sharedCardBindingHash?: string;
   accessBasis?: VideoAccessBasis;
 }
 
@@ -279,6 +349,11 @@ export class MeshengerVideoLibraryError extends Error {
       | 'unsafe_media_url',
     public readonly status: number,
     public readonly retryAfterMs?: number,
+    /**
+     * Set only after a completed, terminal live shared-source proof. This is
+     * an HMAC—not an eName, card id, stream grant, source ID, or media URL.
+     */
+    public readonly terminalSharedCardBindingHash?: string,
   ) {
     super(message);
     this.name = 'MeshengerVideoLibraryError';
@@ -302,11 +377,19 @@ interface Envelope {
 }
 interface StreamGrant {
   eName: string;
+  /** Server-only HMAC copied from the enclosing catalogue card. */
+  sharedCardBindingHash?: string;
   fileUri: string;
   /** The catalogue classification at the time this private grant was issued. */
   accessScope: EVaultVideoAccessScope;
   /** Authorization context for a shared source; signed but never client-readable. */
   sourceSpaceKey?: string;
+  /**
+   * A current GroupManifest discovered while indexing this group. It is
+   * encrypted inside the viewer-bound stream grant and never serialized into
+   * a catalogue card or browser response.
+   */
+  sourceGroupManifestId?: string;
   sourceChatId?: string;
   sourceViewerChatGrantId?: string;
   /** Canonical CallSession context for an exact shared-recording proof. */
@@ -326,7 +409,6 @@ interface Config {
   registryBaseUrl: string;
   platformName: string;
   signingSecret: string;
-  playbackGrantConfig?: MeshengerPlaybackGrantConfig;
 }
 interface CachedMediaUrl {
   url: string;
@@ -357,10 +439,6 @@ interface ActiveForcedRefresh {
 interface ForcedSourceRefreshContext {
   media: CacheWriteContext;
   eVault: CacheWriteContext;
-}
-interface FastSharedCallPlayback {
-  url: string;
-  cacheHit: boolean;
 }
 interface RenewedStream {
   eName: string;
@@ -393,6 +471,7 @@ type SourceReadPolicy =
   // foreground fail-fast work and interactive playback, while retaining the
   // normal one-attempt inventory semantics.
   | 'inventory-cancellable';
+type DeferredMediaMode = 'resolve' | 'prewarm';
 type ViewerIdentity = Pick<AuthUser, 'eName'> & Partial<Pick<AuthUser, 'eVaultUri'>>;
 export type MediaResolutionPriority = 'background' | 'warmup' | 'interactive';
 
@@ -473,9 +552,25 @@ export interface MediaResolutionOptions {
   onTiming?: (timing: MediaResolutionTiming) => void;
   /** Server-only, fixed source-proof context with no identifying values. */
   onAuthorizationContext?: (context: MediaAuthorizationTimingContext) => void;
+  /**
+   * Server-only continuous-recording ticket fallback. It gives the one
+   * user-confirmed source-zero request the normal bounded eVault deadline
+   * when a legacy File endpoint requires GraphQL metadata. Never map browser
+   * input directly to this option.
+   */
+  allowExtendedLegacyFileMetadataWait?: boolean;
 }
 export type SharedSpaceProbe =
-  | { eName: string; kind: 'group' }
+  | {
+      eName: string;
+      kind: 'group';
+      /**
+       * A server-sealed, previously verified current GroupManifest envelope.
+       * Playback still re-reads and validates it; this only avoids a broad
+       * eVault metadata search for normal shared-video playback.
+       */
+      manifestId?: string;
+    }
   | { eName: string; kind: 'direct'; chatId: string; viewerChatGrantId?: string }
   | { eName: string; kind: 'reference'; referenceId: string; fileId: string };
 export type SharedSpaceAccess = {
@@ -483,6 +578,12 @@ export type SharedSpaceAccess = {
   member: boolean;
 };
 type ExactSharedCallProofOutcome = 'not_eligible' | 'verified' | 'denied' | 'retry';
+interface DeferredGroupManifestFallback {
+  /** Starts the fallback immediately once the exact proof is inconclusive. */
+  startNow(): void;
+  /** Stops only an unstarted timer; never aborts shared source work in flight. */
+  cancelIfUnstarted(): void;
+}
 /**
  * A completed exact-record check can either prove the current share, identify
  * a contradiction in its current records, or be inconclusive for a legacy
@@ -518,6 +619,8 @@ interface GroupDiscovery {
   retryAfterMs?: number;
   vault?: ResolvedVault;
   currentMember?: boolean;
+  /** Exact current GroupManifest discovered during this inventory pass. */
+  currentManifestId?: string;
   openedChatIds?: string[];
   chatsComplete?: boolean;
   chatsCursor?: string;
@@ -527,6 +630,15 @@ interface GroupDiscovery {
 interface ResolvedVault {
   ownerEName: string;
   eVaultUri: string;
+}
+/**
+ * Persisted only inside the private inventory ledger. The manifest pointer is
+ * later sealed into a viewer stream, never surfaced in a catalogue card.
+ */
+interface OpenedGroup {
+  vault: ResolvedVault;
+  member: boolean;
+  currentManifestId?: string;
 }
 interface CachedEVaultResolution {
   vault: ResolvedVault;
@@ -544,6 +656,12 @@ interface ResolvedEVaultLookup {
 interface PendingMediaUrlResolution {
   promise: Promise<string>;
   timing: MediaResolutionTiming;
+}
+
+/** One settled branch of a canonical eVault File resolution hedge. */
+interface MediaUrlResolutionAttempt {
+  mediaUrl?: string | undefined;
+  error?: unknown;
 }
 
 /** Pending background work must never become the clock that a Watch click uses. */
@@ -677,6 +795,18 @@ const exactChatAuthorizationQuery = `query ExactChatAuthorization($ontologyId: I
     pageInfo { hasNextPage endCursor }
   }
 }`;
+// A GroupManifest is stored in the group's own eVault and has a required
+// scalar `eName` that is bound to that group. Looking up that exact record is
+// substantially lighter than downloading an arbitrary page of manifests and
+// then searching it locally. The response is still parsed and validated below
+// before it can authorize a File; older writers retain the bounded scan as a
+// compatibility fallback.
+const exactGroupManifestAuthorizationQuery = `query ExactGroupManifestAuthorization($ontologyId: ID!, $groupEName: String!, $first: Int!) {
+  metaEnvelopes(filter: { ontologyId: $ontologyId, search: { term: $groupEName, fields: ["eName"], mode: EXACT, caseSensitive: true } }, first: $first) {
+    edges { node { ${envelopeNode} } }
+    pageInfo { hasNextPage endCursor }
+  }
+}`;
 // A User participant can be stored as either the envelope id (handled by the
 // direct `metaEnvelope(id)` read) or the User body's documented `id`. This
 // query is the bounded exact fallback for the latter, not a history scan.
@@ -688,18 +818,12 @@ const exactUserIdentityQuery = `query ExactUserParticipantIdentity($ontologyId: 
 }`;
 const readQuery = `query MeshengerVideoEnvelope($id: ID!) { metaEnvelope(id: $id) { ${envelopeNode} } }`;
 const cachedMediaUrls = new Map<string, CachedMediaUrl>();
-/** Source-issued grants are already exact, short-lived shared-access proofs. */
-const cachedMeshengerPlaybackGrantUrls = new Map<string, CachedMediaUrl>();
 // A source refresh must invalidate not only completed cache entries but also
 // a resolution which was already in flight when the upstream rejection was
 // observed. Keep a logical generation per complete authorization context;
 // every writer compares its captured generation before it can cache a URL.
 const mediaSourceCacheGenerations = new Map<string, CacheGenerationState>();
 const activeForcedMediaSourceRefreshes = new Map<string, ActiveForcedRefresh>();
-const pendingMeshengerPlaybackGrantResolutions = new Map<
-  string,
-  Promise<MeshengerPlaybackGrantResult>
->();
 // Durable vault gates coordinate separate workers, but writing one to
 // Postgres is asynchronous. Keep the same short-lived gate in-process so an
 // inventory drain cannot start its next eVault page in the gap between a
@@ -738,6 +862,8 @@ const forcedSourceRefreshProofs = new WeakMap<
     sourceRefreshReadReceipt: string;
     /** A current shared proof must remain current while this capability is used. */
     sharedSources: SharedSpaceProbe[];
+    /** Exact current group CallSession proof for this one sealed File stream. */
+    groupCallProof?: GroupCallAccessProof;
   }
 >();
 // Native media elements retain their original `src` while issuing subsequent
@@ -795,8 +921,9 @@ function hasForcedSourceRefreshProof(
   // entry fails this capability closed without another browser-controlled
   // authorization path.
   return (
-    binding.sharedSources.length === 0 ||
-    binding.sharedSources.some((source) => hasVerifiedSharedAccess(viewerEName, source))
+    binding.sharedSources.some((source) => hasVerifiedSharedAccess(viewerEName, source)) ||
+    (binding.groupCallProof && hasVerifiedGroupCallAccess(viewerEName, binding.groupCallProof)) ||
+    (binding.sharedSources.length === 0 && !binding.groupCallProof)
   );
 }
 
@@ -848,6 +975,12 @@ function throwIfMediaResolutionAborted(signal: AbortSignal | undefined): void {
 function sourceRequestSignal(timeoutMs: number, signal?: AbortSignal): AbortSignal {
   const timeout = AbortSignal.timeout(timeoutMs);
   return signal ? AbortSignal.any([timeout, signal]) : timeout;
+}
+
+function sourceRequestTimeoutForPolicy(rateLimit: SourceReadPolicy): number {
+  return rateLimit === 'background-cancellable' || rateLimit === 'inventory-cancellable'
+    ? backgroundSourceRequestTimeoutMs
+    : requestTimeoutMs;
 }
 
 /** Combines a caller cancellation with a branch-local best-effort cancellation. */
@@ -943,8 +1076,10 @@ function getInventoryJobStoreForLibrary(): InventoryJobStore {
 }
 
 /**
- * Read-only Meshenger source. It indexes envelope references and metadata only;
- * public CDN URLs are resolved only inside `resolveMediaUrl` for the stream route.
+ * Read-only Meshenger source. It indexes envelope references and metadata only.
+ * A canonical File URL discovered during that read may be placed in the
+ * server-only, viewer-and-source-bound playback cache; it is never persisted
+ * in inventory records or serialized to a browser.
  */
 export class MeshengerVideoLibrary {
   private readonly jobStore: InventoryJobStore;
@@ -1071,11 +1206,23 @@ export class MeshengerVideoLibrary {
    * result through the existing short in-memory proof cache; no group data,
    * URL, or authorization decision is persisted.
    *
-   * This is intentionally called only from the first-page open path, because
-   * the playback verifier uses the same bounded GroupManifest read.
+   * This is intentionally called only after a strict GroupManifest validation
+   * during private inventory, so the playback verifier can reuse exactly the
+   * same bounded eVault proof for its short native-player burst.
    */
-  private rememberCurrentViewerGroupMembershipProof(viewerEName: string, groupEName: string): void {
+  private rememberCurrentViewerGroupMembershipProof(
+    viewerEName: string,
+    groupEName: string,
+    currentManifestId?: string,
+  ): void {
     rememberVerifiedSharedAccess(viewerEName, { eName: groupEName, kind: 'group' });
+    if (currentManifestId) {
+      rememberVerifiedSharedAccess(viewerEName, {
+        eName: groupEName,
+        kind: 'group',
+        manifestId: currentManifestId,
+      });
+    }
   }
 
   async list(user: Pick<AuthUser, 'eName' | 'eVaultUri'>): Promise<MeshengerVideo[]> {
@@ -1312,6 +1459,12 @@ export class MeshengerVideoLibrary {
             (record(item)?.accessScope !== 'shared' || hasReusableSharedProof(item)),
         )
       : [];
+    // Keep only the server-private current GroupManifest pointers already
+    // established by the prior pass. A later catalogue migration can reuse
+    // them to reseal retained cards immediately; every Watch still point-reads
+    // and validates the manifest, so this is not a persisted authorization
+    // decision.
+    const openedGroups = Array.isArray(job.ledger.openedGroups) ? job.ledger.openedGroups : [];
     const restarted: InventoryJobRecord = {
       ...activeJob,
       ownerEVaultUri,
@@ -1322,6 +1475,7 @@ export class MeshengerVideoLibrary {
         queue: [],
         drainFinished: false,
         catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
+        ...(openedGroups.length ? { openedGroups } : {}),
       },
       sourceCounts: emptySourceCounts(),
       updatedAt: this.now(),
@@ -1336,9 +1490,10 @@ export class MeshengerVideoLibrary {
     user: ViewerIdentity,
     space: SharedSpaceProbe,
     rateLimit: SourceReadPolicy = 'fail-fast',
-    options?: { signal?: AbortSignal },
+    options?: { signal?: AbortSignal; timing?: MediaResolutionTiming },
   ): Promise<SharedSpaceAccess> {
     const signal = options?.signal;
+    const timing = options?.timing;
     throwIfMediaResolutionAborted(signal);
     requireEName(user.eName);
     if (space.kind === 'reference') {
@@ -1466,7 +1621,10 @@ export class MeshengerVideoLibrary {
       return { access: 'missing', member: false };
     }
     const vaultRead = await this.readSource(
-      () => this.resolveEVault(space.eName, rateLimit, signal),
+      () =>
+        measureMediaResolutionPhase(timing, 'eVaultResolutionMs', () =>
+          this.resolveEVault(space.eName, rateLimit, signal),
+        ),
       undefined,
     );
     if (vaultRead.failure === 'denied') return { access: 'denied', member: false };
@@ -1475,13 +1633,48 @@ export class MeshengerVideoLibrary {
       return { access: 'retry', member: false };
     }
     const vault = vaultRead.value;
+    const pointedManifestId = space.manifestId;
+    if (pointedManifestId) {
+      // Inventory has already verified this envelope as the current
+      // GroupManifest for this exact group and viewer. Re-read it by its
+      // eVault id on every cold playback proof: this is a point lookup on
+      // modern eVaults, unlike the generic GroupManifest search which can
+      // scan a large shared vault. A stale/malformed pointer is never an
+      // authorization decision; retain the documented compatibility lookup
+      // below. A temporary source outage must remain retryable and must not
+      // fan out into the expensive fallback query.
+      const pointedManifest = await this.readSource(
+        () =>
+          this.readEnvelope(
+            vault.ownerEName,
+            vault.eVaultUri,
+            pointedManifestId,
+            rateLimit,
+            undefined,
+            signal,
+            timing,
+          ),
+        undefined,
+      );
+      if (pointedManifest.value) {
+        if (groupManifestEnvelopeAuthorizesViewer(pointedManifest.value, space.eName, user.eName)) {
+          return { access: 'ok', member: true };
+        }
+      } else if (isRetryFailure(pointedManifest.failure)) {
+        return { access: 'retry', member: false };
+      }
+    }
     const manifests = await this.readSource(
       () =>
-        this.listEnvelopes(vault.ownerEName, vault.eVaultUri, groupManifestOntology, undefined, {
-          maxPages: 1,
+        this.findCurrentViewerGroupManifestProof(
+          vault.ownerEName,
+          vault.eVaultUri,
+          space.eName,
+          user.eName,
           rateLimit,
-          ...(signal ? { signal } : {}),
-        }),
+          signal,
+          timing,
+        ),
       undefined,
     );
     if (manifests.failure === 'denied') return { access: 'denied', member: false };
@@ -1490,9 +1683,107 @@ export class MeshengerVideoLibrary {
       return { access: 'retry', member: false };
     }
     const member = manifests.value.items.some((item) =>
-      isCurrentGroupMember(item.parsed, user.eName),
+      groupManifestEnvelopeAuthorizesViewer(item, space.eName, user.eName),
     );
     return { access: 'ok', member };
+  }
+
+  /**
+   * A group recording may retain a canonical CallSession even when a later
+   * GroupManifest page is slow or unavailable. This is a deliberately narrow
+   * W3DS admission proof: the source-owned current CallSession must name this
+   * viewer, this group Chat, and this exact canonical File. It never shares
+   * a broad group-membership cache with another segment or recording.
+   */
+  private async probeExactGroupCallAccess(
+    user: ViewerIdentity,
+    proof: GroupCallAccessProof,
+    rateLimit: SourceReadPolicy,
+    signal?: AbortSignal,
+  ): Promise<SharedSpaceAccess> {
+    const vaultRead = await this.readSource(
+      () => this.resolveEVault(proof.callSessionVault, rateLimit, signal),
+      undefined,
+    );
+    // A directory/read failure is not a completed contradiction in the
+    // CallSession. Let the ordinary GroupManifest path decide instead.
+    if (vaultRead.failure || !vaultRead.value) return { access: 'retry', member: false };
+    const vault = vaultRead.value;
+    if (!sameEName(vault.ownerEName, proof.callSessionVault)) {
+      return { access: 'retry', member: false };
+    }
+    const callRead = await this.readSource(
+      () =>
+        this.readEnvelope(
+          vault.ownerEName,
+          vault.eVaultUri,
+          proof.callSessionId,
+          rateLimit,
+          undefined,
+          signal,
+        ),
+      undefined,
+    );
+    if (callRead.failure || !callRead.value) return { access: 'retry', member: false };
+    const matches = groupCallSessionMatchesExactSharedFile(callRead.value, proof, user.eName);
+    return matches ? { access: 'ok', member: true } : { access: 'denied', member: false };
+  }
+
+  private async resolveExactGroupCallAuthorization(
+    user: ViewerIdentity,
+    grant: StreamGrant,
+    priority: MediaResolutionPriority,
+    signal?: AbortSignal,
+    options?: { forceCurrent?: boolean },
+  ): Promise<ExactSharedCallProofOutcome> {
+    const proof = exactGroupCallProofContext(grant);
+    // Group CallSession reads are an exact, foreground admission path. A
+    // catalogue/poster sweep remains on the established broad GroupManifest
+    // path so it cannot turn every group card into a named remote-call read.
+    if (!proof || priority === 'background') return 'not_eligible';
+    const rateLimit: SourceReadPolicy =
+      priority === 'interactive'
+        ? 'interactive'
+        : priority === 'warmup'
+          ? 'warmup-cancellable'
+          : 'backoff';
+    const proofSignal =
+      priority === 'interactive'
+        ? sourceRequestSignal(interactiveExactSharedCallProofTimeoutMs, signal)
+        : signal;
+    try {
+      const access = await coalesceGroupCallAccessProof(
+        user.eName,
+        proof,
+        async () => {
+          try {
+            return await this.probeExactGroupCallAccess(user, proof, rateLimit, proofSignal);
+          } catch (error) {
+            if (error instanceof MediaResolutionAbortedError && !signal?.aborted) {
+              return { access: 'retry', member: false } as const;
+            }
+            throw error;
+          }
+        },
+        this.now(),
+        this.now,
+        {
+          priority,
+          ...(options?.forceCurrent ? { bypassVerifiedAccess: true } : {}),
+        },
+      );
+      if (access.access === 'ok' && access.member) return 'verified';
+      if (access.access === 'denied') return 'denied';
+      return access.access === 'retry' ? 'retry' : 'not_eligible';
+    } catch (error) {
+      if (error instanceof MediaResolutionAbortedError) {
+        if (signal?.aborted) throw error;
+        return 'retry';
+      }
+      const failure = sourceFailureClass(error);
+      if (failure === 'fatal') throw error;
+      return 'retry';
+    }
   }
 
   /**
@@ -1853,10 +2144,10 @@ export class MeshengerVideoLibrary {
   /**
    * A current direct CallSession can be authorized entirely with three exact
    * records: the viewer's durable Chat grant, the canonical source Chat, and
-   * the canonical CallSession. This is deliberately stricter than the older
+   * the canonical CallSession. It is deliberately stricter than the older
    * history lookup: a self-owned reference cannot by itself authorize foreign
-   * media, and an invalid current pointer never falls through to a scan that
-   * could accidentally revive a revoked share.
+   * media, and a completed current-record contradiction never falls through
+   * to a scan that could accidentally revive a revoked share.
    */
   private async resolveExactSharedCallAuthorization(
     user: ViewerIdentity,
@@ -1899,15 +2190,16 @@ export class MeshengerVideoLibrary {
             if (signal?.aborted) throw error;
             return { access: 'retry', member: false } as const;
           }
-          // A missing exact record can be a short replication delay or an
-          // older card that retained a stale pointer. It is not proof that a
-          // viewer lost access, so retain the established verifier. An actual
-          // source authorization rejection remains a fast denial.
+          // Source-bound errors are not a completed viewer-bound proof. In
+          // particular, a raw 401/403/404 at this platform boundary can mean
+          // a transient source deployment or replication fault just as easily
+          // as a revoked viewer. Do not quarantine a card (and do not widen
+          // access through a historic fallback) until a later fresh attempt
+          // can read the exact records.
           const failure = sourceFailureClass(error);
-          if (failure === 'denied') {
-            return { access: 'denied', member: false } as const;
+          if (failure === 'denied' || failure === 'missing') {
+            return { access: 'retry', member: false } as const;
           }
-          if (failure === 'missing') return { access: 'missing', member: false } as const;
           return { access: 'retry', member: false } as const;
         }
       },
@@ -2141,94 +2433,6 @@ export class MeshengerVideoLibrary {
     );
   }
 
-  /**
-   * The source-issued bridge is deliberately limited to canonical CallSession
-   * recordings with an exact current viewer Chat grant. It replaces the slow
-   * compatibility scan, but only after the source itself verifies all three
-   * references and the requested File URI. A 409 means the source cannot prove
-   * this legacy shape directly. A 404 can also be a short eVault replication
-   * lag after a card was indexed. Both retain the established authenticated
-   * verifier rather than turning a compatibility miss into a dead video.
-   */
-  private async resolveFastSharedCallPlayback(
-    grant: StreamGrant,
-    cacheKey: string,
-    sourceGeneration: number,
-    cacheWriteContext: CacheWriteContext,
-    priority: MediaResolutionPriority,
-    signal?: AbortSignal,
-  ): Promise<FastSharedCallPlayback | undefined> {
-    const callSessionVault =
-      grant.sourceCallSessionVault ?? grant.sourceRecordingVault ?? grant.sourceSpaceKey;
-    if (
-      priority === 'background' ||
-      grant.accessScope !== 'shared' ||
-      grant.accessBasis !== 'history' ||
-      grant.sourceChatKind !== 'direct' ||
-      !grant.sourceChatId ||
-      !grant.sourceViewerChatGrantId ||
-      !grant.sourceCallSessionId ||
-      !callSessionVault ||
-      !isEName(callSessionVault)
-    ) {
-      return undefined;
-    }
-
-    const cached = cachedMeshengerPlaybackGrantUrls.get(cacheKey);
-    if (cached && cached.generation === sourceGeneration && cached.expiresAt > this.now()) {
-      return { url: cached.url, cacheHit: true };
-    }
-    if (cached) cachedMeshengerPlaybackGrantUrls.delete(cacheKey);
-
-    const pendingKey = mediaSourceResolutionKey(cacheKey, sourceGeneration);
-    const pending = pendingMeshengerPlaybackGrantResolutions.get(pendingKey);
-    const resolution =
-      pending ??
-      requestMeshengerPlaybackGrant({
-        config: this.config.playbackGrantConfig,
-        request: {
-          viewerEName: grant.eName,
-          viewerChatGrantId: grant.sourceViewerChatGrantId,
-          callSessionVault,
-          callSessionEnvelopeId: grant.sourceCallSessionId,
-          sourceChatId: grant.sourceChatId,
-          fileUri: grant.fileUri,
-        },
-        ...(signal ? { signal } : {}),
-        now: this.now,
-      }).finally(() => {
-        pendingMeshengerPlaybackGrantResolutions.delete(pendingKey);
-      });
-    if (!pending) pendingMeshengerPlaybackGrantResolutions.set(pendingKey, resolution);
-
-    const result = await awaitMediaResolution(resolution, signal);
-    if (result.kind === 'granted') {
-      cacheMeshengerPlaybackGrantUrl(
-        cacheKey,
-        result.mediaUrl,
-        Math.min(grant.expiresAt, result.expiresAt),
-        sourceGeneration,
-        cacheWriteContext,
-      );
-      return { url: result.mediaUrl, cacheHit: false };
-    }
-    if (
-      result.kind === 'not_configured' ||
-      result.kind === 'not_eligible' ||
-      result.kind === 'not_found'
-    ) {
-      return undefined;
-    }
-    if (result.kind === 'cancelled') {
-      throwIfMediaResolutionAborted(signal);
-    }
-    throw new MeshengerVideoLibraryError(
-      'This shared source is temporarily unavailable. Please try again.',
-      'remote_unavailable',
-      503,
-    );
-  }
-
   async resolveMediaUrl(
     user: ViewerIdentity,
     streamId: string,
@@ -2237,6 +2441,12 @@ export class MeshengerVideoLibrary {
     throwIfMediaResolutionAborted(options?.signal);
     const bound = this.requireBoundPlayableStreamGrant(user, streamId);
     const { grant, file } = bound;
+    // A canonical File in the signed-in person's own eVault is already the
+    // durable W3DS authorization boundary. In particular, a call can be
+    // discovered through a historical conversation while its recording File
+    // lives in the viewer's eVault. Do not make that local File wait on (or
+    // fail because of) a stale peer Chat/CallSession mirror before opening it.
+    const usesNativeFileAdmission = usesNativeSharedFileAdmission(user, grant, file);
     // A forced source refresh invalidates cached private media before the
     // normal resolver starts. Require a newly observed shared-source proof
     // first, rather than accepting the ordinary 60-second positive proof
@@ -2251,7 +2461,7 @@ export class MeshengerVideoLibrary {
     // which proof path won so the final post-I/O fence does not keep checking
     // the stale capability after the fresh proof has succeeded.
     let usesSuppliedForcedSourceRefreshProof = false;
-    if (options?.forceSourceRefresh && grant.accessScope === 'shared') {
+    if (options?.forceSourceRefresh && grant.accessScope === 'shared' && !usesNativeFileAdmission) {
       if (hasForcedSourceRefreshProof(options.forcedSourceRefreshProof, user.eName, streamId)) {
         preservesCurrentSharedAccessProof = true;
         usesSuppliedForcedSourceRefreshProof = true;
@@ -2266,6 +2476,14 @@ export class MeshengerVideoLibrary {
       }
     }
     const cacheKey = mediaUrlCacheKey(grant);
+    // A forced recovery follows an upstream rejection. Replace the durable
+    // redirect with a tombstone *before* source I/O. Its random CAS token
+    // fences any older resolver (including another replica) from writing the
+    // rejected URL back after this recovery starts.
+    let durableCacheLookup: EVaultMediaUrlCacheLookup | undefined;
+    if (options?.forceSourceRefresh) {
+      durableCacheLookup = await invalidateEVaultMediaUrlCache({ cacheKey });
+    }
     const forcedSourceRefreshContext = options?.forceSourceRefresh
       ? this.beginForcedSourceRefresh(user, bound, {
           preserveCurrentSharedAccessProof: preservesCurrentSharedAccessProof,
@@ -2275,10 +2493,16 @@ export class MeshengerVideoLibrary {
       forcedSourceRefreshContext?.media ?? captureMediaSourceCacheWriteContext(cacheKey);
     const sourceGeneration = mediaSourceCacheGeneration(cacheKey);
     const assertForcedSourceAccessIsStillCurrent = (): void => {
-      if (!options?.forceSourceRefresh || grant.accessScope !== 'shared') return;
+      if (
+        !options?.forceSourceRefresh ||
+        grant.accessScope !== 'shared' ||
+        usesNativeFileAdmission
+      ) {
+        return;
+      }
       const proofIsCurrent = usesSuppliedForcedSourceRefreshProof
         ? hasForcedSourceRefreshProof(options.forcedSourceRefreshProof, user.eName, streamId)
-        : sharedStreamProbes(grant).some((source) => hasVerifiedSharedAccess(user.eName, source));
+        : hasCurrentSharedAccessEvidence(user.eName, grant);
       if (proofIsCurrent) return;
       throw new MeshengerVideoLibraryError(
         'This shared source changed while it was being refreshed. Please try again.',
@@ -2337,37 +2561,83 @@ export class MeshengerVideoLibrary {
           throw error;
         }
       };
-      // For canonical shared call recordings, the source bridge can validate the
-      // exact viewer Chat / source Chat / CallSession / File relationship and
-      // issue the private URL in one source-local request. Try it *before* the
-      // Vidak-side exact proof so the configured fast path is actually the
-      // default on a cold Watch, not merely a fallback after several remote
-      // reads have already completed. A bridge miss still falls through to the
-      // existing verifier below; it never becomes authorization by itself.
-      const fastSharedCallPlayback =
+      // Reserve the canonical eVault before any remote shared-source proof.
+      // Previously the reservation started only after the exact Chat/history
+      // check, leaving an active inventory/prewarm wave free to collide with a
+      // real Watch at precisely the point where a source is rate-limited.
+      // Do this only when a proof is actually cold; native ranges with a
+      // current proof do not keep extending background preemption.
+      if (
+        interactive &&
         grant.accessScope === 'shared' &&
+        !usesNativeFileAdmission &&
+        !hasRecentSharedAuthorizationReceipt
+      ) {
+        const needsCurrentProof = !hasCurrentSharedPlaybackProof(user.eName, grant);
+        if (needsCurrentProof) {
+          const reservedAt = this.now();
+          const reservedUntil = reservedAt + interactiveVaultReservationMs;
+          // Reserve globally only for the normal short player head start.
+          // The longer reservation is scoped to this one eVault below, so a
+          // cold shared proof cannot unnecessarily pause unrelated inventory.
+          reserveInteractivePlayback(interactivePreviewReservationMs, reservedAt);
+          reserveInteractiveSourceWork(file.ownerEName, interactiveVaultReservationMs, reservedAt);
+          reserveInteractiveVaultGate(file.ownerEName, reservedUntil, reservedAt);
+          // This is only a background scheduler hint. `resolveMediaUrl` does
+          // not read the gate, so it cannot delay this interactive Watch.
+          void this.jobStore.setVaultGate(file.ownerEName, reservedUntil).catch(() => undefined);
+        }
+      }
+      // A legacy direct recording was admitted to this viewer's catalogue as a
+      // signed, viewer-bound W3DS File grant. Older W3DS writers do not always
+      // retain a current Meshenger-specific Chat pointer beside that File. Do
+      // not make those portable File URIs depend on a private peer endpoint or
+      // a source application's historical mirror: resolve the standard File
+      // URI below. The owner eVault's documented `/files/:id` endpoint remains
+      // the media authority, while the signed grant remains Vidak's viewer
+      // admission boundary.
+      // A shared stream is opened through the same canonical W3DS File path
+      // as a personal one. Vidak performs its current source authorization
+      // below, then resolves the owner's eVault and File URI directly; it
+      // never calls a source-application bridge or requires a peer secret.
+      //
+      // A fully addressed group CallSession has two legitimate current eVault
+      // proofs: its exact file-specific CallSession and the established
+      // GroupManifest fallback. Start the fallback at the same time as the
+      // exact read so a retryable/inconclusive CallSession never adds a second
+      // full remote round trip to the initial recording ticket. Its result is
+      // deliberately not consumed here: the exact proof still decides first,
+      // and a completed contradiction below invalidates this speculative
+      // broad-membership result before any File URL can be opened.
+      const deferredGroupManifestFallback =
+        grant.accessScope === 'shared' &&
+        !usesNativeFileAdmission &&
         !hasRecentSharedAuthorizationReceipt &&
         !options?.forceSourceRefresh
+          ? this.deferExactGroupManifestFallback(user, grant, priority, options?.signal, timing)
+          : undefined;
+      const exactGroupCallAuthorization =
+        grant.accessScope === 'shared' &&
+        !usesNativeFileAdmission &&
+        !hasRecentSharedAuthorizationReceipt
           ? await reportTimingOnFailure(
               measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
-                this.resolveFastSharedCallPlayback(
-                  grant,
-                  cacheKey,
-                  sourceGeneration,
-                  sourceCacheWriteContext,
-                  priority,
-                  options?.signal,
-                ),
+                this.resolveExactGroupCallAuthorization(user, grant, priority, options?.signal),
               ),
             )
-          : undefined;
-      if (fastSharedCallPlayback) {
-        timing.mediaUrlCacheHit = fastSharedCallPlayback.cacheHit;
-        reportMediaResolutionTiming(options, timing);
-        return completeForcedSourceResolution(fastSharedCallPlayback.url);
+          : 'not_eligible';
+      if (exactGroupCallAuthorization === 'denied') {
+        // A current canonical group CallSession contradicts the sealed source
+        // context. Do not let an unrelated broad GroupManifest cache revive a
+        // different recording from the same group.
+        deferredGroupManifestFallback?.cancelIfUnstarted();
+        this.invalidateSharedAccessProofs(user.eName, grant);
+        throw this.confirmedSharedPlaybackDenied(grant);
       }
       const exactSharedCallAuthorization =
-        grant.accessScope === 'shared' && !hasRecentSharedAuthorizationReceipt
+        grant.accessScope === 'shared' &&
+        !usesNativeFileAdmission &&
+        !hasRecentSharedAuthorizationReceipt
           ? await reportTimingOnFailure(
               measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
                 this.resolveExactSharedCallAuthorization(user, grant, priority, options?.signal),
@@ -2377,47 +2647,87 @@ export class MeshengerVideoLibrary {
             ? 'verified'
             : 'not_eligible';
       if (exactSharedCallAuthorization === 'denied') {
-        throw new MeshengerVideoLibraryError(
-          'This source cannot be played until its access is verified.',
-          'authorization_denied',
-          403,
-        );
+        deferredGroupManifestFallback?.cancelIfUnstarted();
+        this.invalidateSharedAccessProofs(user.eName, grant);
+        throw this.confirmedSharedPlaybackDenied(grant);
       }
       if (exactSharedCallAuthorization === 'retry') {
+        deferredGroupManifestFallback?.cancelIfUnstarted();
         throw new MeshengerVideoLibraryError(
           'This shared source is temporarily unavailable. Please try again.',
           'remote_unavailable',
           503,
         );
       }
+      let currentSharedAccessVerified =
+        exactGroupCallAuthorization === 'verified' || exactSharedCallAuthorization === 'verified';
+      if (currentSharedAccessVerified) deferredGroupManifestFallback?.cancelIfUnstarted();
+      let currentSharedAccessVerification: Promise<void> | undefined;
+      const requireCurrentSharedAccess = async (): Promise<void> => {
+        if (
+          grant.accessScope !== 'shared' ||
+          usesNativeFileAdmission ||
+          currentSharedAccessVerified
+        ) {
+          return;
+        }
+        // The normal fallback is now actually needed. Remove its small
+        // hedge delay; it joins any already-running GroupManifest probe using
+        // the exact same eVault proof key.
+        deferredGroupManifestFallback?.startNow();
+        currentSharedAccessVerification ??= reportTimingOnFailure(
+          measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
+            this.requirePlayableStreamGrant(user, streamId, {
+              ...sharedProbeOptions,
+              exactGroupCallAuthorization,
+              timing,
+            }),
+          ),
+        ).then(() => undefined);
+        await currentSharedAccessVerification;
+        currentSharedAccessVerified = true;
+      };
       const cached = cachedMediaUrls.get(cacheKey);
       if (cached && cached.generation === sourceGeneration && cached.expiresAt > Date.now()) {
-        if (grant.accessScope === 'shared' && exactSharedCallAuthorization !== 'verified') {
-          const probes = sharedStreamProbes(grant);
-          const needsCurrentProof =
-            probes.length > 0 &&
-            !probes.some((source) => hasVerifiedSharedAccess(user.eName, source));
-          if (interactive && needsCurrentProof) {
-            // This branch used to begin the potentially slow remote proof before
-            // telling resumable inventory to yield. It is only a scheduling
-            // hint: the authoritative proof below still decides whether this
-            // cached redirect can be returned.
-            reserveInteractivePlayback(interactiveCachedSharedProofReservationMs, this.now());
-          }
-          // A cached redirect is not itself authorization. Reuse a short
-          // positive source proof when available, otherwise verify the share
-          // before reusing a URL that may outlive a revoked membership.
-          await reportTimingOnFailure(
-            measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
-              this.requirePlayableStreamGrant(user, streamId, sharedProbeOptions),
-            ),
-          );
+        // A cached redirect is not itself authorization. Reuse a short
+        // positive source proof when available, otherwise verify the share
+        // before reusing a URL that may outlive a revoked membership.
+        const needsCurrentSharedProof =
+          grant.accessScope === 'shared' &&
+          !usesNativeFileAdmission &&
+          !currentSharedAccessVerified &&
+          !hasCurrentSharedPlaybackProof(user.eName, grant);
+        if (interactive && needsCurrentSharedProof) {
+          reserveInteractivePlayback(interactiveCachedSharedProofReservationMs, this.now());
         }
+        await requireCurrentSharedAccess();
         timing.mediaUrlCacheHit = true;
         reportMediaResolutionTiming(options, timing);
         return completeForcedSourceResolution(cached.url);
       }
       if (cached) cachedMediaUrls.delete(cacheKey);
+
+      // The encrypted cross-replica eVault cache is deliberately consulted
+      // only after the normal stream/current-share checks above. It survives a
+      // restart but is still just a source optimization: the same per-process
+      // generation fence and browser-independent authorization apply before a
+      // URL can be returned to the private media route.
+      if (!options?.forceSourceRefresh) {
+        durableCacheLookup = await getEVaultMediaUrlCache({ cacheKey });
+        if (durableCacheLookup?.mediaUrl && durableCacheLookup.expiresAt) {
+          await requireCurrentSharedAccess();
+          cacheMediaUrl(
+            cacheKey,
+            durableCacheLookup.mediaUrl,
+            durableCacheLookup.expiresAt,
+            sourceGeneration,
+            sourceCacheWriteContext,
+          );
+          timing.mediaUrlCacheHit = true;
+          reportMediaResolutionTiming(options, timing);
+          return completeForcedSourceResolution(durableCacheLookup.mediaUrl);
+        }
+      }
       const pendingKey = `${mediaSourceResolutionKey(cacheKey, sourceGeneration)}\u0000${sourceReadPolicyPendingKey(sourceReadPolicy)}`;
       const pending = pendingMediaUrlResolutions.get(pendingKey);
       if (pending) {
@@ -2470,13 +2780,11 @@ export class MeshengerVideoLibrary {
         // for the speculative directory lookup. Awaiting the original promise
         // below still preserves its normal error when authorization succeeds.
         void vaultResolution.catch(() => undefined);
-        if (grant.accessScope === 'shared' && exactSharedCallAuthorization !== 'verified') {
+        if (!currentSharedAccessVerified) {
           // The documented File dereference endpoint resolves a File URI; it
           // is not a documented source-membership check. Verify the signed
           // source context before either returning or caching its redirect.
-          await measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
-            this.requirePlayableStreamGrant(user, streamId, sharedProbeOptions),
-          );
+          await requireCurrentSharedAccess();
         }
         // A user has explicitly requested this source. The foreground request
         // uses its own priority key, while an interactive shared-source probe
@@ -2486,30 +2794,20 @@ export class MeshengerVideoLibrary {
           'eVaultResolutionMs',
           () => vaultResolution,
         );
-        const resolveFromVault = async (vault: ResolvedVault): Promise<string> => {
-          const dereferenced = await measureMediaResolutionPhase(
+        const resolveFromVault = async (vault: ResolvedVault): Promise<string> =>
+          this.resolveMediaUrlFromEVault(
+            vault,
+            file.metaEnvelopeId,
+            sourceReadPolicy,
+            options?.signal,
             timing,
-            'directFileDereferenceMs',
-            () =>
-              this.tryDereferenceFileMediaUrl(
-                vault,
-                file.metaEnvelopeId,
-                sourceReadPolicy,
-                options?.signal,
-              ),
+            {
+              boundInteractiveFallback: interactive && grant.accessScope === 'shared',
+              ...(options?.allowExtendedLegacyFileMetadataWait
+                ? { legacyMetadataTimeoutMs: initialRecordingLegacyFileMetadataTimeoutMs }
+                : {}),
+            },
           );
-          return (
-            dereferenced ??
-            (await this.resolveMediaUrlFromEnvelope(
-              vault,
-              file.metaEnvelopeId,
-              user.eName,
-              sourceReadPolicy,
-              options?.signal,
-              timing,
-            ))
-          );
-        };
         let mediaUrl: string;
         try {
           mediaUrl = await resolveFromVault(initialVault.vault);
@@ -2528,13 +2826,39 @@ export class MeshengerVideoLibrary {
           mediaUrl = await resolveFromVault(freshVault.vault);
         }
         assertForcedSourceAccessIsStillCurrent();
-        cacheMediaUrl(
-          cacheKey,
-          mediaUrl,
-          grant.expiresAt,
-          sourceGeneration,
-          sourceCacheWriteContext,
-        );
+        const cacheLifetime = mediaUrlCacheLifetime(mediaUrl, grant.expiresAt);
+        if (cacheLifetime) {
+          cacheMediaUrl(
+            cacheKey,
+            mediaUrl,
+            cacheLifetime.expiresAt,
+            sourceGeneration,
+            sourceCacheWriteContext,
+          );
+          // A durable write must carry the CAS token acquired before this
+          // source request began. If Postgres was unavailable for that read,
+          // retain only the safe process-local burst rather than risking a
+          // late write that could revive an invalidated redirect.
+          if (cacheLifetime.durableTtlMs && durableCacheLookup?.writeToken) {
+            const durableWrite = persistEVaultMediaUrl(
+              cacheKey,
+              mediaUrl,
+              cacheLifetime.durableTtlMs,
+              durableCacheLookup.writeToken,
+              sourceGeneration,
+              sourceCacheWriteContext,
+            );
+            // A background/inventory operation must never wait on Postgres.
+            // Interactive Watch and hover authorization, however, can spend a
+            // tiny bounded budget establishing the handoff that makes the
+            // next browser request fast even if it reaches another replica.
+            if (priority === 'background') {
+              void durableWrite;
+            } else {
+              await awaitEVaultMediaUrlHandoff(durableWrite);
+            }
+          }
+        }
         return mediaUrl;
       })().finally(() => {
         pendingMediaUrlResolutions.delete(pendingKey);
@@ -2610,7 +2934,7 @@ export class MeshengerVideoLibrary {
     }
     try {
       throwIfMediaResolutionAborted(signal);
-      if (response.status !== 302) {
+      if (![301, 302, 303, 307, 308].includes(response.status)) {
         // A known unsupported endpoint otherwise adds two seconds to every
         // new video before the documented GraphQL resolver runs. Only cache
         // explicit capability responses; temporary failures remain retryable.
@@ -2621,7 +2945,24 @@ export class MeshengerVideoLibrary {
           // Keep this fallback scoped to this record so another valid shared
           // video in the same eVault can still use the fast File redirect.
           cacheDirectFileFallback(fileFallbackKey, Date.now());
-        } else if ([408, 429].includes(response.status) || response.status >= 500) {
+        } else if (response.status === 429) {
+          // Do not turn an overloaded optional File endpoint into an
+          // immediate GraphQL request against the very same eVault. The
+          // resolver below gives the source one bounded breathing window and
+          // then uses the documented metadata fallback. Preserve Retry-After
+          // so the normal interactive retry policy remains source-friendly.
+          cacheDirectFileFallback(
+            endpointFallbackKey,
+            Date.now(),
+            directFileTransientFallbackTtlMs,
+          );
+          throw new MeshengerVideoLibraryError(
+            'The W3DS video source is busy. Please try again shortly.',
+            'rate_limited',
+            429,
+            parseRetryAfter(response.headers.get('Retry-After')),
+          );
+        } else if (response.status === 408 || response.status >= 500) {
           cacheDirectFileFallback(
             endpointFallbackKey,
             Date.now(),
@@ -2639,23 +2980,240 @@ export class MeshengerVideoLibrary {
     }
   }
 
-  private async resolveMediaUrlFromEnvelope(
+  /**
+   * Opens one canonical File through the owner's eVault. The documented
+   * `/files/:id` endpoint remains preferred, but legacy eVaults can expose a
+   * File only through GraphQL. A small hedge avoids a slow HTTP endpoint
+   * making that entirely eVault-native compatibility path serial.
+   */
+  private async resolveMediaUrlFromEVault(
     vault: ResolvedVault,
     metaEnvelopeId: string,
-    actingEName: string,
     policy: SourceReadPolicy,
     signal?: AbortSignal,
     timing?: MediaResolutionTiming,
+    options?: { boundInteractiveFallback?: boolean; legacyMetadataTimeoutMs?: number },
   ): Promise<string> {
-    const envelope = await this.readEnvelope(
-      vault.ownerEName,
-      vault.eVaultUri,
-      metaEnvelopeId,
-      policy,
-      actingEName,
-      signal,
+    const directController = new AbortController();
+    const directSignal = combineMediaResolutionSignals(signal, directController.signal);
+    const direct: Promise<MediaUrlResolutionAttempt> = measureMediaResolutionPhase(
       timing,
+      'directFileDereferenceMs',
+      () => this.tryDereferenceFileMediaUrl(vault, metaEnvelopeId, policy, directSignal),
+    ).then(
+      (mediaUrl): MediaUrlResolutionAttempt => ({ mediaUrl }),
+      (error: unknown): MediaUrlResolutionAttempt => ({ error }),
     );
+
+    let metadataController: AbortController | undefined;
+    let metadata: Promise<MediaUrlResolutionAttempt> | undefined;
+    const startMetadataFallback = (): Promise<MediaUrlResolutionAttempt> => {
+      if (metadata) return metadata;
+      metadataController = new AbortController();
+      const metadataSignal = combineMediaResolutionSignals(signal, metadataController.signal);
+      metadata = this.resolveMediaUrlFromEnvelope(
+        vault,
+        metaEnvelopeId,
+        policy,
+        metadataSignal,
+        timing,
+        options,
+      ).then(
+        (mediaUrl): MediaUrlResolutionAttempt => ({ mediaUrl }),
+        (error: unknown): MediaUrlResolutionAttempt => ({ error }),
+      );
+      return metadata;
+    };
+
+    const resultFromMetadataFallback = async (): Promise<string> => {
+      const metadataResult = await startMetadataFallback();
+      if (metadataResult.mediaUrl) {
+        throwIfMediaResolutionAborted(signal);
+        return metadataResult.mediaUrl;
+      }
+      if (signal?.aborted) throw new MediaResolutionAbortedError();
+      throw metadataResult.error ?? new MediaResolutionAbortedError();
+    };
+
+    const metadataAfterDirectRateLimit = async (directError: unknown): Promise<string> => {
+      // Background work must yield its retry through the durable queue. A
+      // person who explicitly opened a video gets one short, bounded grace
+      // window before the canonical GraphQL fallback is tried.
+      if (
+        policy !== 'interactive' ||
+        !(directError instanceof MeshengerVideoLibraryError) ||
+        directError.code !== 'rate_limited'
+      ) {
+        throw directError;
+      }
+      // A slow direct request may already have caused the normal hedge to
+      // start. Its result is still useful, and its bounded compatibility
+      // deadline is the entire foreground budget for this fallback. Do not
+      // reopen it after failure: that would quietly give one Watch a second
+      // full deadline. A fast 429 (the failure seen in production) has no
+      // metadata promise here, so it receives one cooperative grace before
+      // the first and only metadata attempt begins.
+      if (metadata) {
+        const existingMetadata = await metadata;
+        if (existingMetadata.mediaUrl) {
+          throwIfMediaResolutionAborted(signal);
+          return existingMetadata.mediaUrl;
+        }
+        if (signal?.aborted) throw new MediaResolutionAbortedError();
+        throw existingMetadata.error ?? directError;
+      }
+      const sourceRetryAfterMs = directError.retryAfterMs;
+      const delayMs = Math.min(
+        directFileRateLimitFallbackDelayMaxMs,
+        Math.max(rateLimitBackoffFloorMs, sourceRetryAfterMs ?? 0),
+      );
+      await sleepForMediaResolution(delayMs, signal);
+      return resultFromMetadataFallback();
+    };
+
+    // Shared playback is where a person is waiting for first frame. Keep
+    // inventory, previews, and personal-file reads on the existing serial
+    // eVault path so catalogue work does not double source traffic.
+    const hedgeMetadata = options?.boundInteractiveFallback === true && policy === 'interactive';
+    if (!hedgeMetadata) {
+      const directResult = await direct;
+      if (directResult.mediaUrl) {
+        throwIfMediaResolutionAborted(signal);
+        return directResult.mediaUrl;
+      }
+      // A malformed or unsafe redirect is a terminal source response. Do not
+      // let a speculative compatibility read hide it.
+      if (directResult.error) return metadataAfterDirectRateLimit(directResult.error);
+      return resultFromMetadataFallback();
+    }
+
+    // Keep the zero-extra-request fast path for a responsive compliant File
+    // endpoint. An explicit miss starts GraphQL immediately; only a pending
+    // direct request waits for the short hedge interval.
+    const directOrHedge = await Promise.race([
+      direct,
+      sleepForMediaResolution(directFileMetadataHedgeDelayMs, signal).then(() => undefined),
+    ]);
+    if (directOrHedge?.mediaUrl) {
+      throwIfMediaResolutionAborted(signal);
+      return directOrHedge.mediaUrl;
+    }
+    // `tryDereferenceFileMediaUrl` converts endpoint availability problems to
+    // `undefined`; an actual rejection here is therefore an unsafe redirect
+    // or caller cancellation and must not be bypassed by the hedge.
+    if (directOrHedge?.error) return metadataAfterDirectRateLimit(directOrHedge.error);
+    if (directOrHedge && signal?.aborted) throw new MediaResolutionAbortedError();
+
+    const metadataFallback = startMetadataFallback();
+    if (directOrHedge) {
+      const metadataResult = await metadataFallback;
+      if (metadataResult.mediaUrl) {
+        throwIfMediaResolutionAborted(signal);
+        return metadataResult.mediaUrl;
+      }
+      if (signal?.aborted) throw new MediaResolutionAbortedError();
+      throw metadataResult.error ?? directOrHedge.error ?? new MediaResolutionAbortedError();
+    }
+
+    // The direct File request was still pending after the hedge delay. Race
+    // both canonical eVault mechanisms and promptly cancel the losing branch
+    // so an interactive Watch does not leave redundant source work running.
+    const first = await Promise.race([
+      direct.then((result) => ({ source: 'direct' as const, result })),
+      metadataFallback.then((result) => ({ source: 'metadata' as const, result })),
+    ]);
+    if (first.source === 'direct' && first.result.error) {
+      // A direct request can outlive the hedge and then report a 429 while
+      // GraphQL is already making progress. Preserve that in-flight canonical
+      // fallback; aborting it here recreates the cross-endpoint rate-limit
+      // amplification this resolver is meant to avoid.
+      if (
+        policy === 'interactive' &&
+        first.result.error instanceof MeshengerVideoLibraryError &&
+        first.result.error.code === 'rate_limited'
+      ) {
+        return metadataAfterDirectRateLimit(first.result.error);
+      }
+      metadataController?.abort();
+      throw first.result.error;
+    }
+    if (first.result.mediaUrl) {
+      if (first.source === 'direct') {
+        metadataController?.abort();
+      } else {
+        directController.abort();
+        // GraphQL won only after the direct endpoint remained slow past the
+        // hedge. Briefly prefer the compatibility path for a burst of Watches.
+        cacheDirectFileFallback(
+          `${vault.eVaultUri}\u0000endpoint`,
+          Date.now(),
+          directFileTransientFallbackTtlMs,
+        );
+      }
+      throwIfMediaResolutionAborted(signal);
+      return first.result.mediaUrl;
+    }
+
+    // One branch may reject while the other ultimately yields a usable URL.
+    // Wait for that remaining canonical eVault attempt before surfacing a
+    // failure so a transient GraphQL issue cannot mask a valid File redirect.
+    const remaining = first.source === 'direct' ? await metadataFallback : await direct;
+    if (remaining.mediaUrl) {
+      if (first.source === 'direct') {
+        directController.abort();
+      } else {
+        metadataController?.abort();
+      }
+      throwIfMediaResolutionAborted(signal);
+      return remaining.mediaUrl;
+    }
+    if (signal?.aborted) throw new MediaResolutionAbortedError();
+    throw remaining.error ?? first.result.error ?? new MediaResolutionAbortedError();
+  }
+
+  private async resolveMediaUrlFromEnvelope(
+    vault: ResolvedVault,
+    metaEnvelopeId: string,
+    policy: SourceReadPolicy,
+    signal?: AbortSignal,
+    timing?: MediaResolutionTiming,
+    options?: { boundInteractiveFallback?: boolean; legacyMetadataTimeoutMs?: number },
+  ): Promise<string> {
+    // This is a compatibility fallback only: a compliant eVault should have
+    // supplied a File redirect above. Keep its foreground work bounded, but
+    // retain the normal short interactive retry policy inside that deadline:
+    // a temporary eVault 429 must not turn a healthy File record into an
+    // instant unavailable player state.
+    const deadline =
+      options?.boundInteractiveFallback && policy === 'interactive'
+        ? AbortSignal.timeout(
+            options.legacyMetadataTimeoutMs ?? interactiveLegacyFileMetadataTimeoutMs,
+          )
+        : undefined;
+    const readSignal = deadline ? combineMediaResolutionSignals(signal, deadline) : signal;
+    let envelope: Envelope;
+    try {
+      envelope = await this.readEnvelope(
+        vault.ownerEName,
+        vault.eVaultUri,
+        metaEnvelopeId,
+        policy,
+        undefined,
+        readSignal,
+        timing,
+      );
+    } catch (error) {
+      // Preserve an actual caller cancellation. Only the local compatibility
+      // deadline becomes a normal retryable source failure for the player.
+      if (deadline?.aborted && !signal?.aborted && error instanceof MediaResolutionAbortedError) {
+        throw new MeshengerVideoLibraryError(
+          'The eVault is taking too long to open this video. Please try again.',
+          'remote_unavailable',
+          503,
+        );
+      }
+      throw error;
+    }
     const url = optionalString(envelope.parsed.publicUrl) ?? optionalString(envelope.parsed.url);
     if (!url) {
       throw new MeshengerVideoLibraryError(
@@ -2670,9 +3228,10 @@ export class MeshengerVideoLibrary {
   /**
    * Returns the authorized file identity for a playable stream.
    *
-   * Preview responses are private, but can outlive the original capture. Reuse
-   * the playback authorization path so cached shared previews never bypass a
-   * current source-access check.
+   * Preview and range responses are private. Newer shared records still prove
+   * their current source context here; legacy direct W3DS File grants use the
+   * signed, viewer-bound admission created when the share was discovered so a
+   * missing source-app mirror cannot break a portable File URI.
    */
   async inspectPlayableStream(
     user: ViewerIdentity,
@@ -2695,9 +3254,16 @@ export class MeshengerVideoLibrary {
     options?: Pick<MediaResolutionOptions, 'priority' | 'signal'>,
   ): Promise<ForcedSourceRefreshProof> {
     const bound = this.requireBoundPlayableStreamGrant(user, streamId);
+    const usesNativeFileAdmission = usesNativeSharedFileAdmission(user, bound.grant, bound.file);
     const sharedSources =
-      bound.grant.accessScope === 'shared' ? sharedStreamProbes(bound.grant) : [];
-    if (bound.grant.accessScope === 'shared') {
+      bound.grant.accessScope === 'shared' && !usesNativeFileAdmission
+        ? sharedStreamProbes(bound.grant)
+        : [];
+    const groupCallProof =
+      bound.grant.accessScope === 'shared' && !usesNativeFileAdmission
+        ? exactGroupCallProofContext(bound.grant)
+        : undefined;
+    if (bound.grant.accessScope === 'shared' && !usesNativeFileAdmission) {
       this.invalidateSharedAccessProofs(user.eName, bound.grant);
       await this.requirePlayableStreamGrant(user, streamId, {
         ...options,
@@ -2708,7 +3274,10 @@ export class MeshengerVideoLibrary {
       // positive-proof cache. Require a current completed entry before
       // minting a capability, otherwise an obsolete in-flight result could be
       // carried across the durable handoff boundary.
-      if (!sharedSources.some((source) => hasVerifiedSharedAccess(user.eName, source))) {
+      if (
+        !sharedSources.some((source) => hasVerifiedSharedAccess(user.eName, source)) &&
+        !(groupCallProof && hasVerifiedGroupCallAccess(user.eName, groupCallProof))
+      ) {
         throw new MeshengerVideoLibraryError(
           'This shared source is temporarily unavailable. Please try again.',
           'remote_unavailable',
@@ -2727,6 +3296,7 @@ export class MeshengerVideoLibrary {
         env: { W3DS_AUTH_JWT_SECRET: this.config.signingSecret },
       }),
       sharedSources,
+      ...(groupCallProof ? { groupCallProof } : {}),
     });
     return proof;
   }
@@ -2837,7 +3407,15 @@ export class MeshengerVideoLibrary {
     // fence above still protects it from S; leave that newer owner's cache
     // write authoritative instead of replacing it with this older handoff.
     if (!canWriteMediaSourceCache(cacheKey, generation, cacheWriteContext)) return true;
-    cacheMediaUrl(cacheKey, safeUrl, bound.grant.expiresAt, generation, cacheWriteContext);
+    // This source arrived through the bounded route-level handoff after an
+    // upstream response was already opened. It did not reserve a durable
+    // cache write token before that eVault I/O, so it must not publish a
+    // cross-replica redirect here: doing so could race a concurrent stale
+    // source invalidation. Keep only a source-expiry-aware local burst.
+    const cacheLifetime = mediaUrlCacheLifetime(safeUrl, bound.grant.expiresAt);
+    if (cacheLifetime) {
+      cacheMediaUrl(cacheKey, safeUrl, cacheLifetime.expiresAt, generation, cacheWriteContext);
+    }
     return true;
   }
 
@@ -2885,6 +3463,7 @@ export class MeshengerVideoLibrary {
    */
   async invalidateMediaUrl(user: ViewerIdentity, streamId: string): Promise<void> {
     const bound = this.requireBoundPlayableStreamGrant(user, streamId);
+    await invalidateEVaultMediaUrlCache({ cacheKey: mediaUrlCacheKey(bound.grant) });
     this.invalidateBoundMediaUrl(user, bound);
   }
 
@@ -2904,7 +3483,6 @@ export class MeshengerVideoLibrary {
     if (activeForcedMediaSourceRefreshes.has(cacheKey)) return;
     advanceMediaSourceCacheGeneration(cacheKey, true);
     cachedMediaUrls.delete(cacheKey);
-    cachedMeshengerPlaybackGrantUrls.delete(cacheKey);
   }
 
   /**
@@ -2964,7 +3542,6 @@ export class MeshengerVideoLibrary {
     const cacheKey = mediaUrlCacheKey(grant);
     advanceMediaSourceCacheGeneration(cacheKey, options?.forcedSourceRefresh === true);
     cachedMediaUrls.delete(cacheKey);
-    cachedMeshengerPlaybackGrantUrls.delete(cacheKey);
     if (!options?.skipEVaultCacheInvalidation) {
       const eVaultCacheKey = normalizeEName(file.ownerEName);
       const cachedVault = cachedEVaultResolutions.get(eVaultCacheKey)?.vault;
@@ -2997,6 +3574,8 @@ export class MeshengerVideoLibrary {
     for (const source of sharedStreamProbes(grant)) {
       invalidateVerifiedSharedAccess(viewerEName, source);
     }
+    const groupCallProof = exactGroupCallProofContext(grant);
+    if (groupCallProof) invalidateVerifiedGroupCallAccess(viewerEName, groupCallProof);
   }
 
   private requireBoundStreamGrant(
@@ -3020,8 +3599,8 @@ export class MeshengerVideoLibrary {
   /**
    * Validates the signed viewer-bound grant and its source context without
    * treating a chat or group metadata mirror as the media authority. The
-   * eVault File request below is made on behalf of the viewer and remains the
-   * final access check for every stream open.
+   * subsequent standard W3DS File request is owner-addressed; Vidak keeps the
+   * viewer-bound grant as its application-level admission boundary.
    */
   private requireBoundPlayableStreamGrant(
     user: Pick<AuthUser, 'eName'>,
@@ -3040,6 +3619,14 @@ export class MeshengerVideoLibrary {
       }
       return bound;
     }
+
+    // A viewer-bound stream whose canonical File belongs to this viewer's
+    // eVault is a first-party File read even when it was discovered under a
+    // shared conversation. The sealed grant is still bound to this exact
+    // viewer, and the owner-addressed eVault File endpoint is the source of
+    // truth, so requiring an unrelated historic Chat mirror would only make
+    // a local W3DS file less available.
+    if (sameEName(file.ownerEName, user.eName)) return bound;
 
     const sourceSpaceKey = grant.sourceSpaceKey;
     const accessBasis = grant.accessBasis;
@@ -3069,6 +3656,159 @@ export class MeshengerVideoLibrary {
     return bound;
   }
 
+  /**
+   * The marker is attached only once a valid viewer-bound shared grant has
+   * completed a live proof and that proof is terminally denied. Callers keep
+   * the public 403 unchanged while safely retiring the stale catalogue card.
+   */
+  private confirmedSharedPlaybackDenied(grant: StreamGrant): MeshengerVideoLibraryError {
+    return new MeshengerVideoLibraryError(
+      'This source cannot be played until its access is verified.',
+      'authorization_denied',
+      403,
+      undefined,
+      grant.sharedCardBindingHash,
+    );
+  }
+
+  /**
+   * Starts the established generic group-membership fallback while a fully
+   * addressed group CallSession is being checked. This is an interactive
+   * eVault/W3DS metadata read only: it neither returns a File redirect nor
+   * changes the exact CallSession's terminal-denial precedence. The normal
+   * fallback below joins this same coalesced proof only after the exact result
+   * has been evaluated.
+   */
+  private deferExactGroupManifestFallback(
+    user: ViewerIdentity,
+    grant: StreamGrant,
+    priority: MediaResolutionPriority,
+    signal?: AbortSignal,
+    timing?: MediaResolutionTiming,
+  ): DeferredGroupManifestFallback | undefined {
+    if (priority !== 'interactive' || !exactGroupCallProofContext(grant)) return undefined;
+    const groupSource = sharedStreamProbes(grant).find(
+      (source): source is Extract<SharedSpaceProbe, { kind: 'group' }> => source.kind === 'group',
+    );
+    if (!groupSource) return undefined;
+
+    // A fast exact CallSession should remain the cheapest path. Give it a
+    // small head start, then begin the existing fallback before an
+    // inconclusive exact read can add an entire second eVault round trip.
+    // Once source work begins, it may be coalesced with another request, so
+    // cancellation below is intentionally limited to the timer itself.
+    const delayController = new AbortController();
+    const delaySignal = combineMediaResolutionSignals(signal, delayController.signal);
+    let started = false;
+    let startNow: () => void = () => undefined;
+    const forceStart = new Promise<void>((resolve) => {
+      startNow = resolve;
+    });
+    const pending = (async () => {
+      try {
+        await Promise.race([
+          sleepForMediaResolution(interactiveGroupManifestHedgeDelayMs, delaySignal),
+          forceStart,
+        ]);
+        throwIfMediaResolutionAborted(delaySignal);
+        started = true;
+        // A GroupManifest proof needs the platform credential after it has
+        // resolved the source eVault. Start that cacheable, non-authorizing
+        // refresh at the same time so the fallback truly overlaps the exact
+        // CallSession read.
+        void this.getPlatformToken('interactive').catch(() => undefined);
+        await this.startSharedAccessProof(user, groupSource, {
+          priority: 'interactive',
+          ...(signal ? { signal } : {}),
+          ...(timing ? { timing } : {}),
+        });
+      } catch (error) {
+        // An ignored hedge must never become an unhandled rejection. A caller
+        // that needs the fallback joins the same coalesced proof below and
+        // preserves its ordinary retry/denial behavior there.
+        if (delaySignal.aborted || signal?.aborted) return;
+        throw error;
+      }
+    })();
+    void pending.catch(() => undefined);
+    return {
+      startNow,
+      cancelIfUnstarted: () => {
+        if (!started) delayController.abort();
+      },
+    };
+  }
+
+  /**
+   * One coalesced current eVault proof for a generic shared-source context.
+   * Keeping this in one helper means a speculative GroupManifest fallback and
+   * the authoritative fallback path share the exact same priority, cache
+   * revision, deadline, and retry semantics.
+   */
+  private startSharedAccessProof(
+    user: ViewerIdentity,
+    source: SharedSpaceProbe,
+    options: {
+      priority: MediaResolutionPriority;
+      signal?: AbortSignal;
+      forceCurrentSharedAccessProof?: boolean;
+      timing?: MediaResolutionTiming;
+    },
+  ): Promise<SharedSpaceAccess> {
+    const { priority, signal } = options;
+    const sourceReadPolicy: SourceReadPolicy =
+      priority === 'interactive'
+        ? 'interactive'
+        : priority === 'warmup'
+          ? 'warmup-cancellable'
+          : signal
+            ? 'background-cancellable'
+            : 'backoff';
+    return coalesceSharedAccessProbe(
+      user.eName,
+      source,
+      async () => {
+        if (priority !== 'interactive') {
+          return signal
+            ? this.probeSharedSpaceAccess(user, source, sourceReadPolicy, {
+                signal,
+                ...(options.timing ? { timing: options.timing } : {}),
+              })
+            : this.probeSharedSpaceAccess(
+                user,
+                source,
+                sourceReadPolicy,
+                options.timing ? { timing: options.timing } : undefined,
+              );
+        }
+
+        // Give every independent proof its own bounded child signal. The
+        // caller's signal remains part of it, so cancellation still reaches
+        // the remote request. A deadline is not evidence that access was
+        // revoked, however, so translate only that internal abort into the
+        // existing retry result rather than an authorization denial.
+        const proofSignal = sourceRequestSignal(interactiveSharedProofTimeoutMs, signal);
+        try {
+          return await this.probeSharedSpaceAccess(user, source, sourceReadPolicy, {
+            signal: proofSignal,
+            ...(options.timing ? { timing: options.timing } : {}),
+          });
+        } catch (error) {
+          if (error instanceof MediaResolutionAbortedError && !signal?.aborted) {
+            return { access: 'retry', member: false };
+          }
+          throw error;
+        }
+      },
+      Date.now(),
+      () => Date.now(),
+      {
+        priority,
+        ...(options.forceCurrentSharedAccessProof ? { bypassVerifiedAccess: true } : {}),
+      },
+    );
+  }
+
   private async requirePlayableStreamGrant(
     user: ViewerIdentity,
     streamId: string,
@@ -3077,14 +3817,32 @@ export class MeshengerVideoLibrary {
       priority?: MediaResolutionPriority;
       signal?: AbortSignal;
       forceCurrentSharedAccessProof?: boolean;
+      /** Result already obtained by this resolver invocation; never browser input. */
+      exactGroupCallAuthorization?: ExactSharedCallProofOutcome;
+      /** Server-only phase accumulator for the private playback route. */
+      timing?: MediaResolutionTiming;
     },
   ): Promise<{ grant: StreamGrant; file: NonNullable<ReturnType<typeof parseW3dsFileUri>> }> {
     throwIfMediaResolutionAborted(options?.signal);
     const bound = this.requireBoundPlayableStreamGrant(user, streamId, options);
-    const { grant } = bound;
-    if (grant.accessScope === 'personal') {
+    const { grant, file } = bound;
+    if (grant.accessScope === 'personal' || usesNativeSharedFileAdmission(user, grant, file)) {
       return bound;
     }
+    const priority = options?.priority ?? 'interactive';
+    // An eligible exact group CallSession has stronger, file-specific
+    // authority than the generic group-membership cache. Resolve it before a
+    // positive GroupManifest entry can shortcut this request; a completed
+    // contradiction is terminal for this exact sealed File.
+    const exactGroupCallAuthorization =
+      options?.exactGroupCallAuthorization ??
+      (await this.resolveExactGroupCallAuthorization(user, grant, priority, options?.signal, {
+        ...(options?.forceCurrentSharedAccessProof ? { forceCurrent: true } : {}),
+      }));
+    if (exactGroupCallAuthorization === 'denied') {
+      throw this.confirmedSharedPlaybackDenied(grant);
+    }
+    if (exactGroupCallAuthorization === 'verified') return bound;
     const probes = sharedStreamProbes(grant);
     if (
       !options?.forceCurrentSharedAccessProof &&
@@ -3093,7 +3851,6 @@ export class MeshengerVideoLibrary {
       return bound;
     }
 
-    const priority = options?.priority ?? 'interactive';
     const sourceReadPolicy: SourceReadPolicy =
       priority === 'interactive'
         ? 'interactive'
@@ -3116,47 +3873,18 @@ export class MeshengerVideoLibrary {
       void this.getPlatformToken(sourceReadPolicy).catch(() => undefined);
     }
     const startSourceProof = (source: SharedSpaceProbe): Promise<SharedSpaceAccess> =>
-      // A cancellable preview must neither own the interactive pending key nor
-      // make Watch wait for its retry. Completed positive source proofs remain
-      // safely reusable because their key includes the exact source context.
-      coalesceSharedAccessProbe(
-        user.eName,
-        source,
-        async () => {
-          if (priority !== 'interactive') {
-            return options?.signal
-              ? this.probeSharedSpaceAccess(user, source, sourceReadPolicy, {
-                  signal: options.signal,
-                })
-              : this.probeSharedSpaceAccess(user, source, sourceReadPolicy);
-          }
+      this.startSharedAccessProof(user, source, {
+        priority,
+        ...(options?.signal ? { signal: options.signal } : {}),
+        ...(options?.forceCurrentSharedAccessProof ? { forceCurrentSharedAccessProof: true } : {}),
+        ...(options?.timing ? { timing: options.timing } : {}),
+      });
 
-          // Give every independent proof its own bounded child signal. The
-          // caller's signal remains part of it, so cancellation still reaches
-          // the remote request. A deadline is not evidence that access was
-          // revoked, however, so translate only that internal abort into the
-          // existing retry result rather than an authorization denial.
-          const proofSignal = sourceRequestSignal(interactiveSharedProofTimeoutMs, options?.signal);
-          try {
-            return await this.probeSharedSpaceAccess(user, source, sourceReadPolicy, {
-              signal: proofSignal,
-            });
-          } catch (error) {
-            if (error instanceof MediaResolutionAbortedError && !options?.signal?.aborted) {
-              return { access: 'retry', member: false };
-            }
-            throw error;
-          }
-        },
-        Date.now(),
-        () => Date.now(),
-        {
-          priority,
-          ...(options?.forceCurrentSharedAccessProof ? { bypassVerifiedAccess: true } : {}),
-        },
-      );
-
-    let retrying = false;
+    // A remote exact CallSession read that could not complete is never a
+    // revocation. A positive GroupManifest can still independently admit the
+    // File, but a missing/negative fallback must retain the retryable result
+    // instead of turning a source outage into a terminal stale-card denial.
+    let retrying = exactGroupCallAuthorization === 'retry';
     if (grant.accessBasis === 'history' && priority === 'interactive') {
       // A historic share has two independent current proofs: the exact direct
       // Chat record and the source GroupManifest. Start both coalesced proofs
@@ -3208,11 +3936,7 @@ export class MeshengerVideoLibrary {
         503,
       );
     }
-    throw new MeshengerVideoLibraryError(
-      'This source cannot be played until its access is verified.',
-      'authorization_denied',
-      403,
-    );
+    throw this.confirmedSharedPlaybackDenied(grant);
   }
 
   private assembleLibrary(input: {
@@ -3227,36 +3951,17 @@ export class MeshengerVideoLibrary {
       records: input.found,
       completeness: completenessState,
       viewerEName: input.eName,
+      toSharedCardBindingHash: (item) =>
+        item.accessScope === 'shared'
+          ? sharedCardBindingHashForRecord({
+              viewerEName: input.eName,
+              item,
+              secret: this.config.signingSecret,
+            })
+          : undefined,
       toStreamId: (grantInput) =>
         createMeshengerVideoStreamId(
-          {
-            eName: input.eName,
-            fileUri: grantInput.fileUri,
-            accessScope: grantInput.accessScope,
-            ...(grantInput.sourceSpaceKey ? { sourceSpaceKey: grantInput.sourceSpaceKey } : {}),
-            ...(grantInput.sourceChatId ? { sourceChatId: grantInput.sourceChatId } : {}),
-            ...(grantInput.sourceViewerChatGrantId
-              ? { sourceViewerChatGrantId: grantInput.sourceViewerChatGrantId }
-              : {}),
-            ...(grantInput.sourceCallSessionId
-              ? { sourceCallSessionId: grantInput.sourceCallSessionId }
-              : {}),
-            ...(grantInput.sourceCallSessionVault
-              ? { sourceCallSessionVault: grantInput.sourceCallSessionVault }
-              : {}),
-            ...(grantInput.sourceRecordingVault
-              ? { sourceRecordingVault: grantInput.sourceRecordingVault }
-              : {}),
-            ...(grantInput.sourceChatKind ? { sourceChatKind: grantInput.sourceChatKind } : {}),
-            ...(grantInput.sourceReferenceId
-              ? { sourceReferenceId: grantInput.sourceReferenceId }
-              : {}),
-            ...(grantInput.sourceReferenceFileId
-              ? { sourceReferenceFileId: grantInput.sourceReferenceFileId }
-              : {}),
-            ...(grantInput.accessBasis ? { accessBasis: grantInput.accessBasis } : {}),
-            expiresAt: Date.now() + streamLifetimeMs,
-          },
+          streamGrantFromVideoSpaceInput(input.eName, grantInput, Date.now() + streamLifetimeMs),
           this.config.signingSecret,
         ),
     });
@@ -3613,6 +4318,8 @@ export class MeshengerVideoLibrary {
           }
         | {
             type: 'resolve-media';
+            /** `prewarm` reads a canonical File only to fill the server cache. */
+            mode?: DeferredMediaMode;
             vaultKey: string;
             owner: string;
             eVaultUri: string;
@@ -3623,7 +4330,23 @@ export class MeshengerVideoLibrary {
             sourceMetadata?: RecordValue;
             retryAfterMs?: number;
           }
+        | {
+            /**
+             * Server-only first-byte warmup for a continuous CallSession
+             * recording. It deliberately carries exactly one file URI: the
+             * player still receives every ordered segment from the card.
+             */
+            type: 'prewarm-call-media';
+            vaultKey: string;
+            fileUri: string;
+            /** Stable record identity lets a later manifest-pointer repair replace stale work. */
+            recordKey: string;
+            /** Exact sealed-card context; it is never serialized to the browser. */
+            streamGrant: VideoSpaceStreamGrantInput;
+            retryAfterMs?: number;
+          }
       );
+    type CallMediaPrewarmWork = Extract<SharedWork, { type: 'prewarm-call-media' }>;
 
     const queue: SharedWork[] = [];
     const scheduledGroupChats = new Map<string, Set<string>>();
@@ -3633,12 +4356,17 @@ export class MeshengerVideoLibrary {
     const settled = new Set<string>();
     const failedSpaces = new Set<string>();
     const deferredSpaces = new Set<string>();
-    const openedGroups = new Map<string, { vault: ResolvedVault; member: boolean }>();
+    const openedGroups = new Map<string, OpenedGroup>();
     const openedDirects = new Map<string, ResolvedVault>();
     const scheduledGroupFiles = new Set<string>();
     const scheduledGroupHistory = new Set<string>();
     const scheduledDirectHistory = new Set<string>();
     const scheduledFileReferences = new Set<string>();
+    // A recording is terminal for one exact source/authorization context once
+    // its optional warmup has succeeded, been denied/missing, or exhausted its
+    // bounded retry budget. Keeping this durable prevents the next pump from
+    // recreating finished work while other recordings are still pending.
+    const settledCallMediaPrewarms = new Map<string, string>();
 
     const addSpaceWork = (key: string, n = 1) => {
       remaining.set(key, (remaining.get(key) ?? 0) + n);
@@ -3748,6 +4476,7 @@ export class MeshengerVideoLibrary {
           ledger: {
             queue,
             found,
+            settledCallMediaPrewarms: [...settledCallMediaPrewarms],
             drainFinished: terminal,
             remaining: [...remaining],
             settled: [...settled],
@@ -3780,6 +4509,12 @@ export class MeshengerVideoLibrary {
               [...value],
             ]),
             catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION,
+            // Do not reopen every retained call on every catalogue read. A
+            // version is written only once no durable CallSession warmup task
+            // remains, so transient eVault failures still resume normally.
+            ...(queue.some((item) => item.type === 'prewarm-call-media')
+              ? {}
+              : { callMediaPrewarmVersion }),
           },
           items: library.items,
           conversations: [...conversations],
@@ -3807,12 +4542,18 @@ export class MeshengerVideoLibrary {
           attempts: item.attempts,
           notBefore: item.notBefore ?? 0,
           status: 'pending' as const,
-          priority: inventoryWorkPriority(item.type),
+          priority:
+            inventoryWorkPriority(item.type) +
+            // Canonical URL warming should run as soon as the current card
+            // has been discovered. Keep it just behind an authoritative File
+            // resolver, but ahead of deep conversation/history pagination.
+            (item.type === 'resolve-media' && item.mode === 'prewarm' ? 1 : 0),
           payload: item as unknown as Record<string, unknown>,
         };
       });
       try {
-        await this.jobStore.replaceOpenTasks(jobId, open);
+        await this.jobStore.syncOpenTasks(jobId, openTasks, open);
+        openTasks = open;
       } catch {
         // Ledger.queue still has the work. Do not abort drain because task
         // rows failed (Postgres rejects NUL bytes in text, for example).
@@ -3832,6 +4573,14 @@ export class MeshengerVideoLibrary {
           entry[0],
           new Set(entry[1].filter((item): item is string => typeof item === 'string')),
         );
+      }
+    };
+    const restoreStringMap = (value: unknown, target: Map<string, string>) => {
+      if (!Array.isArray(value)) return;
+      for (const entry of value) {
+        if (!Array.isArray(entry) || typeof entry[0] !== 'string' || typeof entry[1] !== 'string')
+          continue;
+        target.set(entry[0], entry[1]);
       }
     };
     const restoreStringMapString = (value: unknown, target: Map<string, Map<string, string>>) => {
@@ -3891,7 +4640,134 @@ export class MeshengerVideoLibrary {
       savedQueue = [];
       openTasks = [];
     }
+    /**
+     * Queue only the leading source of a continuous shared CallSession. The
+     * source URL remains server-only, while the card keeps its whole ordered
+     * segment list. Replacing by record key matters when a later GroupManifest
+     * repair makes the old authorization context obsolete before it warms.
+     */
+    const retainedCallMediaPrewarmNeeded =
+      job.ledger.callMediaPrewarmVersion !== callMediaPrewarmVersion;
+    const callMediaPrewarmKey = (item: CallMediaPrewarmWork) =>
+      inventoryTaskKey(item, item.vaultKey);
+    const enqueueCallRecordingPrewarms = (
+      records: readonly DiscoveredVideo[],
+      options?: { retained?: boolean },
+    ) => {
+      if (options?.retained && !retainedCallMediaPrewarmNeeded) return;
+      for (const item of records) {
+        if (item.kind !== 'call-recording' || item.accessScope !== 'shared') continue;
+        const fileUri = item.fileUris[0];
+        const parsed = fileUri ? parseW3dsFileUri(fileUri) : undefined;
+        if (!fileUri || !parsed) continue;
+        const work: CallMediaPrewarmWork = {
+          type: 'prewarm-call-media',
+          vaultKey: parsed.ownerEName,
+          fileUri,
+          recordKey: item.key,
+          streamGrant: streamGrantInputForDiscoveredVideo(
+            eName,
+            item,
+            fileUri,
+            this.config.signingSecret,
+          ),
+          attempts: 0,
+        };
+        const contextKey = callMediaPrewarmKey(work);
+        const queuedForRecord = queue.filter(
+          (candidate): candidate is CallMediaPrewarmWork =>
+            candidate.type === 'prewarm-call-media' && candidate.recordKey === item.key,
+        );
+        const matchingQueuedWork = queuedForRecord
+          .filter((candidate) => callMediaPrewarmKey(candidate) === contextKey)
+          .sort(
+            (left, right) =>
+              right.attempts - left.attempts || (right.notBefore ?? 0) - (left.notBefore ?? 0),
+          )[0];
+        // A GroupManifest repair can change the context for one record. Drop
+        // every old queue entry for that record, rather than replacing only
+        // the first and leaving a stale duplicate to be revived later.
+        for (let index = queue.length - 1; index >= 0; index -= 1) {
+          const candidate = queue[index];
+          if (candidate?.type === 'prewarm-call-media' && candidate.recordKey === item.key) {
+            queue.splice(index, 1);
+          }
+        }
+        if (settledCallMediaPrewarms.get(item.key) === contextKey) continue;
+        // A new source/authorization context deserves one fresh warmup; the
+        // old terminal outcome must not suppress it.
+        settledCallMediaPrewarms.delete(item.key);
+        // Retain retry/backoff state only when this is the identical durable
+        // task. Rebuilding it with attempts: 0 on every pump made the queue
+        // livelock and bypassed the retry cap.
+        if (matchingQueuedWork) {
+          work.attempts = matchingQueuedWork.attempts;
+          if (matchingQueuedWork.notBefore !== undefined) {
+            work.notBefore = matchingQueuedWork.notBefore;
+          }
+          if (matchingQueuedWork.retryAfterMs !== undefined) {
+            work.retryAfterMs = matchingQueuedWork.retryAfterMs;
+          }
+        }
+        queue.push(work);
+      }
+    };
+
+    /**
+     * A current GroupManifest can be discovered before, after, or in a
+     * previous durable pass from the history/call record that names a video.
+     * Upgrade only records bound to that exact group. The sealed stream still
+     * re-reads and validates this manifest at playback; the pointer merely
+     * prevents a broad metadata search from delaying that read.
+     */
+    const attachCurrentGroupManifestToIndexedRecords = (
+      groupEName: string,
+      sourceGroupManifestId: string,
+    ): boolean => {
+      let changed = false;
+      for (const [index, record] of found.entries()) {
+        const eligibleContext =
+          record.sourceChatKind !== 'direct' &&
+          (record.accessBasis === 'membership' || record.accessBasis === 'history');
+        if (
+          record.accessScope !== 'shared' ||
+          !eligibleContext ||
+          !sameEName(record.sourceSpaceKey ?? '', groupEName)
+        ) {
+          continue;
+        }
+        if (
+          record.sourceChatKind === 'group' &&
+          record.sourceGroupManifestId === sourceGroupManifestId
+        ) {
+          continue;
+        }
+        found[index] = {
+          ...record,
+          sourceChatKind: 'group',
+          sourceGroupManifestId,
+        };
+        enqueueCallRecordingPrewarms([found[index]]);
+        changed = true;
+      }
+      for (const item of queue) {
+        if (item.type !== 'resolve-media' || !sameEName(item.sourceSpaceKey, groupEName)) {
+          continue;
+        }
+        if (item.sourceMetadata?.sourceGroupManifestId === sourceGroupManifestId) continue;
+        item.sourceMetadata = {
+          ...(item.sourceMetadata ?? {}),
+          sourceGroupManifestId,
+        };
+        changed = true;
+      }
+      return changed;
+    };
+    let restoredGroupManifestPointersChanged = false;
+    let ledgerRestored = false;
     const restoreJobLedger = () => {
+      if (ledgerRestored) return;
+      ledgerRestored = true;
       completeness.hydrate(job.completeness);
       Object.assign(counts, job.sourceCounts);
       if (Array.isArray(job.ledger.found)) found.push(...(job.ledger.found as DiscoveredVideo[]));
@@ -3915,14 +4791,18 @@ export class MeshengerVideoLibrary {
       restoreStringMapSet(job.ledger.historicalAuthors, historicalAuthors);
       restoreStringMapSet(job.ledger.referencedGroupChats, referencedGroupChats);
       restoreStringMapSet(job.ledger.referencedDirectChats, referencedDirectChats);
+      restoreStringMap(job.ledger.settledCallMediaPrewarms, settledCallMediaPrewarms);
       restoreStringMapString(job.ledger.viewerDirectChatGrantIds, viewerDirectChatGrantIds);
       if (Array.isArray(job.ledger.openedGroups)) {
-        for (const entry of job.ledger.openedGroups as [
-          string,
-          { vault: ResolvedVault; member: boolean },
-        ][]) {
+        for (const entry of job.ledger.openedGroups as [string, OpenedGroup][]) {
           openedGroups.set(entry[0], entry[1]);
         }
+      }
+      for (const [groupEName, opened] of openedGroups) {
+        if (!opened.member || !opened.currentManifestId) continue;
+        restoredGroupManifestPointersChanged =
+          attachCurrentGroupManifestToIndexedRecords(groupEName, opened.currentManifestId) ||
+          restoredGroupManifestPointersChanged;
       }
       if (Array.isArray(job.ledger.openedDirects)) {
         for (const entry of job.ledger.openedDirects as [string, ResolvedVault][]) {
@@ -3982,8 +4862,20 @@ export class MeshengerVideoLibrary {
       !inventoryHasRateLimitedFalseComplete(job)
     ) {
       restoreJobLedger();
-      completeness.markScanFinished();
-      return snapshot('done');
+      enqueueCallRecordingPrewarms(found, { retained: true });
+      // A completed catalogue can still contain cold retained recordings
+      // from before this warmup existed. Resume just those bounded source
+      // tasks; never force a complete history rescan to repair first-byte
+      // latency.
+      if (queue.length > 0) {
+        drainFinished = false;
+      } else {
+        if (restoredGroupManifestPointersChanged) {
+          await persistCheckpoint({ drainFinished: true });
+        }
+        completeness.markScanFinished();
+        return snapshot('done');
+      }
     }
     restoreJobLedger();
     const repaired = repairRateLimitedTerminals();
@@ -3991,22 +4883,39 @@ export class MeshengerVideoLibrary {
       for (const task of openTasks) queue.push(task.payload as unknown as SharedWork);
     } else if (savedQueue.length > 0) {
       queue.push(...savedQueue);
-    } else if (
-      repaired ||
-      remaining.size > 0 ||
-      inventorySpacesClassified(completeness.snapshot()) < job.completeness.expected
+    }
+    enqueueCallRecordingPrewarms(found, { retained: true });
+    if (
+      queue.length === 0 &&
+      (repaired ||
+        remaining.size > 0 ||
+        inventorySpacesClassified(completeness.snapshot()) < job.completeness.expected)
     ) {
       // Fall through to reseedUnsettledWork after helpers are defined.
-    } else {
+    } else if (queue.length === 0) {
       seedInitialQueue();
     }
     const workKey = (item: SharedWork) =>
       inventoryTaskKey(item, inventoryVaultKey(item, ownVault.ownerEName));
     dedupeWork(queue, workKey);
+    // Restoring an open queue happens after the ledger's GroupManifest map.
+    // Apply the same pointer to retained deferred File work before an HTTP
+    // hydrate persists its next snapshot.
+    for (const [groupEName, opened] of openedGroups) {
+      if (!opened.member || !opened.currentManifestId) continue;
+      restoredGroupManifestPointersChanged =
+        attachCurrentGroupManifestToIndexedRecords(groupEName, opened.currentManifestId) ||
+        restoredGroupManifestPointersChanged;
+    }
     completeness.reconcileRetrying(queue.filter((item) => item.attempts > 0).length);
 
     if (options?.drain === false) {
-      if (savedQueue.length === 0 && openTasks.length === 0) await persistCheckpoint();
+      if (
+        (savedQueue.length === 0 && openTasks.length === 0) ||
+        restoredGroupManifestPointersChanged
+      ) {
+        await persistCheckpoint();
+      }
       return snapshot('batch');
     }
 
@@ -4229,6 +5138,7 @@ export class MeshengerVideoLibrary {
       target: FileRecordReferenceTarget,
       sourceSpaceKey: string,
       referenceId: string,
+      sourceGroupManifestId?: string,
     ) => {
       // This exact File reference was just read from the viewer's own vault.
       // Playback re-reads and compares the same local envelope, canonical
@@ -4255,7 +5165,11 @@ export class MeshengerVideoLibrary {
         envelopeId: target.metaEnvelopeId,
         sourceId: 'file-reference',
         sourceSpaceKey,
-        sourceMetadata: { type: 'file', sourceReferenceId: referenceId },
+        sourceMetadata: {
+          type: 'file',
+          sourceReferenceId: referenceId,
+          ...(sourceGroupManifestId ? { sourceGroupManifestId } : {}),
+        },
         attempts: 0,
       });
     };
@@ -4296,6 +5210,7 @@ export class MeshengerVideoLibrary {
       items: Envelope[],
       vault?: ResolvedVault,
       sourceViewerChatGrantId?: string,
+      sourceGroupManifestId?: string,
     ) => {
       found.push(
         ...this.discoverMessageVideos(
@@ -4304,11 +5219,12 @@ export class MeshengerVideoLibrary {
           eName,
           sourceEName,
           completeness,
-          (fileUri, envelopeId, sourceMetadata) => {
+          (fileUri, envelopeId, sourceMetadata, mode) => {
             if (!vault) return;
             const vaultKey = parseW3dsFileUri(fileUri)?.ownerEName ?? vault.ownerEName;
             queue.push({
               type: 'resolve-media',
+              mode,
               vaultKey,
               owner: vault.ownerEName,
               eVaultUri: vault.eVaultUri,
@@ -4322,6 +5238,8 @@ export class MeshengerVideoLibrary {
           },
           chatId,
           sourceViewerChatGrantId,
+          undefined,
+          sourceGroupManifestId,
         ),
       );
       appendRetained(
@@ -4400,17 +5318,17 @@ export class MeshengerVideoLibrary {
                   counts.personalPages += 1;
                   recordCoveragePage(completeness, item.ontologyId);
                   if (item.ontologyId === callSessionOntology) {
-                    found.push(
-                      ...(await this.discoverCallVideos({
-                        viewerEName: eName,
-                        sourceEName: eName,
-                        sourceEVaultUri: ownVault.eVaultUri,
-                        calls: page.value.items,
-                        referenced,
-                        rateLimit: inventoryRateLimit,
-                        ...(inventorySignal ? { signal: inventorySignal } : {}),
-                      })),
-                    );
+                    const recordings = await this.discoverCallVideos({
+                      viewerEName: eName,
+                      sourceEName: eName,
+                      sourceEVaultUri: ownVault.eVaultUri,
+                      calls: page.value.items,
+                      referenced,
+                      rateLimit: inventoryRateLimit,
+                      ...(inventorySignal ? { signal: inventorySignal } : {}),
+                    });
+                    found.push(...recordings);
+                    enqueueCallRecordingPrewarms(recordings);
                   } else if (item.ontologyId === fileOntology) {
                     found.push(
                       ...this.discoverFileVideos(
@@ -4451,6 +5369,31 @@ export class MeshengerVideoLibrary {
                       ...(inventorySignal ? { signal: inventorySignal } : {}),
                     },
                   );
+                  snapshot('batch');
+                  return;
+                }
+                if (item.type === 'prewarm-call-media') {
+                  const warmed = await this.readInventorySource(
+                    () =>
+                      this.prewarmCallRecordingMedia(eName, item, {
+                        ...(inventorySignal ? { signal: inventorySignal } : {}),
+                      }),
+                    undefined,
+                  );
+                  if (isRetryFailure(warmed.failure)) {
+                    const terminal = this.queueMediaPrewarmRetry(
+                      item,
+                      queue,
+                      warmed.failure,
+                      warmed.retryAfterMs,
+                      item.vaultKey,
+                    );
+                    if (terminal) {
+                      settledCallMediaPrewarms.set(item.recordKey, callMediaPrewarmKey(item));
+                    }
+                  } else {
+                    settledCallMediaPrewarms.set(item.recordKey, callMediaPrewarmKey(item));
+                  }
                   snapshot('batch');
                   return;
                 }
@@ -4498,9 +5441,10 @@ export class MeshengerVideoLibrary {
                         eName,
                         eName,
                         completeness,
-                        (fileUri, envelopeId, sourceMetadata) => {
+                        (fileUri, envelopeId, sourceMetadata, mode) => {
                           queue.push({
                             type: 'resolve-media',
+                            mode,
                             vaultKey: parseW3dsFileUri(fileUri)?.ownerEName ?? ownVault.ownerEName,
                             owner: ownVault.ownerEName,
                             eVaultUri: ownVault.eVaultUri,
@@ -4581,7 +5525,21 @@ export class MeshengerVideoLibrary {
                   openedGroups.set(item.groupEName, {
                     vault,
                     member: space.currentMember === true,
+                    ...(space.currentManifestId
+                      ? { currentManifestId: space.currentManifestId }
+                      : {}),
                   });
+                  if (space.currentMember && space.currentManifestId) {
+                    attachCurrentGroupManifestToIndexedRecords(
+                      item.groupEName,
+                      space.currentManifestId,
+                    );
+                    this.rememberCurrentViewerGroupMembershipProof(
+                      eName,
+                      item.groupEName,
+                      space.currentManifestId,
+                    );
+                  }
                   appendRetained(
                     conversations,
                     space.conversations,
@@ -4689,10 +5647,17 @@ export class MeshengerVideoLibrary {
                   if (item.attempts > 0) completeness.finishRetry();
                   recordCoveragePage(completeness, messageOntology);
                   if (item.after === null) completeness.recordGroupHistory();
-                  ingestMessagePage(item.groupEName, item.chatId, page.value.items, {
-                    ownerEName: item.owner,
-                    eVaultUri: item.eVaultUri,
-                  });
+                  ingestMessagePage(
+                    item.groupEName,
+                    item.chatId,
+                    page.value.items,
+                    {
+                      ownerEName: item.owner,
+                      eVaultUri: item.eVaultUri,
+                    },
+                    undefined,
+                    openedGroups.get(item.groupEName)?.currentManifestId,
+                  );
                   continueOrFinishPage(item.spaceKey, item, page.value);
                   snapshot('batch');
                   return;
@@ -4723,9 +5688,10 @@ export class MeshengerVideoLibrary {
                       eName,
                       item.groupEName,
                       completeness,
-                      (fileUri, envelopeId, sourceMetadata) => {
+                      (fileUri, envelopeId, sourceMetadata, mode) => {
                         queue.push({
                           type: 'resolve-media',
+                          mode,
                           vaultKey: parseW3dsFileUri(fileUri)?.ownerEName ?? item.owner,
                           owner: item.owner,
                           eVaultUri: item.eVaultUri,
@@ -4737,6 +5703,10 @@ export class MeshengerVideoLibrary {
                           attempts: 0,
                         });
                       },
+                      undefined,
+                      undefined,
+                      undefined,
+                      openedGroups.get(item.groupEName)?.currentManifestId,
                     ),
                   );
                   appendRetained(
@@ -4781,23 +5751,43 @@ export class MeshengerVideoLibrary {
                   if (item.attempts > 0) completeness.finishRetry();
                   recordCoveragePage(completeness, groupManifestOntology);
                   const opened = openedGroups.get(item.groupEName);
-                  const becameMember = page.value.items.some((manifest) =>
-                    isCurrentGroupMember(manifest.parsed, eName),
+                  const currentManifest = page.value.items.find((manifest) =>
+                    groupManifestEnvelopeAuthorizesViewer(manifest, item.groupEName, eName),
                   );
-                  if (becameMember && opened && !opened.member) {
-                    openedGroups.set(item.groupEName, { vault: opened.vault, member: true });
-                    enqueueGroupFiles(item.groupEName, opened.vault);
-                    enqueueGroupHistory(item.groupEName, opened.vault);
-                    addSpaceWork(item.groupEName);
-                    queue.push({
-                      type: 'group-chats',
-                      spaceKey: item.groupEName,
-                      groupEName: item.groupEName,
-                      owner: opened.vault.ownerEName,
-                      eVaultUri: opened.vault.eVaultUri,
-                      after: null,
-                      attempts: 0,
+                  // A late page may be the first one that contains this
+                  // viewer's current group record. Store its exact eVault id
+                  // once and enrich already-indexed records instead of
+                  // waiting for a future full rescan to improve playback.
+                  if (currentManifest && opened && (!opened.member || !opened.currentManifestId)) {
+                    const sourceGroupManifestId = currentManifest.id;
+                    openedGroups.set(item.groupEName, {
+                      ...opened,
+                      member: true,
+                      currentManifestId: sourceGroupManifestId,
                     });
+                    attachCurrentGroupManifestToIndexedRecords(
+                      item.groupEName,
+                      sourceGroupManifestId,
+                    );
+                    this.rememberCurrentViewerGroupMembershipProof(
+                      eName,
+                      item.groupEName,
+                      sourceGroupManifestId,
+                    );
+                    if (!opened.member) {
+                      enqueueGroupFiles(item.groupEName, opened.vault);
+                      enqueueGroupHistory(item.groupEName, opened.vault);
+                      addSpaceWork(item.groupEName);
+                      queue.push({
+                        type: 'group-chats',
+                        spaceKey: item.groupEName,
+                        groupEName: item.groupEName,
+                        owner: opened.vault.ownerEName,
+                        eVaultUri: opened.vault.eVaultUri,
+                        after: null,
+                        attempts: 0,
+                      });
+                    }
                   }
                   continueOrFinishPage(item.spaceKey, item, page.value);
                   snapshot('batch');
@@ -4828,19 +5818,21 @@ export class MeshengerVideoLibrary {
                   }
                   if (item.attempts > 0) completeness.finishRetry();
                   recordCoveragePage(completeness, callSessionOntology);
-                  found.push(
-                    ...(await this.discoverCallVideos({
-                      viewerEName: eName,
-                      sourceEName: item.groupEName,
-                      sourceEVaultUri: item.eVaultUri,
-                      sourceChatKind: 'group',
-                      calls: page.value.items,
-                      chatIds: new Set(item.chatIds),
-                      referenced,
-                      rateLimit: inventoryRateLimit,
-                      ...(inventorySignal ? { signal: inventorySignal } : {}),
-                    })),
-                  );
+                  const currentManifestId = openedGroups.get(item.groupEName)?.currentManifestId;
+                  const recordings = await this.discoverCallVideos({
+                    viewerEName: eName,
+                    sourceEName: item.groupEName,
+                    sourceEVaultUri: item.eVaultUri,
+                    sourceChatKind: 'group',
+                    ...(currentManifestId ? { sourceGroupManifestId: currentManifestId } : {}),
+                    calls: page.value.items,
+                    chatIds: new Set(item.chatIds),
+                    referenced,
+                    rateLimit: inventoryRateLimit,
+                    ...(inventorySignal ? { signal: inventorySignal } : {}),
+                  });
+                  found.push(...recordings);
+                  enqueueCallRecordingPrewarms(recordings);
                   continueOrFinishPage(item.spaceKey, item, page.value);
                   snapshot('batch');
                   return;
@@ -4864,24 +5856,33 @@ export class MeshengerVideoLibrary {
                   }
                   if (item.attempts > 0) completeness.finishRetry();
                   recordCoveragePage(completeness, item.ontologyId);
+                  const currentManifestId = openedGroups.get(item.groupEName)?.currentManifestId;
                   if (item.ontologyId === w3dsFileOntology) {
                     found.push(
-                      ...this.discoverRawFileVideos(
-                        item.owner,
-                        page.value.items,
-                        referenced,
-                        eName,
+                      ...withSourceGroupManifestId(
+                        this.discoverRawFileVideos(item.owner, page.value.items, referenced, eName),
+                        item.groupEName,
+                        currentManifestId,
                       ),
                     );
                   } else {
                     found.push(
-                      ...this.discoverFileVideos(
-                        item.owner,
-                        page.value.items,
-                        referenced,
-                        eName,
-                        (target, referenceId) =>
-                          enqueueFileReference(target, item.groupEName, referenceId),
+                      ...withSourceGroupManifestId(
+                        this.discoverFileVideos(
+                          item.owner,
+                          page.value.items,
+                          referenced,
+                          eName,
+                          (target, referenceId) =>
+                            enqueueFileReference(
+                              target,
+                              item.groupEName,
+                              referenceId,
+                              currentManifestId,
+                            ),
+                        ),
+                        item.groupEName,
+                        currentManifestId,
                       ),
                     );
                   }
@@ -5074,9 +6075,10 @@ export class MeshengerVideoLibrary {
                       eName,
                       item.ownerEName,
                       completeness,
-                      (fileUri, envelopeId, sourceMetadata) => {
+                      (fileUri, envelopeId, sourceMetadata, mode) => {
                         queue.push({
                           type: 'resolve-media',
+                          mode,
                           vaultKey: parseW3dsFileUri(fileUri)?.ownerEName ?? item.owner,
                           owner: item.owner,
                           eVaultUri: item.eVaultUri,
@@ -5135,20 +6137,20 @@ export class MeshengerVideoLibrary {
                   if (item.attempts > 0) completeness.finishRetry();
                   recordCoveragePage(completeness, callSessionOntology);
                   const sourceViewerChatGrantIds = viewerDirectChatGrantIds.get(item.ownerEName);
-                  found.push(
-                    ...(await this.discoverCallVideos({
-                      viewerEName: eName,
-                      sourceEName: item.ownerEName,
-                      sourceEVaultUri: item.eVaultUri,
-                      sourceChatKind: 'direct',
-                      calls: page.value.items,
-                      chatIds: new Set(item.chatIds),
-                      ...(sourceViewerChatGrantIds ? { sourceViewerChatGrantIds } : {}),
-                      referenced,
-                      rateLimit: inventoryRateLimit,
-                      ...(inventorySignal ? { signal: inventorySignal } : {}),
-                    })),
-                  );
+                  const recordings = await this.discoverCallVideos({
+                    viewerEName: eName,
+                    sourceEName: item.ownerEName,
+                    sourceEVaultUri: item.eVaultUri,
+                    sourceChatKind: 'direct',
+                    calls: page.value.items,
+                    chatIds: new Set(item.chatIds),
+                    ...(sourceViewerChatGrantIds ? { sourceViewerChatGrantIds } : {}),
+                    referenced,
+                    rateLimit: inventoryRateLimit,
+                    ...(inventorySignal ? { signal: inventorySignal } : {}),
+                  });
+                  found.push(...recordings);
+                  enqueueCallRecordingPrewarms(recordings);
                   continueOrFinishPage(item.spaceKey, item, page.value);
                   snapshot('batch');
                   return;
@@ -5200,9 +6202,10 @@ export class MeshengerVideoLibrary {
                       eName,
                       item.authorEName,
                       completeness,
-                      (fileUri, envelopeId, sourceMetadata) => {
+                      (fileUri, envelopeId, sourceMetadata, mode) => {
                         queue.push({
                           type: 'resolve-media',
+                          mode,
                           vaultKey: parseW3dsFileUri(fileUri)?.ownerEName ?? item.authorEName,
                           owner: item.authorEName,
                           eVaultUri: '',
@@ -5250,7 +6253,13 @@ export class MeshengerVideoLibrary {
             },
             {
               vaultKey: (item) => inventoryVaultKey(item, ownVault.ownerEName),
-              priority: (item) => inventoryWorkPriority(item.type),
+              priority: (item) =>
+                inventoryWorkPriority(item.type) +
+                // Let the current Message page finish first, then warm its
+                // visible File cards before chasing deep history. Fair
+                // per-vault scheduling and the interactive gate still keep
+                // this work from competing with a Watch click.
+                (item.type === 'resolve-media' && item.mode === 'prewarm' ? 1 : 0),
               now: this.now,
               maxVaultsPerWave: options?.maxVaultsPerWave ?? sharedSpaceConcurrency,
               ...(options?.maxWaves !== undefined ? { maxWaves: options.maxWaves } : {}),
@@ -5361,6 +6370,34 @@ export class MeshengerVideoLibrary {
     completeness.failRetry(retryClassFromFailure(failure));
     counts.failed += 1;
     onTerminal?.();
+  }
+
+  /**
+   * Optional URL cache fills retry separately from discovery. A prewarm 429
+   * still applies its Retry-After to that eVault's background gate: leaving
+   * sibling prewarms runnable amplified a single source throttle into a storm.
+   * The media resolver never waits on this gate, so a Watch keeps priority.
+   */
+  private queueMediaPrewarmRetry<T extends DeferredWork>(
+    item: T,
+    queue: DeferredWork[],
+    failure: 'unavailable' | 'rate_limited' | 'rejected',
+    retryAfterMs: number | undefined,
+    vaultKey: string,
+  ): boolean {
+    item.attempts += 1;
+    item.notBefore =
+      this.now() +
+      retryDelayMs({
+        attempt: item.attempts,
+        ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
+      });
+    if (failure === 'rate_limited') {
+      void this.jobStore.setVaultGate(vaultKey, item.notBefore).catch(() => undefined);
+    }
+    if (item.attempts >= maxInventoryMediaPrewarmAttempts) return true;
+    upsertWork(queue, item, (existing) => inventoryTaskKey(existing, vaultKey));
+    return false;
   }
 
   private async resolveCall(
@@ -5490,11 +6527,14 @@ export class MeshengerVideoLibrary {
     if (input.mode === 'open') {
       const manifestsRead = await read(
         () =>
-          this.listEnvelopes(owner, groupEVaultUri, groupManifestOntology, undefined, {
-            maxPages: 1,
+          this.findCurrentViewerGroupManifestProof(
+            owner,
+            groupEVaultUri,
+            input.groupEName,
+            input.viewerEName,
             rateLimit,
-            ...(input.signal ? { signal: input.signal } : {}),
-          }),
+            input.signal,
+          ),
         { items: [] as Envelope[], complete: false },
       );
       if (manifestsRead.failure === 'denied') return emptySpace('denied');
@@ -5507,12 +6547,16 @@ export class MeshengerVideoLibrary {
         );
       }
       const currentManifest = manifestsRead.value.items.find((item) =>
-        isCurrentGroupMember(item.parsed, input.viewerEName),
+        groupManifestEnvelopeAuthorizesViewer(item, input.groupEName, input.viewerEName),
       );
       const manifest = currentManifest ?? manifestsRead.value.items[0];
       const currentMember = Boolean(currentManifest);
-      if (currentMember) {
-        this.rememberCurrentViewerGroupMembershipProof(input.viewerEName, input.groupEName);
+      if (currentManifest) {
+        this.rememberCurrentViewerGroupMembershipProof(
+          input.viewerEName,
+          input.groupEName,
+          currentManifest.id,
+        );
       }
       if (manifest && currentMember) {
         const participantCount = groupParticipantCount(manifest.parsed);
@@ -5560,6 +6604,7 @@ export class MeshengerVideoLibrary {
         retryNeeded: false,
         vault,
         currentMember,
+        ...(currentManifest ? { currentManifestId: currentManifest.id } : {}),
         openedChatIds,
         chatsComplete: chatsRead.value.complete,
         ...(chatsRead.value.endCursor ? { chatsCursor: chatsRead.value.endCursor } : {}),
@@ -5570,15 +6615,22 @@ export class MeshengerVideoLibrary {
       };
     }
 
-    const manifests = await this.tryListEnvelopes(
-      owner,
-      groupEVaultUri,
-      groupManifestOntology,
+    const manifestsRead = await this.readSource(
+      () =>
+        this.findCurrentViewerGroupManifestProof(
+          owner,
+          groupEVaultUri,
+          input.groupEName,
+          input.viewerEName,
+          input.rateLimit ?? 'fail-fast',
+          input.signal,
+        ),
+      { items: [] as Envelope[], complete: false },
       failureTracker,
-      input.rateLimit ?? 'fail-fast',
     );
+    const manifests = manifestsRead.value.items;
     const currentManifest = manifests.find((item) =>
-      isCurrentGroupMember(item.parsed, input.viewerEName),
+      groupManifestEnvelopeAuthorizesViewer(item, input.groupEName, input.viewerEName),
     );
     const manifest = currentManifest ?? manifests[0];
     const currentMember = Boolean(currentManifest);
@@ -5645,6 +6697,7 @@ export class MeshengerVideoLibrary {
           sourceEName: input.groupEName,
           sourceEVaultUri: groupEVaultUri,
           sourceChatKind: 'group',
+          ...(currentManifest ? { sourceGroupManifestId: currentManifest.id } : {}),
           calls: callsRead.value,
           chatIds: input.chatIds,
           referenced: input.referenced,
@@ -5680,6 +6733,9 @@ export class MeshengerVideoLibrary {
             undefined,
             undefined,
             chatId,
+            undefined,
+            undefined,
+            currentManifest?.id,
           ),
         );
         messageRecords.push(
@@ -5747,7 +6803,13 @@ export class MeshengerVideoLibrary {
         failureTracker,
         input.rateLimit ?? 'fail-fast',
       );
-      videos.push(...this.discoverFileVideos(owner, files, input.referenced, input.viewerEName));
+      videos.push(
+        ...withSourceGroupManifestId(
+          this.discoverFileVideos(owner, files, input.referenced, input.viewerEName),
+          input.groupEName,
+          currentManifest?.id,
+        ),
+      );
       const rawFiles = await this.tryListEnvelopes(
         owner,
         groupEVaultUri,
@@ -5756,7 +6818,11 @@ export class MeshengerVideoLibrary {
         input.rateLimit ?? 'fail-fast',
       );
       videos.push(
-        ...this.discoverRawFileVideos(owner, rawFiles, input.referenced, input.viewerEName),
+        ...withSourceGroupManifestId(
+          this.discoverRawFileVideos(owner, rawFiles, input.referenced, input.viewerEName),
+          input.groupEName,
+          currentManifest?.id,
+        ),
       );
     }
     return {
@@ -5767,6 +6833,7 @@ export class MeshengerVideoLibrary {
       retryNeeded,
       ...(pendingAuthors.length ? { pendingAuthors } : {}),
       ...(retryNeeded ? { retryClass: 'rate_limited' as const } : {}),
+      ...(currentManifest ? { currentManifestId: currentManifest.id } : {}),
     };
   }
 
@@ -6006,6 +7073,7 @@ export class MeshengerVideoLibrary {
     sourceEName,
     sourceEVaultUri,
     sourceChatKind,
+    sourceGroupManifestId,
     calls,
     chatId,
     chatIds,
@@ -6018,6 +7086,7 @@ export class MeshengerVideoLibrary {
     sourceEName: string;
     sourceEVaultUri: string;
     sourceChatKind?: 'direct' | 'group';
+    sourceGroupManifestId?: string;
     calls: Envelope[];
     chatId?: string;
     chatIds?: ReadonlySet<string>;
@@ -6044,6 +7113,7 @@ export class MeshengerVideoLibrary {
       calls: resolved,
       referenced,
       ...(sourceChatKind ? { sourceChatKind } : {}),
+      ...(sourceGroupManifestId ? { sourceGroupManifestId } : {}),
       ...(chatId ? { chatId } : {}),
       ...(chatIds ? { chatIds } : {}),
       ...(sourceViewerChatGrantIds ? { sourceViewerChatGrantIds } : {}),
@@ -6056,10 +7126,16 @@ export class MeshengerVideoLibrary {
     viewerEName: string,
     sourceSpaceKey?: string,
     completeness?: InventoryCompletenessTracker,
-    onResolve?: (fileUri: string, envelopeId: string, sourceMetadata: RecordValue) => void,
+    onResolve?: (
+      fileUri: string,
+      envelopeId: string,
+      sourceMetadata: RecordValue,
+      mode: DeferredMediaMode,
+    ) => void,
     sourceChatIdHint?: string,
     sourceViewerChatGrantIdHint?: string,
     sourceViewerChatGrantIds?: ReadonlyMap<string, string>,
+    sourceGroupManifestIdHint?: string,
   ): DiscoveredVideo[] {
     const accepted: Envelope[] = [];
     for (const message of messages) {
@@ -6085,6 +7161,9 @@ export class MeshengerVideoLibrary {
           : sourceChatIdHint
             ? { ...sourceMetadata, chatId: sourceChatIdHint }
             : sourceMetadata;
+      const metadataWithAccess = sourceGroupManifestIdHint
+        ? { ...metadataWithChatGrant, sourceGroupManifestId: sourceGroupManifestIdHint }
+        : metadataWithChatGrant;
       completeness?.recordCandidate();
       const decision = classifyAuthorizedMedia({
         payload: message.parsed,
@@ -6092,6 +7171,10 @@ export class MeshengerVideoLibrary {
       });
       if (decision.status === 'accept') {
         completeness?.recordAccepted();
+        // The Message already supplies a valid W3DS File URI, so its card can
+        // render immediately. Queue a low-priority canonical File read solely
+        // to prewarm the server-only media URL cache for the first Watch.
+        onResolve?.(decision.fileUri, message.id, metadataWithAccess, 'prewarm');
         accepted.push(message);
         continue;
       }
@@ -6100,7 +7183,7 @@ export class MeshengerVideoLibrary {
         continue;
       }
       if (decision.status === 'resolve') {
-        onResolve?.(decision.fileUri, message.id, metadataWithChatGrant);
+        onResolve?.(decision.fileUri, message.id, metadataWithAccess, 'resolve');
         continue;
       }
       const type = optionalString(message.parsed.type)?.toLowerCase();
@@ -6109,7 +7192,7 @@ export class MeshengerVideoLibrary {
         (type === 'file' || type === 'video' || type === 'circle' || !type) &&
         decision.reason === 'missing_w3ds_file_uri'
       ) {
-        onResolve('', message.id, metadataWithChatGrant);
+        onResolve('', message.id, metadataWithAccess, 'resolve');
         continue;
       }
       completeness?.recordUnresolved(decision.reason);
@@ -6122,7 +7205,37 @@ export class MeshengerVideoLibrary {
       sourceChatIdHint,
       sourceViewerChatGrantIdHint,
       sourceViewerChatGrantIds,
+      sourceGroupManifestIdHint,
     );
+  }
+
+  /**
+   * Warms the exact private eVault source used by a shared CallSession card.
+   * This intentionally accepts only the first URI: `fileUris` remains intact
+   * on the card and the player continues to treat the recording as one
+   * continuous timeline. The opaque URL stays inside `resolveMediaUrl`'s
+   * normal server cache and never reaches the inventory response.
+   */
+  private async prewarmCallRecordingMedia(
+    viewerEName: string,
+    item: { fileUri: string; streamGrant: VideoSpaceStreamGrantInput },
+    options?: { signal?: AbortSignal },
+  ): Promise<void> {
+    if (
+      item.streamGrant.accessScope !== 'shared' ||
+      item.streamGrant.fileUri !== item.fileUri ||
+      !parseW3dsFileUri(item.fileUri)
+    ) {
+      return;
+    }
+    const streamId = createMeshengerVideoStreamId(
+      streamGrantFromVideoSpaceInput(viewerEName, item.streamGrant, this.now() + streamLifetimeMs),
+      this.config.signingSecret,
+    );
+    await this.resolveMediaUrl({ eName: viewerEName }, streamId, {
+      priority: 'warmup',
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
   }
 
   private async resolveQueuedMedia(
@@ -6134,6 +7247,7 @@ export class MeshengerVideoLibrary {
       vaultKey: string;
       sourceSpaceKey: string;
       sourceId: string;
+      mode?: DeferredMediaMode;
       sourceMetadata?: RecordValue;
       attempts: number;
       notBefore?: number;
@@ -6147,17 +7261,19 @@ export class MeshengerVideoLibrary {
     counts: InventorySourceCounts,
     options?: { signal?: AbortSignal; rateLimit?: SourceReadPolicy },
   ): Promise<void> {
+    const prewarmOnly = item.mode === 'prewarm';
     // A deferred File lookup may resolve a foreign canonical record. Retain
     // only the conversation id that originally authorized the reference so
     // its eventual playback grant can be checked against that same source.
     const sourceChatId = optionalString(item.sourceMetadata?.chatId);
     const sourceViewerChatGrantId = optionalString(item.sourceMetadata?.sourceViewerChatGrantId);
+    const sourceGroupManifestId = optionalString(item.sourceMetadata?.sourceGroupManifestId);
     const sourceReferenceId = optionalString(item.sourceMetadata?.sourceReferenceId);
     const parsedFile = parseW3dsFileUri(item.fileUri);
     const envelopeId = parsedFile?.metaEnvelopeId ?? item.envelopeId;
     const ownerHint = parsedFile?.ownerEName ?? item.owner;
     if (!envelopeId) {
-      completeness.recordUnresolved('missing_w3ds_file_uri');
+      if (!prewarmOnly) completeness.recordUnresolved('missing_w3ds_file_uri');
       return;
     }
     const vaultRead = await this.readInventorySource(async () => {
@@ -6176,14 +7292,31 @@ export class MeshengerVideoLibrary {
       return { vault, envelope };
     }, undefined);
     if (vaultRead.failure === 'denied') {
-      completeness.recordUnresolved('resolver_denied');
+      if (!prewarmOnly) completeness.recordUnresolved('resolver_denied');
       return;
     }
     if (vaultRead.failure === 'missing') {
-      completeness.recordUnresolved('resolver_missing');
+      if (!prewarmOnly) completeness.recordUnresolved('resolver_missing');
       return;
     }
     if (isRetryFailure(vaultRead.failure) || !vaultRead.value) {
+      // Cache warming is a best-effort optimization. It must never turn a
+      // successfully indexed card into an incomplete inventory or consume the
+      // retry budget needed for authoritative discovery work. Still retain a
+      // few durable background retries: otherwise a single transient eVault
+      // timeout turns every later Watch back into a cold foreground lookup.
+      if (prewarmOnly) {
+        this.queueMediaPrewarmRetry(
+          item,
+          queue,
+          vaultRead.failure && isRetryFailure(vaultRead.failure)
+            ? vaultRead.failure
+            : 'unavailable',
+          vaultRead.retryAfterMs,
+          parsedFile?.ownerEName ?? item.owner,
+        );
+        return;
+      }
       this.queueOrFailRetry(
         completeness,
         item,
@@ -6196,7 +7329,7 @@ export class MeshengerVideoLibrary {
       );
       return;
     }
-    if (item.attempts > 0) completeness.finishRetry();
+    if (item.attempts > 0 && !prewarmOnly) completeness.finishRetry();
     const resolved = vaultRead.value.envelope;
     if (item.sourceId === 'file-reference') {
       const canonical = this.discoverRawFileVideos(
@@ -6224,39 +7357,42 @@ export class MeshengerVideoLibrary {
           resolvedOntology: resolved.ontology,
         });
         if (canonicalMedia.status === 'exclude') {
-          discardFileReferencePlaceholder(found, item.fileUri);
+          if (!prewarmOnly) discardFileReferencePlaceholder(found, item.fileUri);
           return;
         }
-        completeness.recordUnresolved('resolver_unavailable');
+        if (!prewarmOnly) completeness.recordUnresolved('resolver_unavailable');
         return;
       }
       const canonicalOwnerEName = vaultRead.value.vault.ownerEName;
       const viewerOwnedReference =
         Boolean(sourceReferenceId) && sameEName(item.sourceSpaceKey, viewerEName);
-      found.push(
-        ...records.map((record) => ({
-          ...record,
-          // A reference stored in the viewer's own vault is its own durable
-          // authorization proof. Foreign/group references keep the source
-          // space that exposed them and stay membership-gated.
-          sourceSpaceKey:
-            record.accessScope === 'personal'
-              ? item.sourceSpaceKey
-              : viewerOwnedReference
-                ? canonicalOwnerEName
-                : item.sourceSpaceKey,
-          ...(sourceChatId ? { sourceChatId } : {}),
-          ...(sourceChatId && sourceViewerChatGrantId ? { sourceViewerChatGrantId } : {}),
-          ...(viewerOwnedReference && sourceReferenceId ? { sourceReferenceId } : {}),
-          ...(viewerOwnedReference ? { sourceReferenceFileId: envelopeId } : {}),
-          accessBasis:
-            record.accessScope === 'personal'
-              ? ('personal' as const)
-              : viewerOwnedReference
-                ? ('reference' as const)
-                : ('membership' as const),
-        })),
-      );
+      const resolvedRecords = records.map((record) => ({
+        ...record,
+        // A reference stored in the viewer's own vault is its own durable
+        // authorization proof. Foreign/group references keep the source
+        // space that exposed them and stay membership-gated.
+        sourceSpaceKey:
+          record.accessScope === 'personal'
+            ? item.sourceSpaceKey
+            : viewerOwnedReference
+              ? canonicalOwnerEName
+              : item.sourceSpaceKey,
+        ...(sourceChatId ? { sourceChatId } : {}),
+        ...(sourceChatId && sourceViewerChatGrantId ? { sourceViewerChatGrantId } : {}),
+        ...(record.accessScope === 'shared' && sourceGroupManifestId
+          ? { sourceChatKind: 'group' as const, sourceGroupManifestId }
+          : {}),
+        ...(viewerOwnedReference && sourceReferenceId ? { sourceReferenceId } : {}),
+        ...(viewerOwnedReference ? { sourceReferenceFileId: envelopeId } : {}),
+        accessBasis:
+          record.accessScope === 'personal'
+            ? ('personal' as const)
+            : viewerOwnedReference
+              ? ('reference' as const)
+              : ('membership' as const),
+      }));
+      await this.prewarmResolvedFileMediaUrls(viewerEName, resolvedRecords, resolved);
+      if (!prewarmOnly) found.push(...resolvedRecords);
       return;
     }
     const nested = classifyAuthorizedMedia({
@@ -6294,7 +7430,7 @@ export class MeshengerVideoLibrary {
           ? item.fileUri
           : '';
     if (!fileUri || !parseW3dsFileUri(fileUri)) {
-      completeness.recordUnresolved('missing_w3ds_file_uri');
+      if (!prewarmOnly) completeness.recordUnresolved('missing_w3ds_file_uri');
       return;
     }
     const decision = classifyResolvedEnvelope({
@@ -6303,41 +7439,118 @@ export class MeshengerVideoLibrary {
       ontology: resolved.ontology,
     });
     if (decision.status === 'accept') {
-      completeness.recordAccepted();
-      found.push(
-        ...discoverVideoMessageVideos(
-          [
-            {
-              id: resolved.id,
-              ontology: messageOntology,
-              parsed: {
-                ...resolved.parsed,
-                ...item.sourceMetadata,
-                type: 'file',
-                mediaUri: decision.fileUri,
-                ...(record(resolved.parsed.file) || record(item.sourceMetadata?.file)
-                  ? {
-                      file: {
-                        ...record(resolved.parsed.file),
-                        ...record(item.sourceMetadata?.file),
-                      },
-                    }
-                  : {}),
-              },
+      const resolvedRecords = discoverVideoMessageVideos(
+        [
+          {
+            id: resolved.id,
+            ontology: messageOntology,
+            parsed: {
+              ...resolved.parsed,
+              ...item.sourceMetadata,
+              type: 'file',
+              mediaUri: decision.fileUri,
+              ...(record(resolved.parsed.file) || record(item.sourceMetadata?.file)
+                ? {
+                    file: {
+                      ...record(resolved.parsed.file),
+                      ...record(item.sourceMetadata?.file),
+                    },
+                  }
+                : {}),
             },
-          ],
-          referenced,
-          viewerEName,
-          item.sourceSpaceKey,
-          optionalString(item.sourceMetadata?.chatId),
-          optionalString(item.sourceMetadata?.sourceViewerChatGrantId),
-        ),
+          },
+        ],
+        referenced,
+        viewerEName,
+        item.sourceSpaceKey,
+        optionalString(item.sourceMetadata?.chatId),
+        optionalString(item.sourceMetadata?.sourceViewerChatGrantId),
+        undefined,
+        sourceGroupManifestId,
       );
+      await this.prewarmResolvedFileMediaUrls(viewerEName, resolvedRecords, resolved);
+      if (!prewarmOnly) {
+        completeness.recordAccepted();
+        found.push(...resolvedRecords);
+      }
       return;
     }
+    if (prewarmOnly) return;
     if (decision.status === 'exclude') completeness.recordExcludedNonVideo();
     else if (decision.status === 'unresolved') completeness.recordUnresolved(decision.reason);
     else completeness.recordUnresolved('resolver_unavailable');
+  }
+
+  /**
+   * Converts a File URL that was already obtained by background inventory into
+   * the normal server-only playback cache. The key retains the complete
+   * viewer and source authorization context, and `resolveMediaUrl` still runs
+   * its normal signed-grant/current-share checks before it can return this
+   * entry. No URL is added to a card, inventory record, or browser response.
+   */
+  private async prewarmResolvedFileMediaUrls(
+    viewerEName: string,
+    records: readonly DiscoveredVideo[],
+    resolved: Envelope,
+  ): Promise<void> {
+    const candidate =
+      optionalString(resolved.parsed.publicUrl) ?? optionalString(resolved.parsed.url);
+    if (!candidate) return;
+    let mediaUrl: string;
+    try {
+      mediaUrl = safeMediaUrl(candidate);
+    } catch {
+      return;
+    }
+    for (const record of records) {
+      for (const fileUri of record.fileUris) {
+        // A resolved Message can point to a second canonical File. Never use
+        // one File's URL for a different File merely because both appeared in
+        // the same inventory task.
+        if (parseW3dsFileUri(fileUri)?.metaEnvelopeId !== resolved.id) continue;
+        const grant: StreamGrant = {
+          eName: viewerEName,
+          fileUri,
+          accessScope: record.accessScope,
+          ...(record.sourceSpaceKey ? { sourceSpaceKey: record.sourceSpaceKey } : {}),
+          ...(record.sourceGroupManifestId
+            ? { sourceGroupManifestId: record.sourceGroupManifestId }
+            : {}),
+          ...(record.sourceChatId ? { sourceChatId: record.sourceChatId } : {}),
+          ...(record.sourceViewerChatGrantId
+            ? { sourceViewerChatGrantId: record.sourceViewerChatGrantId }
+            : {}),
+          ...(record.sourceCallSessionId
+            ? { sourceCallSessionId: record.sourceCallSessionId }
+            : {}),
+          ...(record.sourceCallSessionVault
+            ? { sourceCallSessionVault: record.sourceCallSessionVault }
+            : {}),
+          ...(record.sourceRecordingVault
+            ? { sourceRecordingVault: record.sourceRecordingVault }
+            : {}),
+          ...(record.sourceChatKind ? { sourceChatKind: record.sourceChatKind } : {}),
+          ...(record.sourceReferenceId ? { sourceReferenceId: record.sourceReferenceId } : {}),
+          ...(record.sourceReferenceFileId
+            ? { sourceReferenceFileId: record.sourceReferenceFileId }
+            : {}),
+          ...(record.accessBasis ? { accessBasis: record.accessBasis } : {}),
+          expiresAt: Date.now() + inventoryMediaUrlPrewarmMaxTtlMs,
+        };
+        const cacheKey = mediaUrlCacheKey(grant);
+        const generation = mediaSourceCacheGeneration(cacheKey);
+        const cacheWriteContext = captureMediaSourceCacheWriteContext(cacheKey);
+        // Inventory read the envelope before this function ran. It therefore
+        // cannot safely reserve a durable write token for that source I/O.
+        // Keep the immediately useful local warmup but never persist it as a
+        // cross-replica redirect after the fact. A foreground resolver
+        // reserves its token *before* the canonical eVault File read.
+        const cacheLifetime = mediaUrlCacheLifetime(mediaUrl, grant.expiresAt);
+        if (cacheLifetime) {
+          cacheMediaUrl(cacheKey, mediaUrl, cacheLifetime.expiresAt, generation, cacheWriteContext);
+        }
+      }
+    }
   }
 
   private discoverFileVideos(
@@ -6436,6 +7649,7 @@ export class MeshengerVideoLibrary {
       after?: string | null;
       rateLimit?: SourceReadPolicy;
       signal?: AbortSignal;
+      timing?: MediaResolutionTiming;
     },
   ): Promise<{ items: Envelope[]; complete: boolean; endCursor?: string }> {
     throwIfMediaResolutionAborted(options?.signal);
@@ -6455,6 +7669,7 @@ export class MeshengerVideoLibrary {
           options?.rateLimit ?? 'fail-fast',
           undefined,
           options?.signal,
+          options?.timing,
         );
         return record(data.metaEnvelopes);
       },
@@ -6462,6 +7677,102 @@ export class MeshengerVideoLibrary {
     });
     if (!page.complete) completeness?.markRetry();
     return page;
+  }
+
+  /**
+   * Reads the current GroupManifest by its required group eName before using
+   * the historical one-page manifest scan. The exact lookup is an eVault
+   * optimization only: a candidate must bind to this group and name this
+   * viewer, otherwise the established scan remains the authority for legacy
+   * writers and unindexed historical records.
+   */
+  private async findCurrentViewerGroupManifestProof(
+    owner: string,
+    eVaultUri: string,
+    groupEName: string,
+    viewerEName: string,
+    rateLimit: SourceReadPolicy = 'fail-fast',
+    signal?: AbortSignal,
+    timing?: MediaResolutionTiming,
+  ): Promise<{ items: Envelope[]; complete: boolean; endCursor?: string }> {
+    throwIfMediaResolutionAborted(signal);
+    // The deployed W3DS writers use two GroupManifest ontology IDs. The
+    // primary one shares an ID with Chat, so only a strict group-shaped,
+    // group-bound positive result is authorization. Query them serially: a
+    // current primary record normally ends the path after one tiny response;
+    // older groups retain their legacy-compatible fallback without issuing a
+    // second request on the common path.
+    for (const ontologyId of groupManifestOntologies) {
+      let exact: Envelope[] = [];
+      try {
+        const data = await this.graphql(
+          owner,
+          eVaultUri,
+          exactGroupManifestAuthorizationQuery,
+          {
+            ontologyId,
+            groupEName,
+            first: 8,
+          },
+          rateLimit,
+          undefined,
+          signal,
+          timing,
+        );
+        exact = asArray(record(data.metaEnvelopes)?.edges)
+          .map(envelopeFromEdge)
+          .filter((item): item is Envelope => item !== undefined);
+      } catch (error) {
+        // A temporary eVault failure is not a compatibility condition.
+        // Preserve it so the caller gets a retryable outcome instead of
+        // multiplying a failing source read with scans. `remote_rejected`,
+        // however, is how an older eVault reports an unsupported exact search
+        // shape, so retain the established bounded fallback in that case.
+        const failure = sourceFailureClass(error);
+        if (failure === 'fatal' || failure === 'unavailable' || failure === 'rate_limited') {
+          throw error;
+        }
+      }
+      if (
+        exact.some((item) => groupManifestEnvelopeAuthorizesViewer(item, groupEName, viewerEName))
+      ) {
+        return { items: exact, complete: true };
+      }
+    }
+
+    // Exact search is a compatibility optimization, not the permission
+    // source. Keep one bounded scan for each deployed schema ID so a legacy
+    // eVault that lacks search support remains playable. The primary schema
+    // has the same id as Chat; its candidates are shape-filtered before they
+    // can possibly authorize below.
+    const fallbackItems: Envelope[] = [];
+    let complete = true;
+    let legacyEndCursor: string | undefined;
+    for (const ontologyId of groupManifestOntologies) {
+      const page = await this.listEnvelopes(owner, eVaultUri, ontologyId, undefined, {
+        maxPages: 1,
+        rateLimit,
+        ...(signal ? { signal } : {}),
+        ...(timing ? { timing } : {}),
+      });
+      fallbackItems.push(...page.items);
+      complete &&= page.complete;
+      if (ontologyId === groupManifestOntology && page.endCursor) {
+        legacyEndCursor = page.endCursor;
+      }
+      if (
+        page.items.some((item) =>
+          groupManifestEnvelopeAuthorizesViewer(item, groupEName, viewerEName),
+        )
+      ) {
+        return page;
+      }
+    }
+    return {
+      items: fallbackItems,
+      complete,
+      ...(legacyEndCursor ? { endCursor: legacyEndCursor } : {}),
+    };
   }
 
   /** Query a single chat on one author vault; never enumerate that vault's unrelated messages. */
@@ -6687,7 +7998,7 @@ export class MeshengerVideoLibrary {
     query: string,
     variables: Record<string, unknown>,
     rateLimit: SourceReadPolicy = 'fail-fast',
-    actingEName?: string,
+    _actingEName?: string,
     signal?: AbortSignal,
     timing?: MediaResolutionTiming,
   ): Promise<RecordValue> {
@@ -6709,7 +8020,6 @@ export class MeshengerVideoLibrary {
               'Content-Type': 'application/json',
               'X-ENAME': owner,
               Authorization: `Bearer ${platformToken}`,
-              ...(actingEName ? { 'X-ON-BEHALF-OF': normalizeEName(actingEName) } : {}),
             },
             body: JSON.stringify({ query, variables }),
           },
@@ -6741,19 +8051,16 @@ export class MeshengerVideoLibrary {
     if (cached && cached.expiresAt > now) return cached.token;
     if (cached) cachedPlatformTokens.delete(cacheKey);
     const tokenPolicy: SourceReadPolicy =
-      rateLimit === 'inventory-cancellable'
-        ? // Inventory cancellation applies to its source reads only. The
-          // registry credential is process-wide, so keep it on the ordinary
-          // non-cancellable fail-fast key that a foreground listing can reuse.
-          'fail-fast'
-        : rateLimit === 'background-cancellable' || rateLimit === 'warmup-cancellable'
-          ? 'backoff'
-          : rateLimit;
+      rateLimit === 'background-cancellable' || rateLimit === 'warmup-cancellable'
+        ? 'backoff'
+        : rateLimit;
     const callerOwnsCancellableToken =
       Boolean(signal) &&
-      (rateLimit === 'background-cancellable' || rateLimit === 'warmup-cancellable');
+      (rateLimit === 'background-cancellable' ||
+        rateLimit === 'warmup-cancellable' ||
+        rateLimit === 'inventory-cancellable');
     if (callerOwnsCancellableToken) {
-      // Do not put a cancellable hover/warmup credential request in the
+      // Do not put a cancellable preview/inventory credential request in the
       // process-wide pending map. If its source read is cancelled, its retry
       // budget must stop with that read instead of waking later and competing
       // with an interactive Watch request.
@@ -6830,7 +8137,7 @@ export class MeshengerVideoLibrary {
         response = await fetch(url, {
           ...init,
           cache: 'no-store',
-          signal: sourceRequestSignal(requestTimeoutMs, signal),
+          signal: sourceRequestSignal(sourceRequestTimeoutForPolicy(rateLimit), signal),
         });
       } catch {
         throwIfMediaResolutionAborted(signal);
@@ -6890,8 +8197,17 @@ export class MeshengerVideoLibrary {
       maxAttempts: 4,
       baseMs: 250,
       capMs: 4_000,
-      retryAfterMs: (error) =>
-        error instanceof MeshengerVideoLibraryError ? error.retryAfterMs : undefined,
+      retryAfterMs: (error) => {
+        if (!(error instanceof MeshengerVideoLibraryError)) return undefined;
+        // `Retry-After: 0` is valid, but immediately issuing another eVault
+        // request caused the production failure to fan out into repeated
+        // 429s. Preserve a very short cooperative boundary; a real
+        // Retry-After remains authoritative.
+        if (error.code === 'rate_limited') {
+          return Math.max(rateLimitBackoffFloorMs, error.retryAfterMs ?? 0);
+        }
+        return error.retryAfterMs;
+      },
       sleep: (ms) => sleepForMediaResolution(ms, signal),
     });
   }
@@ -6907,7 +8223,6 @@ export function createMeshengerVideoLibrary(
 ): MeshengerVideoLibrary {
   const registry = env.W3DS_REGISTRY_BASE_URL?.trim();
   const signingSecret = env.W3DS_AUTH_JWT_SECRET;
-  const playbackGrantConfig = readMeshengerPlaybackGrantConfig(env);
   if (!registry || !signingSecret || signingSecret.length < 32) {
     throw new MeshengerVideoLibraryError(
       'eVault videos are not configured for this Vidak deployment.',
@@ -6920,7 +8235,6 @@ export function createMeshengerVideoLibrary(
       registryBaseUrl: httpUrl(registry),
       platformName: env.W3DS_AUTH_PLATFORM_NAME?.trim() || 'vidak',
       signingSecret,
-      ...(playbackGrantConfig ? { playbackGrantConfig } : {}),
     },
     options,
   );
@@ -6929,10 +8243,8 @@ export function createMeshengerVideoLibrary(
 /** Test helper; production caches expire automatically and are never globally reset. */
 export function resetMeshengerVideoLibraryCachesForTests(): void {
   cachedMediaUrls.clear();
-  cachedMeshengerPlaybackGrantUrls.clear();
   mediaSourceCacheGenerations.clear();
   activeForcedMediaSourceRefreshes.clear();
-  pendingMeshengerPlaybackGrantResolutions.clear();
   interactiveVaultGates.clear();
   pendingMediaUrlResolutions.clear();
   directFileFallbackPreferred.clear();
@@ -6946,6 +8258,7 @@ export function resetMeshengerVideoLibraryCachesForTests(): void {
   pendingPlatformTokenControllers.clear();
   pendingPlatformTokens.clear();
   renewedStreams.clear();
+  resetGroupCallAccessCacheForTests();
   nextForcedRefreshOwnerId = 1;
   resetBackgroundWorkPriorityForTests();
 }
@@ -6992,10 +8305,12 @@ export function verifyMeshengerVideoStreamId(
   const parsed = decodeMeshengerVideoStreamGrant(value, secret);
   const grant = record(parsed);
   const eName = optionalString(grant?.eName);
+  const sharedCardBindingHash = optionalSharedCardBindingHash(grant?.sharedCardBindingHash);
   const fileUri = optionalString(grant?.fileUri);
   const expiresAt = number(grant?.expiresAt);
   const accessScope = optionalString(grant?.accessScope);
   const sourceSpaceKey = optionalString(grant?.sourceSpaceKey);
+  const sourceGroupManifestId = optionalString(grant?.sourceGroupManifestId);
   const sourceChatId = optionalString(grant?.sourceChatId);
   const sourceViewerChatGrantId = optionalString(grant?.sourceViewerChatGrantId);
   const sourceCallSessionId = optionalString(grant?.sourceCallSessionId);
@@ -7005,6 +8320,17 @@ export function verifyMeshengerVideoStreamId(
   const sourceReferenceId = optionalString(grant?.sourceReferenceId);
   const sourceReferenceFileId = optionalString(grant?.sourceReferenceFileId);
   const accessBasis = optionalString(grant?.accessBasis);
+  // A pointer can only accelerate the same GroupManifest authorization that
+  // would otherwise be used for a group membership/history record. Ignore it
+  // in all other sealed contexts rather than letting a direct-share fallback
+  // accidentally acquire a group-specific cache identity.
+  const usableSourceGroupManifestId =
+    sourceGroupManifestId &&
+    accessScope === 'shared' &&
+    sourceChatKind === 'group' &&
+    (accessBasis === 'membership' || accessBasis === 'history')
+      ? sourceGroupManifestId
+      : undefined;
   if (
     !eName ||
     !fileUri ||
@@ -7034,9 +8360,11 @@ export function verifyMeshengerVideoStreamId(
     );
   return {
     eName,
+    ...(sharedCardBindingHash ? { sharedCardBindingHash } : {}),
     fileUri,
     accessScope,
     ...(sourceSpaceKey ? { sourceSpaceKey } : {}),
+    ...(usableSourceGroupManifestId ? { sourceGroupManifestId: usableSourceGroupManifestId } : {}),
     ...(sourceChatId ? { sourceChatId } : {}),
     ...(sourceViewerChatGrantId ? { sourceViewerChatGrantId } : {}),
     ...(sourceCallSessionId ? { sourceCallSessionId } : {}),
@@ -7095,6 +8423,148 @@ function decodeMeshengerVideoStreamGrant(value: string, secret: string): unknown
 
 function streamGrantKey(secret: string): Buffer {
   return createHash('sha256').update(`vidak-stream-grant:${secret}`).digest();
+}
+
+// A card-quarantine binding must survive a viewer Chat-pointer rotation while
+// changing when the durable share context changes. It is deliberately an HMAC
+// over server-only data, never a browser identifier or authorization token.
+const sharedCardBindingKeyDomain = 'vidak.shared-playback-card-binding.v1';
+const sharedCardBindingHashPattern = /^[A-Za-z0-9_-]{43}$/;
+
+/**
+ * One source of truth for the server-only fields in a playback grant. Cards
+ * and background warmups must use the identical authorization/cache context;
+ * only their encrypted stream IDs and expiry timestamps differ.
+ */
+function streamGrantFromVideoSpaceInput(
+  eName: string,
+  input: VideoSpaceStreamGrantInput,
+  expiresAt: number,
+): StreamGrant {
+  return {
+    eName,
+    ...(input.sharedCardBindingHash ? { sharedCardBindingHash: input.sharedCardBindingHash } : {}),
+    fileUri: input.fileUri,
+    accessScope: input.accessScope,
+    ...(input.sourceSpaceKey ? { sourceSpaceKey: input.sourceSpaceKey } : {}),
+    ...(input.sourceGroupManifestId ? { sourceGroupManifestId: input.sourceGroupManifestId } : {}),
+    ...(input.sourceChatId ? { sourceChatId: input.sourceChatId } : {}),
+    ...(input.sourceViewerChatGrantId
+      ? { sourceViewerChatGrantId: input.sourceViewerChatGrantId }
+      : {}),
+    ...(input.sourceCallSessionId ? { sourceCallSessionId: input.sourceCallSessionId } : {}),
+    ...(input.sourceCallSessionVault
+      ? { sourceCallSessionVault: input.sourceCallSessionVault }
+      : {}),
+    ...(input.sourceRecordingVault ? { sourceRecordingVault: input.sourceRecordingVault } : {}),
+    ...(input.sourceChatKind ? { sourceChatKind: input.sourceChatKind } : {}),
+    ...(input.sourceReferenceId ? { sourceReferenceId: input.sourceReferenceId } : {}),
+    ...(input.sourceReferenceFileId ? { sourceReferenceFileId: input.sourceReferenceFileId } : {}),
+    ...(input.accessBasis ? { accessBasis: input.accessBasis } : {}),
+    expiresAt,
+  };
+}
+
+/**
+ * Matches `assembleVideoSpaceCatalogue`'s input for one file in a discovered
+ * card. The HMAC stays server-only in the durable inventory task, and never
+ * becomes card JSON or a media URL.
+ */
+function streamGrantInputForDiscoveredVideo(
+  viewerEName: string,
+  item: DiscoveredVideoRecord,
+  fileUri: string,
+  secret: string,
+): VideoSpaceStreamGrantInput {
+  return {
+    ...(item.accessScope === 'shared'
+      ? {
+          sharedCardBindingHash: sharedCardBindingHashForRecord({
+            viewerEName,
+            item,
+            secret,
+          }),
+        }
+      : {}),
+    fileUri,
+    accessScope: item.accessScope,
+    ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
+    ...(item.sourceGroupManifestId ? { sourceGroupManifestId: item.sourceGroupManifestId } : {}),
+    ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
+    ...(item.sourceViewerChatGrantId
+      ? { sourceViewerChatGrantId: item.sourceViewerChatGrantId }
+      : {}),
+    ...(item.sourceCallSessionId ? { sourceCallSessionId: item.sourceCallSessionId } : {}),
+    ...(item.sourceCallSessionVault ? { sourceCallSessionVault: item.sourceCallSessionVault } : {}),
+    ...(item.sourceRecordingVault ? { sourceRecordingVault: item.sourceRecordingVault } : {}),
+    ...(item.sourceChatKind ? { sourceChatKind: item.sourceChatKind } : {}),
+    ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
+    ...(item.sourceReferenceFileId ? { sourceReferenceFileId: item.sourceReferenceFileId } : {}),
+    ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
+  };
+}
+
+function sharedCardBindingHashForRecord(input: {
+  viewerEName: string;
+  item: DiscoveredVideoRecord;
+  secret: string;
+}): string {
+  const { item } = input;
+  const canonical = JSON.stringify({
+    v: 1,
+    viewerEName: normalizeEName(input.viewerEName).toLowerCase(),
+    itemId: item.key,
+    accessScope: 'shared',
+    accessBasis: item.accessBasis ?? '',
+    kind: item.kind,
+    // The exact ordered file set identifies one continuous recording card so
+    // a later segment denial suppresses the same card as segment zero.
+    fileUris: item.fileUris.map((fileUri) => fileUri.trim()),
+    sourceSpaceKey: item.sourceSpaceKey ? normalizeEName(item.sourceSpaceKey).toLowerCase() : '',
+    sourceGroupManifestId: item.sourceGroupManifestId ?? '',
+    sourceChatId: item.sourceChatId ?? '',
+    sourceCallSessionId: item.sourceCallSessionId ?? '',
+    sourceCallSessionVault: item.sourceCallSessionVault
+      ? normalizeEName(item.sourceCallSessionVault).toLowerCase()
+      : '',
+    sourceRecordingVault: item.sourceRecordingVault
+      ? normalizeEName(item.sourceRecordingVault).toLowerCase()
+      : '',
+    sourceChatKind: item.sourceChatKind ?? '',
+    sourceReferenceId: item.sourceReferenceId ?? '',
+    sourceReferenceFileId: item.sourceReferenceFileId ?? '',
+  });
+  const key = createHash('sha256')
+    .update(`${sharedCardBindingKeyDomain}\u0000${input.secret}`, 'utf8')
+    .digest();
+  return createHmac('sha256', key).update(canonical, 'utf8').digest('base64url');
+}
+
+/**
+ * A GroupManifest pointer is valid only for records discovered through that
+ * group. Do not attach it to personal records from the same eVault page: a
+ * personal File has its own admission boundary and must not inherit a group
+ * authorization context.
+ */
+function withSourceGroupManifestId(
+  records: readonly DiscoveredVideo[],
+  sourceGroupEName: string,
+  sourceGroupManifestId: string | undefined,
+): DiscoveredVideo[] {
+  if (!sourceGroupManifestId) return [...records];
+  return records.map((item) =>
+    item.accessScope === 'shared' &&
+    sameEName(item.sourceSpaceKey ?? '', sourceGroupEName) &&
+    item.sourceChatKind !== 'direct' &&
+    (item.accessBasis === 'membership' ||
+      (item.accessBasis === 'history' && item.sourceChatKind === 'group'))
+      ? { ...item, sourceChatKind: 'group' as const, sourceGroupManifestId }
+      : item,
+  );
+}
+
+function optionalSharedCardBindingHash(value: unknown): string | undefined {
+  return typeof value === 'string' && sharedCardBindingHashPattern.test(value) ? value : undefined;
 }
 
 function record(value: unknown): RecordValue | undefined {
@@ -7361,6 +8831,51 @@ function uniqueMessages(items: MeshengerMessage[]): MeshengerMessage[] {
   for (const item of items) unique.set(item.id, item);
   return [...unique.values()];
 }
+/**
+ * An exact search result is only a candidate. Validate the documented
+ * GroupManifest shape and bind its scalar eName to the requested group before
+ * looking at membership, so a similarly shaped record cannot authorize a
+ * different shared source.
+ */
+function groupManifestBindsSource(payload: RecordValue, groupEName: string): boolean {
+  return (
+    typeof payload.owner === 'string' &&
+    Array.isArray(payload.admins) &&
+    Array.isArray(payload.members) &&
+    typeof payload.eName === 'string' &&
+    sameEName(payload.eName, groupEName)
+  );
+}
+
+/**
+ * Older GroupManifest writers used the dedicated legacy ontology and some
+ * omitted fields that the current schema requires. Its vault is already
+ * resolved from the signed group eName, so retain that bounded compatibility
+ * read only on the dedicated legacy ontology. Never apply this looser shape
+ * to 550...003, because that ontology also contains ordinary Chat records.
+ */
+function legacyGroupManifestBindsSource(payload: RecordValue, groupEName: string): boolean {
+  const declaredEName = optionalString(payload.eName);
+  return (
+    typeof payload.owner === 'string' &&
+    Array.isArray(payload.members) &&
+    (declaredEName === undefined || sameEName(declaredEName, groupEName))
+  );
+}
+
+function groupManifestEnvelopeAuthorizesViewer(
+  envelope: Envelope,
+  groupEName: string,
+  viewerEName: string,
+): boolean {
+  const isBoundManifest =
+    envelope.ontology === primaryGroupManifestOntology
+      ? groupManifestBindsSource(envelope.parsed, groupEName)
+      : envelope.ontology === groupManifestOntology
+        ? legacyGroupManifestBindsSource(envelope.parsed, groupEName)
+        : false;
+  return isBoundManifest && isCurrentGroupMember(envelope.parsed, viewerEName);
+}
 function isCurrentGroupMember(payload: RecordValue, eName: string): boolean {
   return (
     optionalString(payload.owner) === eName ||
@@ -7480,21 +8995,70 @@ function cacheMediaUrl(
   }
   cachedMediaUrls.set(key, { url, expiresAt, generation });
 }
-function cacheMeshengerPlaybackGrantUrl(
-  key: string,
-  url: string,
-  expiresAt: number,
+
+/**
+ * Mirrors a valid local canonical eVault redirect into encrypted PostgreSQL so
+ * an inventory worker, a later server process, or another replica can reuse
+ * it. The complete viewer/source binding is HMACed by the cache module. A
+ * normal signed stream and a current shared proof remain mandatory before
+ * `resolveMediaUrl` reads it back.
+ */
+function persistEVaultMediaUrl(
+  cacheKey: string,
+  mediaUrl: string,
+  ttlMs: number,
+  writeToken: string,
   generation: number,
   context: CacheWriteContext,
-): void {
-  if (!canWriteMediaSourceCache(key, generation, context)) return;
-  const now = Date.now();
-  for (const [cachedKey, cached] of cachedMeshengerPlaybackGrantUrls) {
-    if (cached.expiresAt <= now || cachedMeshengerPlaybackGrantUrls.size >= maxCachedMediaUrls) {
-      cachedMeshengerPlaybackGrantUrls.delete(cachedKey);
-    }
+): Promise<boolean> {
+  if (!canWriteMediaSourceCache(cacheKey, generation, context)) return Promise.resolve(false);
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) return Promise.resolve(false);
+  return putEVaultMediaUrlCache({ cacheKey, mediaUrl, ttlMs, writeToken });
+}
+
+/**
+ * A durable cache write is an optimization, never an authorization or
+ * playback prerequisite. Its promise stays observed after the brief handoff
+ * budget so a slow database cannot block a Watch or produce an unhandled
+ * rejection; the cache's generation CAS still fences a late stale writer.
+ */
+async function awaitEVaultMediaUrlHandoff(write: Promise<boolean>): Promise<void> {
+  const completed = write.then(
+    () => undefined,
+    () => undefined,
+  );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    timeout = setTimeout(resolve, eVaultMediaUrlHandoffBudgetMs);
+  });
+  await Promise.race([completed, deadline]);
+  if (timeout) clearTimeout(timeout);
+}
+
+/**
+ * A local redirect cache is bounded by both the sealed stream lifetime and
+ * the eVault/CDN URL itself. Unknown provider URLs are useful only for the
+ * initial native-video range burst; persistent caching of them is prohibited
+ * by the eVault cache module because their expiry is not portable evidence.
+ */
+function mediaUrlCacheLifetime(
+  mediaUrl: string,
+  grantExpiresAt: number,
+  now = Date.now(),
+): { expiresAt: number; durableTtlMs?: number } | undefined {
+  const remainingGrantTtlMs = Math.floor(grantExpiresAt - now);
+  if (!Number.isSafeInteger(remainingGrantTtlMs) || remainingGrantTtlMs <= 0) return undefined;
+  const resolved = resolvePrivateMediaUrlCacheExpiry(mediaUrl, {
+    now,
+    maxTtlMs: remainingGrantTtlMs,
+  });
+  if (!resolved || !Number.isSafeInteger(resolved.ttlMs) || resolved.ttlMs <= 0) {
+    return undefined;
   }
-  cachedMeshengerPlaybackGrantUrls.set(key, { url, expiresAt, generation });
+  return {
+    expiresAt: now + resolved.ttlMs,
+    ...(resolved.kind === 'explicit' ? { durableTtlMs: resolved.ttlMs } : {}),
+  };
 }
 
 function mediaSourceCacheGeneration(key: string): number {
@@ -7735,14 +9299,11 @@ function pruneMediaSourceGenerationStates(now: number): void {
   for (const [key, state] of mediaSourceCacheGenerations) {
     const cached = cachedMediaUrls.get(key);
     if (cached && cached.expiresAt <= now) cachedMediaUrls.delete(key);
-    const bridge = cachedMeshengerPlaybackGrantUrls.get(key);
-    if (bridge && bridge.expiresAt <= now) cachedMeshengerPlaybackGrantUrls.delete(key);
     if (
       state.lastAdvancedAt + sourceGenerationRetentionMs <= now &&
       !activeForcedMediaSourceRefreshes.has(key) &&
       !hasPendingMediaSourceWork(key) &&
-      !cachedMediaUrls.has(key) &&
-      !cachedMeshengerPlaybackGrantUrls.has(key)
+      !cachedMediaUrls.has(key)
     ) {
       mediaSourceCacheGenerations.delete(key);
     }
@@ -7753,8 +9314,7 @@ function pruneMediaSourceGenerationStates(now: number): void {
     (key) =>
       activeForcedMediaSourceRefreshes.has(key) ||
       hasPendingMediaSourceWork(key) ||
-      cachedMediaUrls.has(key) ||
-      cachedMeshengerPlaybackGrantUrls.has(key),
+      cachedMediaUrls.has(key),
   );
 }
 
@@ -7799,12 +9359,7 @@ function pruneOldestInactiveGenerationStates(
 
 function hasPendingMediaSourceWork(key: string): boolean {
   const prefix = `${key}\u0000source-generation:`;
-  return (
-    [...pendingMediaUrlResolutions.keys()].some((pendingKey) => pendingKey.startsWith(prefix)) ||
-    [...pendingMeshengerPlaybackGrantResolutions.keys()].some((pendingKey) =>
-      pendingKey.startsWith(prefix),
-    )
-  );
+  return [...pendingMediaUrlResolutions.keys()].some((pendingKey) => pendingKey.startsWith(prefix));
 }
 
 function hasPendingEVaultSourceWork(key: string): boolean {
@@ -7823,7 +9378,13 @@ function sharedStreamProbes(grant: StreamGrant): SharedSpaceProbe[] {
   const sourceSpaceKey = grant.sourceSpaceKey;
   if (!sourceSpaceKey) return [];
   if (grant.accessBasis === 'membership') {
-    return [{ eName: sourceSpaceKey, kind: 'group' }];
+    return [
+      {
+        eName: sourceSpaceKey,
+        kind: 'group',
+        ...(grant.sourceGroupManifestId ? { manifestId: grant.sourceGroupManifestId } : {}),
+      },
+    ];
   }
   if (grant.accessBasis === 'reference' && grant.sourceReferenceId && grant.sourceReferenceFileId) {
     return [
@@ -7836,6 +9397,21 @@ function sharedStreamProbes(grant: StreamGrant): SharedSpaceProbe[] {
     ];
   }
   if (grant.accessBasis === 'history' && grant.sourceChatId) {
+    // A known group recording is authorized by the current GroupManifest.
+    // Its historical Chat id is useful catalogue context, but treating it as
+    // a direct-chat proof starts an unrelated eVault read alongside the
+    // membership check. That duplicate read is especially harmful for a long
+    // group recording: it can rate-limit the only proof that is actually
+    // authoritative. Unknown legacy context keeps the compatibility pair.
+    if (grant.sourceChatKind === 'group') {
+      return [
+        {
+          eName: sourceSpaceKey,
+          kind: 'group',
+          ...(grant.sourceGroupManifestId ? { manifestId: grant.sourceGroupManifestId } : {}),
+        },
+      ];
+    }
     return [
       {
         eName: sourceSpaceKey,
@@ -7845,18 +9421,99 @@ function sharedStreamProbes(grant: StreamGrant): SharedSpaceProbe[] {
           ? { viewerChatGrantId: grant.sourceViewerChatGrantId }
           : {}),
       },
-      { eName: sourceSpaceKey, kind: 'group' },
+      {
+        eName: sourceSpaceKey,
+        kind: 'group',
+      },
     ];
   }
   return [];
 }
 
 /**
- * Keep redirects and any source-issued bridge result bound to the complete
- * authorization context, rather than only the viewer and File URI. The same
- * File can legitimately be reachable through two conversations with different
- * revocation state, so their short-lived server-side entries must not bleed
- * into one another.
+ * A generic GroupManifest proof is reusable only as the existing fallback.
+ * When a group grant carries a fully addressed CallSession, its dedicated
+ * per-file cache is equally current evidence and avoids an unnecessary second
+ * source proof for native Range bursts and forced-refresh fences.
+ */
+function hasCurrentSharedAccessEvidence(
+  viewerEName: string,
+  grant: StreamGrant,
+  now = Date.now(),
+): boolean {
+  const exactGroupCallProof = exactGroupCallProofContext(grant);
+  return (
+    Boolean(
+      exactGroupCallProof && hasVerifiedGroupCallAccess(viewerEName, exactGroupCallProof, now),
+    ) ||
+    sharedStreamProbes(grant).some((source) => hasVerifiedSharedAccess(viewerEName, source, now))
+  );
+}
+
+/**
+ * Before a player can rely on a cached media URL, an eligible group grant
+ * needs its own exact-file proof. A broad GroupManifest cache remains a valid
+ * fallback only after that named read has returned retryable; it cannot make
+ * the exact proof look warm before the current CallSession was checked.
+ */
+function hasCurrentSharedPlaybackProof(
+  viewerEName: string,
+  grant: StreamGrant,
+  now = Date.now(),
+): boolean {
+  const exactGroupCallProof = exactGroupCallProofContext(grant);
+  if (exactGroupCallProof) {
+    return hasVerifiedGroupCallAccess(viewerEName, exactGroupCallProof, now);
+  }
+  return sharedStreamProbes(grant).some((source) =>
+    hasVerifiedSharedAccess(viewerEName, source, now),
+  );
+}
+
+/**
+ * Legacy direct recordings were discovered while the viewer had access, but
+ * older W3DS writers did not persist a durable per-viewer Chat envelope id.
+ * Their opaque, viewer-bound stream grants are therefore the cross-app
+ * admission capability. Replaying a Meshenger mirror as a prerequisite would
+ * turn a standard W3DS File URI into a source-app integration requirement.
+ *
+ * Group records intentionally stay on their current membership proof: their
+ * catalogue context names a mutable group rather than a portable direct File
+ * share. Newer direct records that carry a durable viewer grant likewise keep
+ * their stronger current-record check.
+ */
+function usesNativeLegacySharedFileAdmission(grant: StreamGrant): boolean {
+  return (
+    grant.accessScope === 'shared' &&
+    grant.accessBasis === 'history' &&
+    grant.sourceChatKind !== 'group' &&
+    !grant.sourceViewerChatGrantId
+  );
+}
+
+/**
+ * A shared catalogue label describes how Vidak found a card, not necessarily
+ * where the canonical File lives. When the signed File URI is in the
+ * authenticated viewer's own eVault, that eVault ownership is the strongest
+ * available W3DS admission proof. Keep it on the canonical File path without
+ * waiting for a peer application's historical Chat/CallSession mirror.
+ */
+function usesNativeSharedFileAdmission(
+  user: Pick<AuthUser, 'eName'>,
+  grant: StreamGrant,
+  file: NonNullable<ReturnType<typeof parseW3dsFileUri>>,
+): boolean {
+  return (
+    usesNativeLegacySharedFileAdmission(grant) ||
+    (grant.accessScope === 'shared' && sameEName(file.ownerEName, user.eName))
+  );
+}
+
+/**
+ * Keep canonical eVault redirects bound to the complete authorization context,
+ * rather than only the viewer and File URI. The same File can legitimately be
+ * reachable through two conversations with different revocation state, so
+ * their short-lived server-side entries must not bleed into one another.
  */
 function mediaUrlCacheKey(grant: StreamGrant): string {
   return [
@@ -7864,6 +9521,7 @@ function mediaUrlCacheKey(grant: StreamGrant): string {
     grant.fileUri,
     grant.accessScope,
     grant.sourceSpaceKey ? normalizeEName(grant.sourceSpaceKey) : '',
+    grant.sourceGroupManifestId ?? '',
     grant.sourceChatId ?? '',
     grant.sourceViewerChatGrantId ?? '',
     grant.sourceCallSessionVault ? normalizeEName(grant.sourceCallSessionVault) : '',
@@ -7912,6 +9570,38 @@ function exactSharedCallProofContext(grant: StreamGrant): ExactSharedCallProofCo
     callSessionVault,
     chatId: grant.sourceChatId,
     viewerChatGrantId: grant.sourceViewerChatGrantId,
+    fileUri: grant.fileUri,
+    ...(grant.sourceRecordingVault ? { recordingVault: grant.sourceRecordingVault } : {}),
+  };
+}
+
+/**
+ * A group historical share can take the exact current CallSession path only
+ * when its signed grant retained the canonical remote location. Unlike the
+ * direct compatibility proof, do not infer that location from another vault:
+ * an incomplete legacy group grant must retain the GroupManifest fallback.
+ */
+function exactGroupCallProofContext(grant: StreamGrant): GroupCallAccessProof | undefined {
+  if (
+    grant.accessScope !== 'shared' ||
+    grant.accessBasis !== 'history' ||
+    grant.sourceChatKind !== 'group' ||
+    !grant.sourceSpaceKey ||
+    !grant.sourceChatId ||
+    !grant.sourceCallSessionId ||
+    !grant.sourceCallSessionVault ||
+    !isEName(grant.sourceSpaceKey) ||
+    !isEName(grant.sourceCallSessionVault) ||
+    !parseW3dsFileUri(grant.fileUri) ||
+    (grant.sourceRecordingVault !== undefined && !isEName(grant.sourceRecordingVault))
+  ) {
+    return undefined;
+  }
+  return {
+    sourceSpaceKey: grant.sourceSpaceKey,
+    callSessionVault: grant.sourceCallSessionVault,
+    callSessionId: grant.sourceCallSessionId,
+    chatId: grant.sourceChatId,
     fileUri: grant.fileUri,
     ...(grant.sourceRecordingVault ? { recordingVault: grant.sourceRecordingVault } : {}),
   };
@@ -8076,7 +9766,10 @@ function combineExactSharedCallProofValidations(
 
 function callSessionMatchesExactSharedFile(
   envelope: Envelope,
-  context: ExactSharedCallProofContext,
+  context: Pick<
+    ExactSharedCallProofContext,
+    'callSessionId' | 'chatId' | 'fileUri' | 'recordingVault'
+  >,
   viewerEName: string,
 ): boolean {
   if (
@@ -8098,6 +9791,24 @@ function callSessionMatchesExactSharedFile(
     return false;
   }
   return orderedRecordingFileUris(recording).includes(context.fileUri);
+}
+
+/**
+ * Group admission is intentionally stricter than the direct helper above:
+ * `initiator` alone is not enough. The current CallSession has to list the
+ * signed-in viewer in its participant collection for this exact recording.
+ */
+function groupCallSessionMatchesExactSharedFile(
+  envelope: Envelope,
+  context: GroupCallAccessProof,
+  viewerEName: string,
+): boolean {
+  return (
+    callSessionMatchesExactSharedFile(envelope, context, viewerEName) &&
+    asArray(envelope.parsed.participants).some(
+      (participant) => typeof participant === 'string' && sameEName(participant, viewerEName),
+    )
+  );
 }
 
 function mediaAuthorizationTimingContext(

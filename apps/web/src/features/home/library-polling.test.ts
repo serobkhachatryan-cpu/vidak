@@ -4,7 +4,7 @@ import { completeInventory } from './video-space-model';
 
 describe('libraryPollingDelayMs', () => {
   it('uses low-frequency progress polls while an inventory scan is active', () => {
-    expect(libraryPollingDelayMs({ discovery: 'refreshing' })).toBe(15_000);
+    expect(libraryPollingDelayMs({ discovery: 'refreshing' })).toBe(30_000);
   });
 
   it('backs off while background work is deferred or rate limited', () => {
@@ -13,13 +13,13 @@ describe('libraryPollingDelayMs', () => {
         discovery: 'refreshing',
         completeness: { ...completeInventory, retrying: 1 },
       }),
-    ).toBe(20_000);
+    ).toBe(45_000);
     expect(
       libraryPollingDelayMs({
         discovery: 'refreshing',
         completeness: { ...completeInventory, retryRateLimited: 1 },
       }),
-    ).toBe(30_000);
+    ).toBe(60_000);
   });
 
   it('stops automatic scans when a terminal partial result needs the visible Retry action', () => {

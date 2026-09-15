@@ -137,7 +137,9 @@ export function resetSharedAccessCacheForTests(): void {
 function sharedAccessCacheKey(viewerEName: string, source: SharedSpaceProbe): string {
   return `${normalizeEName(viewerEName)}\u0000${source.kind}\u0000${normalizeEName(
     source.eName,
-  )}\u0000${source.kind === 'direct' ? source.chatId : ''}\u0000${
+  )}\u0000${source.kind === 'group' ? (source.manifestId ?? '') : ''}\u0000${
+    source.kind === 'direct' ? source.chatId : ''
+  }\u0000${
     source.kind === 'reference' ? source.referenceId : ''
   }\u0000${source.kind === 'reference' ? source.fileId : ''}`;
 }

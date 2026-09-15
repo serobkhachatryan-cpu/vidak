@@ -40,9 +40,47 @@ describe('recording concat', () => {
       return child;
     });
 
-    const stream = await concatenateRecordingSources(loopbackSources());
+    const completion = vi.fn();
+    const stream = await concatenateRecordingSources(loopbackSources(), {
+      onCompletion: completion,
+    });
     expect(await readAll(stream)).toEqual(concatBytes(init, fragment));
-    child.emit('close');
+    child.emit('close', 0);
+    expect(completion).toHaveBeenCalledWith({
+      outcome: 'completed',
+      bytesProduced: init.byteLength + fragment.byteLength,
+      exitCode: 0,
+    });
+  });
+
+  it('emits short internal fMP4 fragments without splitting the recording response', async () => {
+    mocks.spawn.mockReset();
+    const child = concatChild();
+    mocks.spawn.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.write(validFragmentedMp4Startup());
+        child.stdout.end();
+      });
+      return child;
+    });
+
+    const stream = await concatenateRecordingSources(loopbackSources());
+    await readAll(stream);
+
+    const args = mocks.spawn.mock.calls[0]?.[1];
+    expect(args).toEqual(
+      expect.arrayContaining([
+        '-movflags',
+        '+frag_keyframe+empty_moov+default_base_moof',
+        '-frag_duration',
+        '500000',
+        '-f',
+        'mp4',
+        'pipe:1',
+      ]),
+    );
+    expect(args?.indexOf('-frag_duration')).toBeLessThan(args?.indexOf('pipe:1') ?? -1);
+    child.emit('close', 0);
   });
 
   it('waits across split MP4 atoms instead of accepting an incomplete fragment', async () => {
@@ -71,6 +109,50 @@ describe('recording concat', () => {
     child.emit('close');
   });
 
+  it('reports a post-start nonzero ffmpeg exit after EOF as failed', async () => {
+    mocks.spawn.mockReset();
+    const child = concatChild();
+    mocks.spawn.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.write(validFragmentedMp4Startup());
+        child.stdout.end();
+      });
+      return child;
+    });
+    const completion = vi.fn();
+
+    const stream = await concatenateRecordingSources(loopbackSources(), {
+      onCompletion: completion,
+    });
+    await readAll(stream);
+    child.emit('close', 1);
+
+    expect(completion).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'failed', exitCode: 1 }),
+    );
+  });
+
+  it('keeps a clean stdout EOF completed when the orphan guard terminates the child', async () => {
+    mocks.spawn.mockReset();
+    const child = concatChild();
+    mocks.spawn.mockImplementation(() => {
+      queueMicrotask(() => {
+        child.stdout.write(validFragmentedMp4Startup());
+        child.stdout.end();
+      });
+      return child;
+    });
+    const completion = vi.fn();
+
+    const stream = await concatenateRecordingSources(loopbackSources(), {
+      onCompletion: completion,
+    });
+    await readAll(stream);
+    child.emit('close', null, 'SIGTERM');
+
+    expect(completion).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'completed' }));
+  });
+
   it('terminates ffmpeg and releases the ticket when the browser cancels playback', async () => {
     mocks.spawn.mockReset();
     const child = concatChild();
@@ -81,14 +163,21 @@ describe('recording concat', () => {
       return child;
     });
     const release = vi.fn();
+    const completion = vi.fn();
 
-    const stream = await concatenateRecordingSources(loopbackSources(), { onClose: release });
+    const stream = await concatenateRecordingSources(loopbackSources(), {
+      onClose: release,
+      onCompletion: completion,
+    });
     const reader = stream.getReader();
     await reader.cancel('viewer navigated away');
 
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
-    child.emit('close');
+    child.emit('close', null, 'SIGTERM');
     expect(release).toHaveBeenCalledTimes(1);
+    expect(completion).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: 'cancelled', bytesProduced: expect.any(Number) }),
+    );
   });
 
   it('fails with a sanitized 503 when ffmpeg cannot be spawned', async () => {
@@ -104,9 +193,13 @@ describe('recording concat', () => {
       return child;
     });
     const release = vi.fn();
+    const completion = vi.fn();
 
     await expect(
-      concatenateRecordingSources(loopbackSources(), { onClose: release }),
+      concatenateRecordingSources(loopbackSources(), {
+        onClose: release,
+        onCompletion: completion,
+      }),
     ).rejects.toMatchObject({
       code: 'recording_unavailable',
       status: 503,
@@ -116,6 +209,7 @@ describe('recording concat', () => {
 
     expect(child.kill).toHaveBeenCalledWith('SIGTERM');
     expect(release).toHaveBeenCalledTimes(1);
+    expect(completion).toHaveBeenCalledWith({ outcome: 'failed', bytesProduced: 0 });
   });
 
   it('fails before a browser response when ffmpeg exits without media output', async () => {

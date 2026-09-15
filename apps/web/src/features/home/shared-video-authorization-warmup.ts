@@ -98,6 +98,23 @@ export function scheduleSharedVideoAuthorizationWarmup(url: string): () => void 
   };
 }
 
+/**
+ * Stops only speculative hover/focus work from any card. A newly selected
+ * continuous recording uses its own opaque ticket as the one authoritative
+ * source-zero authorization path, so an older hover must not compete with it.
+ * Deliberate click/watch work is intentionally retained: it represents a
+ * separate confirmed user action and may safely finish after navigation.
+ */
+export function cancelCancellableSharedVideoAuthorizationHoverWork(): void {
+  for (const scheduled of scheduledWarmups.values()) clearTimeout(scheduled.timer);
+  scheduledWarmups.clear();
+  if (queuedWarmup?.intent === 'hover') queuedWarmup = undefined;
+  cancelActiveHover();
+  // If a confirmed Watch was queued while a hover was in flight, keep it
+  // moving. This helper only removes the low-priority speculative entries.
+  drainWarmups();
+}
+
 function enqueueWarmup(entry: WarmupEntry): void {
   if (completedWarmups.has(entry.url) || activeWarmup?.entry.url === entry.url) return;
   if (queuedWarmup?.url === entry.url) return;

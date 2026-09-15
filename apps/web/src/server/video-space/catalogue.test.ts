@@ -106,6 +106,66 @@ describe('assembleVideoSpaceCatalogue', () => {
     ]);
   });
 
+  it('passes a current GroupManifest id only into the sealed stream grant', () => {
+    const grants: VideoSpaceStreamGrantInput[] = [];
+    const sourceGroupManifestId = 'current-group-manifest';
+    const snapshot = assembleVideoSpaceCatalogue({
+      records: [
+        {
+          ...shared,
+          key: 'call:@group.w3id:call-1',
+          sourceSpaceKey: '@group.w3id',
+          sourceChatKind: 'group',
+          sourceGroupManifestId,
+        },
+      ],
+      completeness: createInventoryCompletenessTracker().snapshot(),
+      viewerEName: '@owner.w3id',
+      toStreamId: (grant) => {
+        grants.push(grant);
+        return 'group-stream';
+      },
+    });
+
+    expect(grants[0]).toMatchObject({ sourceGroupManifestId });
+    expect(snapshot.items[0]?.streamIds).toEqual(['group-stream']);
+    expect(snapshot.items[0]).not.toHaveProperty('sourceGroupManifestId');
+    expect(JSON.stringify(snapshot.items[0])).not.toContain(sourceGroupManifestId);
+  });
+
+  it('copies one opaque shared-card binding into every segment of a continuous recording', () => {
+    const grants: VideoSpaceStreamGrantInput[] = [];
+    const sharedCardBindingHash = 'a'.repeat(43);
+    const toSharedCardBindingHash = vi.fn(() => sharedCardBindingHash);
+    const snapshot = assembleVideoSpaceCatalogue({
+      records: [
+        {
+          ...shared,
+          fileUris: ['w3ds://file?id=@friend.w3id/call-1', 'w3ds://file?id=@friend.w3id/call-2'],
+        },
+      ],
+      completeness: createInventoryCompletenessTracker().snapshot(),
+      viewerEName: '@owner.w3id',
+      toSharedCardBindingHash,
+      toStreamId: (grant) => {
+        grants.push(grant);
+        return `stream:${grants.length}`;
+      },
+    });
+
+    expect(toSharedCardBindingHash).toHaveBeenCalledWith(
+      expect.objectContaining({ key: shared.key }),
+    );
+    expect(snapshot.items[0]).toMatchObject({
+      streamIds: ['stream:1', 'stream:2'],
+      sharedCardBindingHash,
+    });
+    expect(grants.map((grant) => grant.sharedCardBindingHash)).toEqual([
+      sharedCardBindingHash,
+      sharedCardBindingHash,
+    ]);
+  });
+
   it('mints a shared File-reference grant with only its server-side reference proof', () => {
     const grants: VideoSpaceStreamGrantInput[] = [];
     const {

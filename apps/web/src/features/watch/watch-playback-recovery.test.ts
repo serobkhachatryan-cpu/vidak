@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  initialContinuousRecordingTicketRetryDelayMs,
   isCurrentPlaybackGeneration,
   playbackFailureForAuthorizationCode,
   sharedVideoHandoffRetryDelay,
   shouldAwaitSharedVideoHandoff,
+  shouldRetryInitialContinuousRecordingTicket,
+  shouldRetryUnstartedContinuousRecording,
   singleVideoSourceRecoveryAction,
 } from './watch-playback-recovery';
 
@@ -55,6 +58,55 @@ describe('single-video source recovery policy', () => {
       expect(singleVideoSourceRecoveryAction({ ...base, ...override })).toBe('skip');
     },
   );
+});
+
+describe('continuous recording ticket recovery policy', () => {
+  const base = {
+    isContinuousRecording: true,
+    hasPlaybackSource: true,
+    hasMeaningfulPlayback: false,
+    automaticTicketRetryUsed: false,
+  };
+
+  it('replaces a ticket when native media fails after canplay but before the clock advances', () => {
+    expect(shouldRetryUnstartedContinuousRecording(base)).toBe(true);
+  });
+
+  it.each([
+    { isContinuousRecording: false },
+    { hasPlaybackSource: false },
+    { hasMeaningfulPlayback: true },
+    { automaticTicketRetryUsed: true },
+  ])('does not restart a continuous recording for %o', (override) => {
+    expect(shouldRetryUnstartedContinuousRecording({ ...base, ...override })).toBe(false);
+  });
+
+  it('retries one retryable source-zero ticket before exposing an error', () => {
+    expect(
+      shouldRetryInitialContinuousRecordingTicket({
+        isContinuousRecording: true,
+        errorCode: 'remote_unavailable',
+        automaticTicketRetryUsed: false,
+      }),
+    ).toBe(true);
+    expect(initialContinuousRecordingTicketRetryDelayMs).toBe(300);
+  });
+
+  it.each([
+    { isContinuousRecording: false },
+    { errorCode: 'authorization_denied' },
+    { errorCode: 'invalid_recording' },
+    { automaticTicketRetryUsed: true },
+  ])('does not retry an initial ticket for %o', (override) => {
+    expect(
+      shouldRetryInitialContinuousRecordingTicket({
+        isContinuousRecording: true,
+        errorCode: 'remote_unavailable',
+        automaticTicketRetryUsed: false,
+        ...override,
+      }),
+    ).toBe(false);
+  });
 });
 
 describe('shared source handoff waiting policy', () => {

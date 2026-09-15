@@ -6,7 +6,10 @@ import { and, eq, gt, sql } from 'drizzle-orm';
 
 import { getPlaybackW3dsDatabase, type W3dsDatabase } from './db/client';
 import { playbackSourceRefreshEpochs } from './db/schema';
-import { parseSafePrivateMediaUpstreamUrl } from './private-media-upstream';
+import {
+  parseSafePrivateMediaUpstreamUrl,
+  resolvePrivateMediaUrlCacheExpiry,
+} from './private-media-upstream';
 import {
   sharedVideoAuthorizationReceiptTtlMs,
   verifySharedVideoAuthorizationReceipt,
@@ -36,9 +39,10 @@ export const playbackSourceRefreshCleanupIntervalMs = 30_000;
 // This covers all bounded source work plus scheduling headroom. It remains
 // substantially shorter than the 45-second receipt lifetime.
 export const playbackSourceRefreshLeaseTtlMs = 30_000;
-// The durable handoff outlives the receipt by a small margin so it cannot
-// disappear immediately before the just-minted 45-second receipt. Every read
-// still verifies that receipt, so this is retention only—not a longer grant.
+// Resolving/unavailable recovery state outlives the receipt by a small margin
+// so an older process cannot revive a rejected source. A *ready URL* is never
+// retained for this full period: publication below bounds it by the eVault
+// redirect's own source expiry.
 export const playbackSourceRefreshStateTtlMs = sharedVideoAuthorizationReceiptTtlMs + 15_000;
 
 export interface PlaybackSourceRefreshBinding {
@@ -103,10 +107,20 @@ export interface FailPlaybackSourceRefreshInput extends PlaybackSourceRefreshBin
   lease: PlaybackSourceRefreshLease;
 }
 
+/**
+ * Removes only the exact resolving lease. It is used when a result is safe
+ * for the current replica's short burst but cannot become a durable handoff,
+ * and when a transient recovery fails before it has published a source.
+ */
+export interface ReleasePlaybackSourceRefreshInput extends PlaybackSourceRefreshBinding {
+  lease: PlaybackSourceRefreshLease;
+}
+
 export interface PlaybackSourceRefreshStore {
   claim(input: PlaybackSourceRefreshClaimInput): Promise<PlaybackSourceRefreshClaim>;
   publish(input: PublishPlaybackSourceRefreshInput): Promise<boolean>;
   fail(input: FailPlaybackSourceRefreshInput): Promise<boolean>;
+  release(input: ReleasePlaybackSourceRefreshInput): Promise<boolean>;
   read(input: PlaybackSourceRefreshReadInput): Promise<PlaybackSourceRefreshState>;
 }
 
@@ -247,10 +261,33 @@ export class PostgresPlaybackSourceRefreshStore implements PlaybackSourceRefresh
     const authorized = this.authorizeBinding(input);
     const mediaUrl = normalizeSafeMediaUrl(input.mediaUrl);
     const lease = normalizeLease(input.lease);
-    if (!authorized || !mediaUrl || !lease || lease.expiresAt <= authorized.now) return false;
+    const sourceExpiry =
+      authorized && mediaUrl
+        ? resolvePrivateMediaUrlCacheExpiry(mediaUrl, {
+            now: authorized.now,
+            maxTtlMs: playbackSourceRefreshStateTtlMs,
+          })
+        : undefined;
+    if (
+      !authorized ||
+      !mediaUrl ||
+      !lease ||
+      lease.expiresAt <= authorized.now ||
+      !sourceExpiry ||
+      sourceExpiry.kind !== 'explicit' ||
+      !canAddTtl(authorized.now, sourceExpiry.ttlMs)
+    ) {
+      return false;
+    }
     const now = new Date(authorized.now);
     const databaseNow = databaseTimestamp(input, now);
-    const expiresAt = databaseTimestampAfter(input, now, playbackSourceRefreshStateTtlMs);
+    // This encrypted handoff can be read by a different replica. Its row
+    // lifetime must therefore end before the actual object-storage redirect,
+    // not merely when the viewer's receipt or recovery state expires.
+    // This is a source-safe *absolute* deadline, not a duration to add at
+    // database statement time. A queued update must therefore become absent
+    // rather than extending a signed object URL past its safety margin.
+    const expiresAt = new Date(authorized.now + sourceExpiry.ttlMs);
     const encryptedPayload = encryptPayload(
       mediaUrl,
       authorized.bindingHash,
@@ -276,6 +313,7 @@ export class PostgresPlaybackSourceRefreshStore implements PlaybackSourceRefresh
             eq(playbackSourceRefreshEpochs.leaseHash, hashLease(this.leaseKey, lease.token)),
             gt(playbackSourceRefreshEpochs.leaseExpiresAt, databaseNow),
             gt(playbackSourceRefreshEpochs.expiresAt, databaseNow),
+            sql`${expiresAt} > ${databaseNow}`,
           ),
         )
         .returning({ bindingHash: playbackSourceRefreshEpochs.bindingHash });
@@ -324,6 +362,32 @@ export class PostgresPlaybackSourceRefreshStore implements PlaybackSourceRefresh
       const failed = rows.length === 1;
       if (failed) this.scheduleExpiredCleanup(authorized.now);
       return failed;
+    } catch {
+      return false;
+    }
+  }
+
+  async release(input: ReleasePlaybackSourceRefreshInput): Promise<boolean> {
+    const authorized = this.authorizeBinding(input);
+    const lease = normalizeLease(input.lease);
+    // A source operation can complete just after its clock lease expires.
+    // The exact epoch+lease-hash predicate remains safe in that case: a
+    // successor necessarily has a different epoch or hash, so this release
+    // cannot delete its state.
+    if (!authorized || !lease) return false;
+    try {
+      const rows = await this.db
+        .delete(playbackSourceRefreshEpochs)
+        .where(
+          and(
+            eq(playbackSourceRefreshEpochs.bindingHash, authorized.bindingHash),
+            eq(playbackSourceRefreshEpochs.epoch, lease.epoch),
+            eq(playbackSourceRefreshEpochs.status, 'resolving'),
+            eq(playbackSourceRefreshEpochs.leaseHash, hashLease(this.leaseKey, lease.token)),
+          ),
+        )
+        .returning({ bindingHash: playbackSourceRefreshEpochs.bindingHash });
+      return rows.length === 1;
     } catch {
       return false;
     }
@@ -469,6 +533,12 @@ export function publishPlaybackSourceRefresh(
 
 export function failPlaybackSourceRefresh(input: FailPlaybackSourceRefreshInput): Promise<boolean> {
   return resolveStore().fail(input);
+}
+
+export function releasePlaybackSourceRefresh(
+  input: ReleasePlaybackSourceRefreshInput,
+): Promise<boolean> {
+  return resolveStore().release(input);
 }
 
 export function readPlaybackSourceRefresh(

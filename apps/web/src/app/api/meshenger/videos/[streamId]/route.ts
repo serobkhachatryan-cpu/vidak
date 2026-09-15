@@ -9,10 +9,6 @@ import {
   resolveCorrelationId,
 } from '../../../../../server/ops-observability';
 import {
-  deletePlaybackResolutionCache,
-  getPlaybackResolutionCache,
-} from '../../../../../server/playback-resolution-cache';
-import {
   isRefreshablePrivateMediaFailure,
   openPrivateMediaUpstream,
 } from '../../../../../server/private-media-upstream';
@@ -49,32 +45,13 @@ export async function GET(
     let retriedSource = false;
     let renewedExpiredStream = false;
     let resolvedStreamId = streamId;
-    let usedReceiptBoundResolutionCache = false;
     let mediaUrl: string;
-    const resolveSource = async (
-      candidateStreamId: string,
-      options?: { bypassReceiptBoundResolutionCache?: boolean },
-    ): Promise<string> => {
+    const resolveSource = async (candidateStreamId: string): Promise<string> => {
       const hasRecentSharedAuthorizationReceipt = hasVerifiedSharedAuthorizationReceipt(
         sharedAuthorizationReceipt,
         session.user.eName,
         candidateStreamId,
       );
-      if (hasRecentSharedAuthorizationReceipt && !options?.bypassReceiptBoundResolutionCache) {
-        const cachedMediaUrl = await readReceiptBoundResolutionCache(
-          sharedAuthorizationReceipt,
-          session.user.eName,
-          candidateStreamId,
-        );
-        if (cachedMediaUrl) {
-          // A cached URL is not an authorization grant. Confirm the opaque
-          // signed stream is still valid and bound to this session before it
-          // is ever handed to the private upstream transport.
-          library.inspectBoundStream(session.user, candidateStreamId);
-          usedReceiptBoundResolutionCache = true;
-          return cachedMediaUrl;
-        }
-      }
       return hasRecentSharedAuthorizationReceipt
         ? await library.resolveMediaUrl(session.user, candidateStreamId, {
             hasRecentSharedAuthorizationReceipt: true,
@@ -102,20 +79,8 @@ export async function GET(
       upstreamResult.kind === 'failure' &&
       isRefreshablePrivateMediaFailure(upstreamResult.failure)
     ) {
-      if (usedReceiptBoundResolutionCache) {
-        // A stale cache row must never participate in the one bounded retry.
-        // Cleanup is intentionally non-blocking and cannot affect playback.
-        void deleteReceiptBoundResolutionCache(
-          sharedAuthorizationReceipt,
-          session.user.eName,
-          resolvedStreamId,
-        );
-        usedReceiptBoundResolutionCache = false;
-      }
       await library.invalidateMediaUrl(session.user, resolvedStreamId);
-      mediaUrl = await resolveSource(resolvedStreamId, {
-        bypassReceiptBoundResolutionCache: true,
-      });
+      mediaUrl = await resolveSource(resolvedStreamId);
       upstreamResult = await openUpstream();
       retriedSource = true;
     }
@@ -181,34 +146,6 @@ function hasVerifiedSharedAuthorizationReceipt(
     if (error instanceof SharedVideoAuthorizationReceiptConfigurationError) return false;
     throw error;
   }
-}
-
-/**
- * The receipt cache is deliberately invisible when its backing store or
- * configuration is unavailable. The cache itself repeats the exact receipt,
- * viewer, and stream validation; this wrapper retains no source details.
- */
-async function readReceiptBoundResolutionCache(
-  receipt: string | undefined,
-  viewerEName: string,
-  streamId: string,
-): Promise<string | undefined> {
-  if (!receipt) return undefined;
-  try {
-    return await getPlaybackResolutionCache({ receipt, viewerEName, streamId });
-  } catch {
-    return undefined;
-  }
-}
-
-/** A rejected cache-hit URL is removed best-effort before the one fresh resolve. */
-function deleteReceiptBoundResolutionCache(
-  receipt: string | undefined,
-  viewerEName: string,
-  streamId: string,
-): Promise<boolean> {
-  if (!receipt) return Promise.resolve(false);
-  return deletePlaybackResolutionCache({ receipt, viewerEName, streamId }).catch(() => false);
 }
 
 function errorResponse(error: unknown, correlationId: string): NextResponse {

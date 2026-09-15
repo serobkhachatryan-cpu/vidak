@@ -142,7 +142,7 @@ describe('durable inventory checkpoints', () => {
         maxVaultsPerWave: 8,
       },
     );
-    expect(log[0]).toBe('@vault-a.w3id:messages');
+    expect(log[0]).toBe('@vault-b.w3id:group-open');
     expect(log).toContain('@vault-b.w3id:group-open');
     expect(log.indexOf('@vault-b.w3id:group-open')).toBeLessThan(
       log.lastIndexOf('@vault-a.w3id:messages'),
@@ -381,6 +381,68 @@ describe('durable inventory checkpoints', () => {
     expect(open.some((task) => task.cursorAfter === 'cursor-1')).toBe(false);
   });
 
+  it('syncs open tasks without replacing unchanged durable rows', async () => {
+    const store = createMemoryInventoryJobStore();
+    const job = await store.createJob({
+      ownerEName: '@viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const existing = {
+      id: 'durable-task-id',
+      jobId: job.id,
+      taskKey: 'chats\u0000@viewer.w3id\u0000\u0000\u0000cursor-1',
+      kind: 'chats' as const,
+      vaultKey: '@viewer.w3id',
+      cursorAfter: 'cursor-1',
+      attempts: 1,
+      notBefore: 0,
+      status: 'pending' as const,
+      priority: 30,
+      payload: { type: 'chats', after: 'cursor-1', attempts: 1 },
+    };
+    await store.saveTask(existing);
+
+    const sameCheckpointTask = { ...existing, id: 'fresh-in-memory-id' };
+    await store.syncOpenTasks(job.id, [existing], [sameCheckpointTask]);
+    let open = await store.loadOpenTasks(job.id);
+    expect(open).toEqual([expect.objectContaining({ id: 'durable-task-id' })]);
+
+    const advancedCursor = {
+      ...sameCheckpointTask,
+      id: 'another-in-memory-id',
+      cursorAfter: 'cursor-2',
+      attempts: 2,
+      payload: { type: 'chats', after: 'cursor-2', attempts: 2 },
+    };
+    const newTask = {
+      ...existing,
+      id: 'new-durable-task-id',
+      taskKey: 'messages\u0000@viewer.w3id\u0000\u0000\u0000cursor-1',
+      kind: 'messages' as const,
+      cursorAfter: 'cursor-1',
+      attempts: 0,
+      priority: 60,
+      payload: { type: 'messages', after: 'cursor-1', attempts: 0 },
+    };
+    await store.syncOpenTasks(job.id, [sameCheckpointTask], [advancedCursor, newTask]);
+    open = await store.loadOpenTasks(job.id);
+    expect(open).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'durable-task-id',
+          taskKey: advancedCursor.taskKey,
+          cursorAfter: 'cursor-2',
+          attempts: 2,
+        }),
+        expect.objectContaining({ id: 'new-durable-task-id', taskKey: newTask.taskKey }),
+      ]),
+    );
+
+    await store.syncOpenTasks(job.id, [advancedCursor, newTask], [newTask]);
+    open = await store.loadOpenTasks(job.id);
+    expect(open).toEqual([expect.objectContaining({ taskKey: newTask.taskKey })]);
+  });
+
   it('keeps one queued copy when the same cursor is rate-limited three times', async () => {
     let now = 1_000;
     const keyOf = (item: Work) => `${item.type}\u0000${item.vaultKey}\u0000${item.after ?? ''}`;
@@ -477,18 +539,63 @@ describe('durable inventory checkpoints', () => {
   });
 
   it('builds postgres-safe task keys without NUL bytes', () => {
-    const key = inventoryTaskKey(
-      {
-        type: 'resolve-media',
-        after: 'cursor-1',
-        ontologyId: 'file',
-        chatId: 'chat-1',
-        fileUri: 'w3ds://file?id=@owner.w3id/abc',
-      },
-      '@vault.w3id',
-    );
+    const task = {
+      type: 'resolve-media',
+      after: 'cursor-1',
+      ontologyId: 'file',
+      chatId: 'chat-1',
+      fileUri: 'w3ds://file?id=@owner.w3id/abc',
+    };
+    const key = inventoryTaskKey(task, '@vault.w3id');
+    const prewarmKey = inventoryTaskKey({ ...task, mode: 'prewarm' }, '@vault.w3id');
     expect(key.includes('\u0000')).toBe(false);
     expect(key.split('\u001f')).toHaveLength(6);
+    expect(prewarmKey).not.toBe(key);
+    expect(prewarmKey.split('\u001f')).toHaveLength(7);
+  });
+
+  it('keeps separate prewarm work for distinct shared authorization contexts', () => {
+    const base = {
+      type: 'resolve-media',
+      mode: 'prewarm',
+      fileUri: 'w3ds://file?id=@owner.w3id/shared-file',
+      sourceSpaceKey: '@owner.w3id',
+      sourceMetadata: { chatId: 'chat-a', sourceViewerChatGrantId: 'grant-a' },
+    };
+    const first = inventoryTaskKey(base, '@owner.w3id');
+    const second = inventoryTaskKey(
+      {
+        ...base,
+        sourceMetadata: { chatId: 'chat-b', sourceViewerChatGrantId: 'grant-b' },
+      },
+      '@owner.w3id',
+    );
+
+    expect(first).not.toBe(second);
+  });
+
+  it('selects the best ready vault before applying the short-wave cap', async () => {
+    const queue: Work[] = [
+      { type: 'messages', vaultKey: '@older.w3id', after: 'page-1', attempts: 0, id: 'older' },
+      { type: 'group-open', vaultKey: '@newer.w3id', after: null, attempts: 0, id: 'newer' },
+    ];
+    const seen: string[] = [];
+
+    await drainFairVaultQueue(
+      queue,
+      async (item) => {
+        seen.push(item.id);
+      },
+      {
+        vaultKey: (item) => item.vaultKey,
+        priority: (item) => (item.type === 'group-open' ? 10 : 60),
+        maxVaultsPerWave: 1,
+        maxWaves: 1,
+      },
+    );
+
+    expect(seen).toEqual(['newer']);
+    expect(queue.map((item) => item.id)).toEqual(['older']);
   });
 
   it('clones jsonb values without NUL bytes or circular refs', () => {

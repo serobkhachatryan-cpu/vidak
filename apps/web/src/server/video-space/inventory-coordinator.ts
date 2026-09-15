@@ -26,6 +26,10 @@ import {
 } from './discovery';
 import { mapPool } from './map-pool';
 import { coalesceSharedAccessProbe } from './shared-access-cache';
+import {
+  getSharedPlaybackCardQuarantineStore,
+  type SharedPlaybackCardQuarantineStore,
+} from './shared-playback-card-quarantine';
 
 const cacheTtlMs = 45_000;
 // Shared source checks are background metadata work. Keep this below the
@@ -41,11 +45,23 @@ const sharedAccessProbeTimeoutMs = 3_000;
 const sharedAccessCacheTtlMs = 30_000;
 const sharedAccessRetryCacheTtlMs = 5_000;
 const sharedSourceNameTimeoutMs = 750;
+// A card quarantine is a presentation-only safety valve. It must never make
+// the normal library wait behind an unhealthy database; source authorization
+// remains the independent, fail-closed media gate.
+const sharedCardQuarantineReadTimeoutMs = 125;
+const sharedCardQuarantineBatchSize = 1_024;
 // Keep a durable background pass very short. The next pump resumes its exact
 // queue, allowing interactive playback and deployments to preempt deep
 // history scans on the same host.
 const backgroundInventoryMaxWaves = 1;
-const backgroundInventoryMaxVaultsPerWave = 2;
+// eVault URL warming is optional; one source per short durable wave avoids a
+// background scan creating a cross-vault burst that can throttle a Watch.
+const backgroundInventoryMaxVaultsPerWave = 1;
+// A shared-recording warmup is optional and must never turn a catalogue
+// refresh into a sustained source-side load spike. One eVault task per pump
+// leaves a full scheduler interval for a real Watch request to preempt the
+// worker, while the durable queue still makes forward progress between views.
+const backgroundCallMediaPrewarmMaxWaves = 1;
 
 export interface InventorySnapshot {
   items: MeshengerVideo[];
@@ -125,6 +141,7 @@ export function publicLibraryItems(
       sourceViewerChatGrantId: _viewerChatGrant,
       sourceReferenceId: _reference,
       sourceReferenceFileId: _referenceFile,
+      sharedCardBindingHash: _sharedCardBindingHash,
       accessBasis: _basis,
       sharedBy: _untrustedSharedBy,
       ...publicItem
@@ -147,6 +164,19 @@ export function publicLibraryItems(
   });
 }
 
+function hasQueuedCallMediaPrewarm(job: { ledger: { queue?: unknown } }): boolean {
+  const queue = job.ledger.queue;
+  return (
+    Array.isArray(queue) &&
+    queue.some(
+      (item) =>
+        typeof item === 'object' &&
+        item !== null &&
+        (item as { type?: unknown }).type === 'prewarm-call-media',
+    )
+  );
+}
+
 export function createInventoryCoordinator(options?: {
   createScanner?: () => InventoryScanner;
   now?: () => number;
@@ -154,6 +184,8 @@ export function createInventoryCoordinator(options?: {
   revalidationTimeoutMs?: number;
   sharedAccessCacheTtlMs?: number;
   resolveSharedSourceNames?: (eNames: readonly string[]) => Promise<ReadonlyMap<string, string>>;
+  sharedCardQuarantineStore?: Pick<SharedPlaybackCardQuarantineStore, 'matching'> &
+    Partial<Pick<SharedPlaybackCardQuarantineStore, 'clear'>>;
   log?: (line: string) => void;
 }) {
   const now = options?.now ?? (() => Date.now());
@@ -163,6 +195,7 @@ export function createInventoryCoordinator(options?: {
   const resolveSharedSourceNames =
     options?.resolveSharedSourceNames ??
     ((eNames: readonly string[]) => getW3dsAuthService().findChosenPublicNamesByENames(eNames));
+  const injectedSharedCardQuarantineStore = options?.sharedCardQuarantineStore;
   const log = options?.log ?? ((line: string) => console.info(line));
   const createScanner = options?.createScanner ?? (() => createMeshengerVideoLibrary());
   const entries = new Map<string, CacheEntry>();
@@ -177,6 +210,85 @@ export function createInventoryCoordinator(options?: {
 
   function keyFor(eName: string, scope: InventoryScope): string {
     return `${eName}\u0000${scope}`;
+  }
+
+  async function quarantinedSharedCardBindings(
+    items: readonly MeshengerVideo[],
+  ): Promise<ReadonlySet<string>> {
+    const hashes = [
+      ...new Set(
+        items.flatMap((item) =>
+          item.accessScope === 'shared' && item.sharedCardBindingHash
+            ? [item.sharedCardBindingHash]
+            : [],
+        ),
+      ),
+    ];
+    if (hashes.length === 0) return new Set();
+
+    const batches: string[][] = [];
+    for (let index = 0; index < hashes.length; index += sharedCardQuarantineBatchSize) {
+      batches.push(hashes.slice(index, index + sharedCardQuarantineBatchSize));
+    }
+    const read = Promise.resolve()
+      .then(() => {
+        const store = injectedSharedCardQuarantineStore ?? getSharedPlaybackCardQuarantineStore();
+        return Promise.all(batches.map((batch) => store.matching(batch)));
+      })
+      .then((results) => new Set(results.flatMap((result) => [...result])))
+      .catch(() => new Set<string>());
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<ReadonlySet<string>>((resolve) => {
+      timer = setTimeout(() => resolve(new Set()), sharedCardQuarantineReadTimeoutMs);
+    });
+    try {
+      return await Promise.race([read, deadline]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  function isQuarantinedSharedCard(
+    item: MeshengerVideo,
+    quarantinedBindings: ReadonlySet<string>,
+  ): boolean {
+    const bindingHash = item.sharedCardBindingHash;
+    return (
+      item.accessScope === 'shared' &&
+      typeof bindingHash === 'string' &&
+      quarantinedBindings.has(bindingHash)
+    );
+  }
+
+  function clearQuarantinesAfterVerifiedSharedAccess(
+    items: readonly MeshengerVideo[],
+    outcomes: ReadonlyMap<string, SharedItemAccess>,
+  ): void {
+    const verified = items.filter(
+      (item) =>
+        item.accessScope === 'shared' &&
+        outcomes.get(item.id) === 'verified' &&
+        typeof item.sharedCardBindingHash === 'string',
+    );
+    if (verified.length === 0) return;
+    void (async () => {
+      const matches = await quarantinedSharedCardBindings(verified);
+      if (matches.size === 0) return;
+      try {
+        const store = injectedSharedCardQuarantineStore ?? getSharedPlaybackCardQuarantineStore();
+        const clear = store.clear;
+        if (!clear) return;
+        await Promise.all(
+          verified.flatMap((item) => {
+            const bindingHash = item.sharedCardBindingHash;
+            return bindingHash && matches.has(bindingHash) ? [clear(bindingHash)] : [];
+          }),
+        );
+      } catch {
+        // A visibility-tombstone outage must never change the media ACL or
+        // turn a healthy source recheck into a failed library request.
+      }
+    })();
   }
 
   function startScan(
@@ -317,15 +429,19 @@ export function createInventoryCoordinator(options?: {
         metrics,
       }),
     );
-    scheduleSharedSourceNames(snapshot.items, entry);
+    const quarantinedBindings = await quarantinedSharedCardBindings(snapshot.items);
+    const visibleItems = snapshot.items.filter(
+      (item) => !isQuarantinedSharedCard(item, quarantinedBindings),
+    );
+    scheduleSharedSourceNames(visibleItems, entry);
     const checkingSharedItemIds = new Set(entry.checkingSharedItemIds);
-    for (const item of snapshot.items) {
+    for (const item of visibleItems) {
       if (sharedItemNeedsRevalidation(item, entry, now(), cachedSharedAccessTtlMs)) {
         checkingSharedItemIds.add(item.id);
       }
     }
     return {
-      items: publicLibraryItems(snapshot.items, entry.sharedSourceNames).map((item) =>
+      items: publicLibraryItems(visibleItems, entry.sharedSourceNames).map((item) =>
         checkingSharedItemIds.has(item.id)
           ? // A transient source probe must never turn an already-discovered,
             // viewer-bound share into a dead card. The media route repeats the
@@ -453,6 +569,9 @@ export function createInventoryCoordinator(options?: {
       if (item.accessScope !== 'shared') continue;
       outcomes.set(item.id, sharedItemAccess(item, accessBySpace));
     }
+    // Background denial remains non-terminal by design. Only a fresh positive
+    // result may undo an earlier interactive terminal-card quarantine.
+    clearQuarantinesAfterVerifiedSharedAccess(entry.snapshot.items, outcomes);
     if ([...outcomes.values()].every((outcome) => outcome === 'verified')) {
       entry.checkingSharedItemIds.clear();
       entry.sharedRetryReported = false;
@@ -503,7 +622,20 @@ export function createInventoryCoordinator(options?: {
       const store = getInventoryJobStore();
       await store.recoverStaleLocks(now());
       const running = await store.listRunning();
-      for (const job of running) {
+      // One job may involve several eVaults even with the per-wave source
+      // cap. Running every user's job in one timer tick multiplied that work
+      // and was enough to rate-limit the same source a Watch was trying to
+      // open. Choose the least recently advanced job so the next tick rotates
+      // fairly; no job or card is discarded, merely resumed on its next wave.
+      const jobsForThisWave = running
+        .sort(
+          (left, right) =>
+            left.updatedAt - right.updatedAt ||
+            left.createdAt - right.createdAt ||
+            left.ownerEName.localeCompare(right.ownerEName),
+        )
+        .slice(0, 1);
+      for (const job of jobsForThisWave) {
         // A Watch can begin while the lightweight job lookup is in flight.
         // Recheck before this worker starts a potentially slow eVault page.
         if (backgroundWorkDelayMs() > 0) return;
@@ -542,12 +674,15 @@ export function createInventoryCoordinator(options?: {
         // next pump can resume it without changing cards or access state.
         const backgroundWork = beginBackgroundWork();
         try {
+          const maxWaves = hasQueuedCallMediaPrewarm(job)
+            ? backgroundCallMediaPrewarmMaxWaves
+            : backgroundInventoryMaxWaves;
           const library = await getScanner().scanLibrary(
             { eName: job.ownerEName, eVaultUri: job.ownerEVaultUri },
             {
               scope: 'all',
               drain: true,
-              maxWaves: backgroundInventoryMaxWaves,
+              maxWaves,
               maxVaultsPerWave: backgroundInventoryMaxVaultsPerWave,
               signal: backgroundWork.signal,
               onSnapshot: (library, phase, counts) => {
@@ -639,16 +774,13 @@ export function createInventoryCoordinator(options?: {
 
     if (input.refresh) {
       if (entry?.inflight && entry.scanning) {
-        void pumpRunning();
         return serve(user, entry, requestStarted, 'coalesced');
       }
       entry = startScan(user, input.scope, entry, true);
-      void pumpRunning();
       return serve(user, entry, requestStarted, 'miss');
     }
 
     if (entry?.inflight && entry.scanning) {
-      void pumpRunning();
       return serve(user, entry, requestStarted, 'coalesced');
     }
 
@@ -660,7 +792,6 @@ export function createInventoryCoordinator(options?: {
     }
 
     entry = startScan(user, input.scope, entry);
-    void pumpRunning();
     return serve(user, entry, requestStarted, 'miss');
   }
 
@@ -692,11 +823,26 @@ export function createInventoryCoordinator(options?: {
     return publicItem;
   }
 
-  function exactItemFromMemory(
+  type ExactItemResult =
+    | { kind: 'visible'; item: MeshengerVideo }
+    | { kind: 'suppressed' }
+    | { kind: 'miss' };
+
+  async function publicExactItemResult(
+    item: MeshengerVideo,
+    entry?: CacheEntry,
+  ): Promise<ExactItemResult> {
+    const quarantinedBindings = await quarantinedSharedCardBindings([item]);
+    if (isQuarantinedSharedCard(item, quarantinedBindings)) return { kind: 'suppressed' };
+    const publicItem = publicExactItem(item, entry);
+    return publicItem ? { kind: 'visible', item: publicItem } : { kind: 'miss' };
+  }
+
+  async function exactItemFromMemory(
     user: Pick<AuthUser, 'eName'>,
     itemId: string,
     scope: InventoryScope,
-  ): MeshengerVideo | undefined {
+  ): Promise<ExactItemResult> {
     const scopes: InventoryScope[] = scope === 'all' ? ['all', 'owned', 'shared'] : [scope];
     for (const candidateScope of scopes) {
       const entry = entries.get(keyFor(user.eName, candidateScope));
@@ -705,9 +851,9 @@ export function createInventoryCoordinator(options?: {
         (candidate) => candidate.id === itemId && itemMatchesScope(candidate, scope),
       );
       if (!item) continue;
-      return publicExactItem(item, entry);
+      return publicExactItemResult(item, entry);
     }
-    return undefined;
+    return { kind: 'miss' };
   }
 
   async function getItem(
@@ -719,15 +865,20 @@ export function createInventoryCoordinator(options?: {
     // Watch opens first use a bounded, exact memory/DB lookup and never start
     // a source scan when a current card already exists.
     if (!input.refresh) {
-      const inMemory = exactItemFromMemory(user, input.itemId, input.scope);
-      if (inMemory) return inMemory;
+      const inMemory = await exactItemFromMemory(user, input.itemId, input.scope);
+      if (inMemory.kind === 'visible') return inMemory.item;
+      // An item that was positively matched by the viewer-bound HMAC must not
+      // fall through to a fresh scan, which could immediately rediscover and
+      // re-expose the same stale source context.
+      if (inMemory.kind === 'suppressed') return undefined;
 
       try {
         const { getInventoryJobStore } = await import('./job-store');
         const persisted = await getInventoryJobStore().getItemByOwner(user.eName, input.itemId);
         if (persisted && itemMatchesScope(persisted, input.scope)) {
-          const publicItem = publicExactItem(persisted);
-          if (publicItem) return publicItem;
+          const result = await publicExactItemResult(persisted);
+          if (result.kind === 'visible') return result.item;
+          if (result.kind === 'suppressed') return undefined;
         }
       } catch {
         // A persistence outage must not make an otherwise valid Watch card

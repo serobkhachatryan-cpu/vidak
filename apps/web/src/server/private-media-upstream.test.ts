@@ -6,6 +6,8 @@ import {
   isRefreshablePrivateMediaFailure,
   openPrivateMediaUpstream,
   parseSafePrivateMediaUpstreamUrl,
+  resolvePrivateMediaUrlCacheExpiry,
+  unknownPrivateMediaUrlCacheTtlMs,
 } from './private-media-upstream';
 
 describe('private media upstream transport', () => {
@@ -326,6 +328,70 @@ describe('private media upstream transport', () => {
     ).toBeUndefined();
     expect(parseSafePrivateMediaUpstreamUrl('https://localhost/video.mp4')).toBeUndefined();
     expect(parseSafePrivateMediaUpstreamUrl('https://[::1]/video.mp4')).toBeUndefined();
+  });
+
+  it('keeps a redirect with no portable expiry only for the immediate range burst', () => {
+    const now = Date.UTC(2026, 8, 14, 10, 0, 0);
+
+    expect(
+      resolvePrivateMediaUrlCacheExpiry('https://cdn.example/video.mp4?signature=opaque', { now }),
+    ).toEqual({ kind: 'unknown', ttlMs: unknownPrivateMediaUrlCacheTtlMs });
+  });
+
+  it('uses the earliest explicit signed-URL expiry minus a startup margin', () => {
+    const now = Date.UTC(2026, 8, 14, 10, 0, 0);
+
+    expect(
+      resolvePrivateMediaUrlCacheExpiry(
+        'https://cdn.example/video.mp4?X-Amz-Date=20260914T100000Z&X-Amz-Expires=60&Expires=1789380060',
+        { now },
+      ),
+    ).toEqual({
+      kind: 'explicit',
+      ttlMs: 45_000,
+      expiresAt: now + 60_000,
+    });
+  });
+
+  it('honours Azure and Google signed URL expiries and a caller stream ceiling', () => {
+    const now = Date.UTC(2026, 8, 14, 10, 0, 0);
+
+    expect(
+      resolvePrivateMediaUrlCacheExpiry(
+        'https://cdn.example/video.mp4?se=2026-09-14T10%3A01%3A00Z',
+        { now },
+      ),
+    ).toEqual({
+      kind: 'explicit',
+      ttlMs: 45_000,
+      expiresAt: now + 60_000,
+    });
+    expect(
+      resolvePrivateMediaUrlCacheExpiry(
+        'https://cdn.example/video.mp4?X-Goog-Date=20260914T100000Z&X-Goog-Expires=3600',
+        { now, maxTtlMs: 20_000 },
+      ),
+    ).toEqual({
+      kind: 'explicit',
+      ttlMs: 20_000,
+      expiresAt: now + 3_600_000,
+    });
+  });
+
+  it('does not cache malformed or near-expired signed redirect URLs', () => {
+    const now = Date.UTC(2026, 8, 14, 10, 0, 0);
+
+    expect(
+      resolvePrivateMediaUrlCacheExpiry(
+        'https://cdn.example/video.mp4?X-Amz-Date=not-a-date&X-Amz-Expires=60',
+        { now },
+      ),
+    ).toBeUndefined();
+    expect(
+      resolvePrivateMediaUrlCacheExpiry('https://cdn.example/video.mp4?Expires=1789380005', {
+        now,
+      }),
+    ).toBeUndefined();
   });
 });
 

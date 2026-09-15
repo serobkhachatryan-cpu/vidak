@@ -14,10 +14,21 @@ describe('background playback priority', () => {
 
   it('keeps resumable work paused for the latest interactive playback reservation', () => {
     reserveInteractivePlayback(30_000, 1_000);
-    reserveInteractivePlayback(10_000, 10_000);
+    reserveInteractivePlayback(40_000, 10_000);
 
-    expect(backgroundWorkDelayMs(10_000)).toBe(21_000);
-    expect(backgroundWorkDelayMs(31_000)).toBe(0);
+    expect(backgroundWorkDelayMs(10_000)).toBe(40_000);
+    expect(backgroundWorkDelayMs(50_000)).toBe(0);
+  });
+
+  it('gives a short player warm-up the full bounded playback reservation', () => {
+    reserveInteractivePlayback(5_000, 1_000);
+
+    expect(backgroundWorkDelayMs(6_000)).toBe(25_000);
+
+    // A later short request extends the fence from its own start rather than
+    // allowing a catalogue poll to restart midway through playback startup.
+    reserveInteractivePlayback(5_000, 10_000);
+    expect(backgroundWorkDelayMs(10_000)).toBe(30_000);
   });
 
   it('preempts a registered resumable task when playback begins', () => {

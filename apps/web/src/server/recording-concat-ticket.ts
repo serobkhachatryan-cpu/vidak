@@ -110,6 +110,17 @@ export interface RecordingConcatTicketStore {
     streamIndex: number,
     streamId: string,
     now: number,
+    initialAuthorizationReceipt?: string,
+  ): Promise<boolean>;
+  /**
+   * Deletes only an unopened ticket owned by this viewer. A caller must never
+   * use the generic release operation for a browser-side cancellation because
+   * it would be able to stop a claimed, actively playing recording.
+   */
+  cancelUnclaimed(
+    ticket: string,
+    viewer: Pick<RecordingTicketViewer, 'eName'>,
+    now: number,
   ): Promise<boolean>;
   renewLease(ticket: string, now: number): Promise<boolean>;
   release(ticket: string): Promise<void>;
@@ -304,11 +315,71 @@ export async function replaceRecordingConcatSegment(
   now = Date.now(),
   store?: RecordingConcatTicketStore,
 ): Promise<void> {
+  await replaceRecordingConcatSegmentWithReceipt(
+    ticket,
+    segmentKey,
+    index,
+    streamId,
+    undefined,
+    now,
+    store,
+  );
+}
+
+/**
+ * Replaces source zero after its sealed stream grant has expired and carries
+ * the fresh, viewer-and-stream-bound receipt created by the completed
+ * canonical eVault authorization. The opaque receipt remains encrypted in
+ * the ticket; it is never returned to the browser or ffmpeg.
+ */
+export async function replaceRecordingConcatInitialSegment(
+  ticket: string,
+  segmentKey: string | null,
+  streamId: string,
+  initialAuthorizationReceipt: string,
+  now = Date.now(),
+  store?: RecordingConcatTicketStore,
+): Promise<void> {
+  await replaceRecordingConcatSegmentWithReceipt(
+    ticket,
+    segmentKey,
+    '0',
+    streamId,
+    initialAuthorizationReceipt,
+    now,
+    store,
+  );
+}
+
+async function replaceRecordingConcatSegmentWithReceipt(
+  ticket: string,
+  segmentKey: string | null,
+  index: string,
+  streamId: string,
+  initialAuthorizationReceipt: string | undefined,
+  now: number,
+  store: RecordingConcatTicketStore | undefined,
+): Promise<void> {
   requireOpaqueTicket(ticket);
   const streamIndex = parseSegmentIndex(index);
   const replacement = normalizeRecordingStreamId(streamId);
+  const replacementReceipt = normalizeInitialAuthorizationReceipt(initialAuthorizationReceipt);
+  if (replacementReceipt && streamIndex !== 0) {
+    throw new RecordingConcatTicketError(
+      'This recording segment cannot carry an authorization receipt.',
+      'invalid_recording',
+      400,
+    );
+  }
   const replaced = await withTicketStore(() =>
-    resolveStore(store).replaceSegment(ticket, segmentKey, streamIndex, replacement, now),
+    resolveStore(store).replaceSegment(
+      ticket,
+      segmentKey,
+      streamIndex,
+      replacement,
+      now,
+      replacementReceipt,
+    ),
   );
   if (!replaced) throw unavailableSegmentError();
 }
@@ -319,6 +390,24 @@ export async function releaseRecordingConcatTicket(
 ): Promise<void> {
   if (!opaqueTokenPattern.test(ticket)) return;
   await withTicketStore(() => resolveStore(store).release(ticket));
+}
+
+/**
+ * Best-effort cleanup for an opaque ticket that the browser never opened.
+ * The store's conditional delete is viewer-bound and only matches
+ * `claimed = false`, so it cannot terminate a real ffmpeg playback race.
+ */
+export async function cancelUnclaimedRecordingConcatTicket(
+  ticket: string,
+  viewer: Pick<RecordingTicketViewer, 'eName'>,
+  store?: RecordingConcatTicketStore,
+  now = Date.now(),
+): Promise<boolean> {
+  if (!opaqueTokenPattern.test(ticket)) return false;
+  const normalizedViewer = normalizeViewer(viewer);
+  return withTicketStore(() =>
+    resolveStore(store).cancelUnclaimed(ticket, normalizedViewer.viewer, now),
+  );
 }
 
 /**
@@ -378,16 +467,35 @@ export class InMemoryRecordingConcatTicketStore implements RecordingConcatTicket
     streamIndex: number,
     streamId: string,
     now: number,
+    initialAuthorizationReceipt?: string,
   ): Promise<boolean> {
     const record = this.readActive(ticket, now);
     if (!canReplaceSegment(record, segmentKey, streamIndex, streamId)) return false;
     const updated = cloneTicket(record);
     updated.streamIds[streamIndex] = streamId;
-    // The receipt is bound to the original first sealed stream. A renewed
-    // stream must not inherit that warmup hint, even though the segment route
-    // will verify it again defensively before use.
-    if (streamIndex === 0) delete updated.initialAuthorizationReceipt;
+    // A first-source receipt is valid only for this exact replacement. The
+    // segment route supplies one only after it has completed the renewed
+    // canonical eVault authorization; absent a fresh receipt, fail closed by
+    // removing the old stream-bound hint.
+    if (streamIndex === 0) {
+      if (initialAuthorizationReceipt) {
+        updated.initialAuthorizationReceipt = initialAuthorizationReceipt;
+      } else {
+        delete updated.initialAuthorizationReceipt;
+      }
+    }
     this.tickets.set(ticket, updated);
+    return true;
+  }
+
+  async cancelUnclaimed(
+    ticket: string,
+    viewer: Pick<RecordingTicketViewer, 'eName'>,
+    now: number,
+  ): Promise<boolean> {
+    const record = this.readActive(ticket, now);
+    if (!record || record.claimed || !sameViewer(record.viewer.eName, viewer.eName)) return false;
+    this.tickets.delete(ticket);
     return true;
   }
 
@@ -561,6 +669,7 @@ export class PostgresRecordingConcatTicketStore implements RecordingConcatTicket
     streamIndex: number,
     streamId: string,
     now: number,
+    initialAuthorizationReceipt?: string,
   ): Promise<boolean> {
     const nowDate = new Date(now);
     return this.db.transaction(async (tx) => {
@@ -583,7 +692,13 @@ export class PostgresRecordingConcatTicketStore implements RecordingConcatTicket
       if (!canReplaceSegment(record, segmentKey, streamIndex, streamId)) return false;
       const updated = cloneTicket(record);
       updated.streamIds[streamIndex] = streamId;
-      if (streamIndex === 0) delete updated.initialAuthorizationReceipt;
+      if (streamIndex === 0) {
+        if (initialAuthorizationReceipt) {
+          updated.initialAuthorizationReceipt = initialAuthorizationReceipt;
+        } else {
+          delete updated.initialAuthorizationReceipt;
+        }
+      }
       await tx
         .update(recordingConcatTickets)
         .set({
@@ -593,6 +708,26 @@ export class PostgresRecordingConcatTicketStore implements RecordingConcatTicket
         .where(eq(recordingConcatTickets.id, ticket));
       return true;
     });
+  }
+
+  async cancelUnclaimed(
+    ticket: string,
+    viewer: Pick<RecordingTicketViewer, 'eName'>,
+    now: number,
+  ): Promise<boolean> {
+    const viewerENameKey = normalizeViewer(viewer).key;
+    const rows = await this.db
+      .delete(recordingConcatTickets)
+      .where(
+        and(
+          eq(recordingConcatTickets.id, ticket),
+          eq(recordingConcatTickets.viewerENameKey, viewerENameKey),
+          eq(recordingConcatTickets.claimed, false),
+          gt(recordingConcatTickets.expiresAt, new Date(now)),
+        ),
+      )
+      .returning({ id: recordingConcatTickets.id });
+    return rows.length > 0;
   }
 
   async renewLease(ticket: string, now: number): Promise<boolean> {

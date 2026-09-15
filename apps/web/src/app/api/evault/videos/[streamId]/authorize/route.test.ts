@@ -11,6 +11,8 @@ const mocks = vi.hoisted(() => ({
   failPlaybackSourceRefresh: vi.fn(),
   publishPlaybackSourceRefresh: vi.fn(),
   readPlaybackSourceRefresh: vi.fn(),
+  releasePlaybackSourceRefresh: vi.fn(),
+  recordConfirmedSharedPlaybackDenial: vi.fn(),
 }));
 
 vi.mock('../../../../../../server/evault-video-library', async (importOriginal) => ({
@@ -32,6 +34,11 @@ vi.mock('../../../../../../server/playback-source-refresh', () => ({
   failPlaybackSourceRefresh: mocks.failPlaybackSourceRefresh,
   publishPlaybackSourceRefresh: mocks.publishPlaybackSourceRefresh,
   readPlaybackSourceRefresh: mocks.readPlaybackSourceRefresh,
+  releasePlaybackSourceRefresh: mocks.releasePlaybackSourceRefresh,
+}));
+
+vi.mock('../../../../../../server/video-space/shared-playback-card-quarantine', () => ({
+  recordConfirmedSharedPlaybackDenial: mocks.recordConfirmedSharedPlaybackDenial,
 }));
 
 import { EVaultVideoLibraryError } from '../../../../../../server/evault-video-library';
@@ -58,6 +65,12 @@ function createForcedSourceRefreshProof() {
   return vi.fn().mockResolvedValue(forcedSourceRefreshProof);
 }
 
+function explicitlyExpiringMediaUrl(name: string): string {
+  return `https://media.example/${name}.mp4?expires=${Math.floor(
+    (Date.now() + 120_000) / 1_000,
+  )}&signature=test-source`;
+}
+
 describe('eVault video authorization warm-up route', () => {
   beforeEach(() => {
     operationalLogs = [];
@@ -73,6 +86,8 @@ describe('eVault video authorization warm-up route', () => {
     });
     mocks.failPlaybackSourceRefresh.mockReset();
     mocks.failPlaybackSourceRefresh.mockResolvedValue(true);
+    mocks.releasePlaybackSourceRefresh.mockReset();
+    mocks.releasePlaybackSourceRefresh.mockResolvedValue(true);
     mocks.publishPlaybackSourceRefresh.mockReset();
     mocks.publishPlaybackSourceRefresh.mockResolvedValue(true);
     mocks.readPlaybackSourceRefresh.mockReset();
@@ -81,6 +96,7 @@ describe('eVault video authorization warm-up route', () => {
       epoch: 1,
       mediaUrl: 'https://media.example/refreshed.mp4',
     });
+    mocks.recordConfirmedSharedPlaybackDenial.mockReset();
     mocks.getAuthService.mockReturnValue({
       getSession: vi.fn().mockResolvedValue({ user: viewer }),
     });
@@ -141,7 +157,11 @@ describe('eVault video authorization warm-up route', () => {
     expect(authorizePlayableStream).toHaveBeenCalledWith(
       viewer,
       'stream-1',
-      expect.objectContaining({ priority: 'interactive', onTiming: expect.any(Function) }),
+      expect.objectContaining({
+        priority: 'interactive',
+        allowExtendedLegacyFileMetadataWait: true,
+        onTiming: expect.any(Function),
+      }),
     );
   });
 
@@ -171,7 +191,7 @@ describe('eVault video authorization warm-up route', () => {
   });
 
   it('claims, resolves, publishes, and then issues a receipt for an explicit recovery', async () => {
-    const privateMediaUrl = 'https://media.example/refreshed.mp4?source-token=server-only';
+    const privateMediaUrl = explicitlyExpiringMediaUrl('refreshed');
     const calls: string[] = [];
     const proveCurrentPlayableStreamForSourceRefresh = vi.fn(() => {
       calls.push('preflight');
@@ -243,7 +263,7 @@ describe('eVault video authorization warm-up route', () => {
   });
 
   it('accepts a same-origin cookie-authenticated recovery POST', async () => {
-    const privateMediaUrl = 'https://media.example/refreshed.mp4';
+    const privateMediaUrl = explicitlyExpiringMediaUrl('refreshed');
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
     const getSession = vi.fn().mockResolvedValue({ user: viewer });
     mocks.createLibrary.mockReturnValue({
@@ -308,7 +328,11 @@ describe('eVault video authorization warm-up route', () => {
       streamId: 'stream-1',
     });
     expect(inspectBoundStream).toHaveBeenCalledWith(viewer, 'stream-1');
-    expect(proveCurrentPlayableStreamForSourceRefresh).not.toHaveBeenCalled();
+    expect(proveCurrentPlayableStreamForSourceRefresh).toHaveBeenCalledWith(
+      viewer,
+      'stream-1',
+      expect.objectContaining({ priority: 'interactive' }),
+    );
     expect(authorizePlayableStream).not.toHaveBeenCalled();
     expect(discardLocalForcedSourceResult).not.toHaveBeenCalled();
   });
@@ -372,12 +396,47 @@ describe('eVault video authorization warm-up route', () => {
       expect.objectContaining({ priority: 'interactive' }),
     );
     expect(mocks.claimPlaybackSourceRefresh).toHaveBeenCalledTimes(2);
-    expect(mocks.failPlaybackSourceRefresh).toHaveBeenCalledWith({
+    expect(mocks.releasePlaybackSourceRefresh).toHaveBeenCalledWith({
       viewerEName: viewer.eName,
       streamId: 'stream-1',
       lease: forcedLease,
     });
     expect(authorizePlayableStream).not.toHaveBeenCalled();
+  });
+
+  it('preserves and retires a confirmed revoked share when a refresh lease is busy', async () => {
+    const bindingHash = 'a'.repeat(43);
+    const terminalDenial = new EVaultVideoLibraryError(
+      'The viewer no longer has access.',
+      'authorization_denied',
+      403,
+      undefined,
+      bindingHash,
+    );
+    const proveCurrentPlayableStreamForSourceRefresh = vi.fn().mockRejectedValue(terminalDenial);
+    const authorizePlayableStream = vi.fn();
+    mocks.createLibrary.mockReturnValue({
+      inspectBoundStream: vi.fn(),
+      proveCurrentPlayableStreamForSourceRefresh,
+      authorizePlayableStream,
+    });
+    mocks.claimPlaybackSourceRefresh.mockResolvedValue({ kind: 'in_progress' });
+
+    const response = await POST(
+      new NextRequest('https://vidak.example/api/evault/videos/stream-1/authorize', {
+        method: 'POST',
+        headers: { authorization: 'Bearer access-token' },
+      }),
+      { params: Promise.resolve({ streamId: 'stream-1' }) },
+    );
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'authorization_denied' },
+    });
+    expect(proveCurrentPlayableStreamForSourceRefresh).toHaveBeenCalledTimes(1);
+    expect(authorizePlayableStream).not.toHaveBeenCalled();
+    expect(mocks.recordConfirmedSharedPlaybackDenial).toHaveBeenCalledWith(terminalDenial);
   });
 
   it('releases its lease when source resolution fails after a successful claim', async () => {
@@ -402,14 +461,14 @@ describe('eVault video authorization warm-up route', () => {
     );
 
     expect(response.status).toBe(503);
-    expect(mocks.failPlaybackSourceRefresh).toHaveBeenCalledWith({
+    expect(mocks.releasePlaybackSourceRefresh).toHaveBeenCalledWith({
       viewerEName: viewer.eName,
       streamId: 'stream-1',
       lease: forcedLease,
     });
   });
 
-  it('bounds a blocked durable claim before it can start source work', async () => {
+  it('bounds a blocked durable claim, then performs one entitlement classification', async () => {
     vi.useFakeTimers();
     const proveCurrentPlayableStreamForSourceRefresh = createForcedSourceRefreshProof();
     const authorizePlayableStream = vi.fn();
@@ -433,7 +492,7 @@ describe('eVault video authorization warm-up route', () => {
 
       const response = await pending;
       expect(response.status).toBe(503);
-      expect(proveCurrentPlayableStreamForSourceRefresh).not.toHaveBeenCalled();
+      expect(proveCurrentPlayableStreamForSourceRefresh).toHaveBeenCalledTimes(1);
       expect(authorizePlayableStream).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -466,7 +525,7 @@ describe('eVault video authorization warm-up route', () => {
 
       completeClaim?.({ kind: 'acquired', lease: forcedLease });
       await vi.advanceTimersByTimeAsync(0);
-      expect(mocks.failPlaybackSourceRefresh).toHaveBeenCalledWith({
+      expect(mocks.releasePlaybackSourceRefresh).toHaveBeenCalledWith({
         viewerEName: viewer.eName,
         streamId: 'stream-1',
         lease: forcedLease,
@@ -479,7 +538,7 @@ describe('eVault video authorization warm-up route', () => {
   it('does not issue a late receipt after another replica advances the epoch', async () => {
     const authorizePlayableStream = vi
       .fn()
-      .mockResolvedValue('https://media.example/refreshed.mp4');
+      .mockResolvedValue(explicitlyExpiringMediaUrl('refreshed'));
     mocks.createLibrary.mockReturnValue({
       inspectBoundStream: vi.fn(),
       proveCurrentPlayableStreamForSourceRefresh: createForcedSourceRefreshProof(),
@@ -497,7 +556,7 @@ describe('eVault video authorization warm-up route', () => {
 
     expect(response.status).toBe(503);
     expect(mocks.publishPlaybackSourceRefresh).toHaveBeenCalledTimes(1);
-    expect(mocks.failPlaybackSourceRefresh).toHaveBeenCalledWith({
+    expect(mocks.releasePlaybackSourceRefresh).toHaveBeenCalledWith({
       viewerEName: viewer.eName,
       streamId: 'stream-1',
       lease: forcedLease,
@@ -593,7 +652,7 @@ describe('eVault video authorization warm-up route', () => {
   });
 
   it('does not issue a recovery receipt until its winner epoch is durably published', async () => {
-    const privateMediaUrl = 'https://media.example/refreshed.mp4?source-token=server-only';
+    const privateMediaUrl = explicitlyExpiringMediaUrl('refreshed');
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
     let completePublish: ((value: boolean) => void) | undefined;
     mocks.createLibrary.mockReturnValue({
@@ -632,7 +691,7 @@ describe('eVault video authorization warm-up route', () => {
 
   it('bounds a blocked forced durable handoff and handles its late completion', async () => {
     vi.useFakeTimers();
-    const privateMediaUrl = 'https://media.example/refreshed.mp4?source-token=server-only';
+    const privateMediaUrl = explicitlyExpiringMediaUrl('refreshed');
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
     let finishPublish: ((value: boolean) => void) | undefined;
     mocks.createLibrary.mockReturnValue({
@@ -672,7 +731,7 @@ describe('eVault video authorization warm-up route', () => {
   });
 
   it('fails closed when a forced recovery cannot durably hand off its fresh source', async () => {
-    const privateMediaUrl = 'https://media.example/refreshed.mp4?source-token=server-only';
+    const privateMediaUrl = explicitlyExpiringMediaUrl('refreshed');
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
     const discardLocalForcedSourceResult = vi.fn();
     mocks.createLibrary.mockReturnValue({
@@ -696,7 +755,7 @@ describe('eVault video authorization warm-up route', () => {
       error: { code: 'remote_unavailable' },
     });
     expect(response.cookies.get(sharedVideoAuthorizationReceiptCookieName)).toBeUndefined();
-    expect(mocks.failPlaybackSourceRefresh).toHaveBeenCalledWith({
+    expect(mocks.releasePlaybackSourceRefresh).toHaveBeenCalledWith({
       viewerEName: viewer.eName,
       streamId: 'stream-1',
       lease: forcedLease,
@@ -705,7 +764,7 @@ describe('eVault video authorization warm-up route', () => {
   });
 
   it('fences its local forced source when a newer epoch wins after publish', async () => {
-    const privateMediaUrl = 'https://media.example/older-winner.mp4?source-token=server-only';
+    const privateMediaUrl = explicitlyExpiringMediaUrl('older-winner');
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
     const discardLocalForcedSourceResult = vi.fn();
     mocks.createLibrary.mockReturnValue({
@@ -735,11 +794,10 @@ describe('eVault video authorization warm-up route', () => {
     expect(response.cookies.get(sharedVideoAuthorizationReceiptCookieName)).toBeUndefined();
   });
 
-  it('stores a resolved private URL only after minting a verified receipt', async () => {
+  it('sets a verified receipt without writing the retired receipt URL cache', async () => {
     const privateMediaUrl = 'https://media.example/private.mp4?source-token=server-only';
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
     mocks.createLibrary.mockReturnValue({ authorizePlayableStream });
-    mocks.readPlaybackSourceRefresh.mockResolvedValue({ kind: 'absent' });
 
     const response = await GET(
       new NextRequest('https://vidak.example/api/evault/videos/stream-1/authorize', {
@@ -758,25 +816,15 @@ describe('eVault video authorization warm-up route', () => {
         env: { W3DS_AUTH_JWT_SECRET: receiptSecret },
       }),
     ).toBe(true);
-    expect(mocks.putPlaybackResolutionCache).toHaveBeenCalledWith({
-      receipt,
-      viewerEName: viewer.eName,
-      streamId: 'stream-1',
-      mediaUrl: privateMediaUrl,
-    });
+    expect(mocks.putPlaybackResolutionCache).not.toHaveBeenCalled();
     expect(JSON.stringify(operationalLogs)).not.toContain(privateMediaUrl);
     expect(JSON.stringify(operationalLogs)).not.toContain('source-token');
   });
 
-  it('does not let an ordinary warmup persist a stale URL beneath a refresh epoch', async () => {
+  it('does not read or write the retired cache during an ordinary warmup', async () => {
     const privateMediaUrl = 'https://media.example/stale-local.mp4?source-token=server-only';
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
     mocks.createLibrary.mockReturnValue({ authorizePlayableStream });
-    mocks.readPlaybackSourceRefresh.mockResolvedValue({
-      kind: 'ready',
-      epoch: 12,
-      mediaUrl: 'https://media.example/recovered.mp4',
-    });
 
     const response = await GET(
       new NextRequest('https://vidak.example/api/evault/videos/stream-1/authorize', {
@@ -786,20 +834,14 @@ describe('eVault video authorization warm-up route', () => {
     );
 
     expect(response.status).toBe(204);
-    await vi.waitFor(() => expect(mocks.readPlaybackSourceRefresh).toHaveBeenCalledTimes(1));
+    expect(mocks.readPlaybackSourceRefresh).not.toHaveBeenCalled();
     expect(mocks.putPlaybackResolutionCache).not.toHaveBeenCalled();
   });
 
-  it('returns the verified receipt without waiting for a pending durable cache write', async () => {
+  it('returns the verified receipt without scheduling a retired cache write', async () => {
     const privateMediaUrl = 'https://media.example/private.mp4?source-token=server-only';
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
-    let finishCacheWrite: ((value: boolean) => void) | undefined;
-    const pendingCacheWrite = new Promise<boolean>((resolve) => {
-      finishCacheWrite = resolve;
-    });
     mocks.createLibrary.mockReturnValue({ authorizePlayableStream });
-    mocks.readPlaybackSourceRefresh.mockResolvedValue({ kind: 'absent' });
-    mocks.putPlaybackResolutionCache.mockReturnValue(pendingCacheWrite);
 
     const response = await resolvesWithinTestDeadline(
       GET(
@@ -812,24 +854,13 @@ describe('eVault video authorization warm-up route', () => {
 
     expect(response.status).toBe(204);
     expect(response.cookies.get(sharedVideoAuthorizationReceiptCookieName)?.value).toBeDefined();
-    expect(mocks.putPlaybackResolutionCache).toHaveBeenCalledWith(
-      expect.objectContaining({
-        viewerEName: viewer.eName,
-        streamId: 'stream-1',
-        mediaUrl: privateMediaUrl,
-      }),
-    );
-    finishCacheWrite?.(true);
+    expect(mocks.putPlaybackResolutionCache).not.toHaveBeenCalled();
   });
 
-  it('keeps a completed authorization successful when the cache write fails', async () => {
+  it('keeps a completed authorization successful without the retired cache layer', async () => {
     const privateMediaUrl = 'https://media.example/private.mp4?source-token=server-only';
     const authorizePlayableStream = vi.fn().mockResolvedValue(privateMediaUrl);
     mocks.createLibrary.mockReturnValue({ authorizePlayableStream });
-    mocks.readPlaybackSourceRefresh.mockResolvedValue({ kind: 'absent' });
-    mocks.putPlaybackResolutionCache.mockRejectedValue(
-      new Error(`cache unavailable for ${privateMediaUrl}`),
-    );
 
     const response = await resolvesWithinTestDeadline(
       GET(
@@ -842,7 +873,7 @@ describe('eVault video authorization warm-up route', () => {
 
     expect(response.status).toBe(204);
     expect(response.cookies.get(sharedVideoAuthorizationReceiptCookieName)?.value).toBeDefined();
-    expect(mocks.putPlaybackResolutionCache).toHaveBeenCalledTimes(1);
+    expect(mocks.putPlaybackResolutionCache).not.toHaveBeenCalled();
     await Promise.resolve();
     expect(JSON.stringify(operationalLogs)).not.toContain(privateMediaUrl);
     expect(JSON.stringify(operationalLogs)).not.toContain('source-token');

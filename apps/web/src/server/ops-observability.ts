@@ -158,9 +158,9 @@ interface RecordingSourceResolutionTiming {
 }
 
 /**
- * The ticket route launches this detached event for segment zero only. It
- * measures the existing authorization warmup and never records its result
- * URL, error text, grant, or source identity.
+ * The ticket route emits this event for segment zero only. It measures the
+ * preflight authorization that completes before an opaque ticket is returned,
+ * and never records its result URL, error text, grant, or source identity.
  */
 export interface RecordingWarmupTimingReport extends OperationalEventReport {
   category: 'video_playback';
@@ -198,6 +198,8 @@ export interface RecordingSegmentSourceResolutionFailureTimingReport
   category: 'video_playback';
   code: 'recording_segment_source_resolution_failed_timing';
   timing: RecordingSourceResolutionTiming & {
+    /** Sanitized classification; never an upstream message, URL, or grant. */
+    failureKind: 'authorization_denied' | 'authorization_retry' | 'source';
     sourceResolutionMs: number;
     segmentRequestFailedMs: number;
   };
@@ -240,6 +242,22 @@ export interface RecordingFfmpegStartupFailureTimingReport extends OperationalEv
     ticketClaimMs: number;
     ffmpegStartupMs: number;
     requestFailedMs: number;
+  };
+}
+
+/**
+ * A post-response outcome for the continuous ffmpeg joiner. Unlike startup
+ * timing, this makes an unexpected EOF visible without ever collecting media
+ * bytes, source URLs, tickets, viewers, or ffmpeg stderr.
+ */
+export interface RecordingFfmpegCompletionTimingReport extends OperationalEventReport {
+  category: 'video_playback';
+  code: 'recording_ffmpeg_completion_timing';
+  timing: {
+    outcome: 'completed' | 'cancelled' | 'failed';
+    bytesProduced: number;
+    exitCode?: number;
+    requestCompletedMs: number;
   };
 }
 
@@ -521,7 +539,7 @@ export function reportRecordingTicketTiming(input: {
   return report;
 }
 
-/** Emits source-resolution timing for the detached segment-zero warmup. */
+/** Emits source-resolution timing for the source-zero ticket preflight. */
 export function reportRecordingWarmupTiming(
   input: {
     correlationId: string;
@@ -587,6 +605,7 @@ export function reportRecordingSegmentTiming(
 export function reportRecordingSegmentSourceResolutionFailureTiming(
   input: {
     correlationId: string;
+    failureKind: 'authorization_denied' | 'authorization_retry' | 'source';
     sourceResolutionMs: number;
     segmentRequestFailedMs: number;
   } & RecordingSourceResolutionTiming,
@@ -598,6 +617,7 @@ export function reportRecordingSegmentSourceResolutionFailureTiming(
     code: 'recording_segment_source_resolution_failed_timing',
     timing: {
       ...normalizeRecordingSourceResolutionTiming(input),
+      failureKind: input.failureKind,
       sourceResolutionMs: normalizeTimingMs(input.sourceResolutionMs),
       segmentRequestFailedMs: normalizeTimingMs(input.segmentRequestFailedMs),
     },
@@ -664,6 +684,30 @@ export function reportRecordingFfmpegStartupFailureTiming(input: {
   return report;
 }
 
+/** Emits a fixed-schema result after an already-started ffmpeg stream closes. */
+export function reportRecordingFfmpegCompletionTiming(input: {
+  correlationId: string;
+  outcome: 'completed' | 'cancelled' | 'failed';
+  bytesProduced: number;
+  exitCode?: number;
+  requestCompletedMs: number;
+}): RecordingFfmpegCompletionTimingReport {
+  const report: RecordingFfmpegCompletionTimingReport = {
+    level: 'info',
+    category: 'video_playback',
+    correlationId: input.correlationId,
+    code: 'recording_ffmpeg_completion_timing',
+    timing: {
+      outcome: input.outcome,
+      bytesProduced: normalizeByteCount(input.bytesProduced),
+      ...(input.exitCode === undefined ? {} : { exitCode: normalizeExitCode(input.exitCode) }),
+      requestCompletedMs: normalizeTimingMs(input.requestCompletedMs),
+    },
+  };
+  emitOperationalTiming(report);
+  return report;
+}
+
 function normalizeRecordingSourceResolutionTiming(
   input: RecordingSourceResolutionTiming,
 ): RecordingSourceResolutionTiming {
@@ -691,4 +735,14 @@ function normalizeTimingMs(value: number): number {
 function normalizeTimingCount(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.max(0, Math.floor(value));
+}
+
+function normalizeByteCount(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, Math.floor(value)));
+}
+
+function normalizeExitCode(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(255, Math.max(0, Math.floor(value)));
 }

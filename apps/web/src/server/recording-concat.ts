@@ -30,6 +30,21 @@ export type RecordingConcatStartupFailureKind =
 export type RecordingConcatErrorCode = 'invalid_recording' | 'recording_unavailable';
 
 /**
+ * A deliberately small, source-safe account of how the ffmpeg joiner ended.
+ * It is emitted only to server-side observability: no stderr, source URL,
+ * ticket, viewer, or media metadata is ever carried here.
+ */
+export type RecordingConcatCompletionOutcome = 'completed' | 'cancelled' | 'failed';
+
+export interface RecordingConcatCompletion {
+  outcome: RecordingConcatCompletionOutcome;
+  /** Bytes read from ffmpeg stdout; this can include startup data not yet pulled by the client. */
+  bytesProduced: number;
+  /** Present only when ffmpeg supplied a numeric process exit code. */
+  exitCode?: number;
+}
+
+/**
  * All messages in this error are safe to return to the authenticated browser.
  * In particular, never attach a child-process error: ffmpeg can include a
  * loopback capability URL in diagnostics.
@@ -49,6 +64,11 @@ export class RecordingConcatError extends Error {
 export interface RecordingConcatOptions {
   /** Releases the server-side playback ticket after ffmpeg has actually stopped. */
   onClose?: () => void | Promise<void>;
+  /**
+   * Records a finite, non-sensitive completion result after ffmpeg stops.
+   * This is intentionally separate from `onClose`, whose only job is cleanup.
+   */
+  onCompletion?: (completion: RecordingConcatCompletion) => void | Promise<void>;
   /**
    * Server-side startup budget. This is deliberately not derived from request
    * input; callers may set it only in controlled tests or deployments.
@@ -117,13 +137,21 @@ export async function concatenateRecordingSources(
         'copy',
         '-movflags',
         '+frag_keyframe+empty_moov+default_base_moof',
+        // Waiting for the next source keyframe can hold the first playable
+        // fMP4 fragment for several seconds. Keep keyframe fragmentation for
+        // efficient normal playback, but add a short duration ceiling so the
+        // live browser stream can begin promptly. These are internal MP4
+        // fragments only: the browser still receives one continuous recording
+        // through this single response, with no visible clip boundaries.
+        '-frag_duration',
+        '500000',
         '-f',
         'mp4',
         'pipe:1',
       ],
       { stdio: ['ignore', 'pipe', 'ignore'] },
     );
-    const lifecycle = createConcatChildLifecycle(child, workspace, options.onClose);
+    const lifecycle = createConcatChildLifecycle(child, workspace, options);
     stopChild = lifecycle.stopChild;
     if (!child.stdout) {
       lifecycle.stopChild();
@@ -136,9 +164,20 @@ export async function concatenateRecordingSources(
       reader,
       child,
       lifecycle.stopChild,
+      lifecycle.recordOutputBytes,
+      lifecycle.markFailed,
+      lifecycle.markStarted,
       startupTimeoutMs,
     );
-    return toCancelableWebStream(reader, startupChunks, lifecycle.stopChild);
+    return toCancelableWebStream(
+      reader,
+      startupChunks,
+      lifecycle.stopChild,
+      lifecycle.recordOutputBytes,
+      lifecycle.markFailed,
+      lifecycle.markOutputEnded,
+      lifecycle.markConsumerCancelled,
+    );
   } catch (error) {
     stopChild?.();
     await rm(workspace, { recursive: true, force: true }).catch(() => undefined);
@@ -159,6 +198,10 @@ function toCancelableWebStream(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   startupChunks: readonly Uint8Array[],
   stopChild: () => void,
+  recordOutputBytes: (count: number) => void,
+  markFailed: () => void,
+  markOutputEnded: () => void,
+  markConsumerCancelled: () => void,
 ): ReadableStream<Uint8Array> {
   let nextStartupChunk = 0;
   return new ReadableStream<Uint8Array>({
@@ -173,13 +216,18 @@ function toCancelableWebStream(
         const result = await reader.read();
         if (result.done) {
           controller.close();
-          // stdout ending while the child is still alive is not useful to the
-          // player and could otherwise leave a private loopback fetch running.
-          stopChild();
+          markOutputEnded();
+          // Let a clean ffmpeg stdout EOF reach its natural process close.
+          // `markOutputEnded` retains a bounded fallback stop so a stuck child
+          // cannot keep private loopback work alive indefinitely.
           return;
         }
-        if (result.value.byteLength > 0) controller.enqueue(result.value);
+        if (result.value.byteLength > 0) {
+          recordOutputBytes(result.value.byteLength);
+          controller.enqueue(result.value);
+        }
       } catch {
+        markFailed();
         stopChild();
         controller.error(
           new RecordingConcatError('This recording stopped unexpectedly. Please retry.'),
@@ -187,6 +235,9 @@ function toCancelableWebStream(
       }
     },
     async cancel(reason) {
+      // Set this before awaiting: cancellation can close the child synchronously
+      // through the Node stream bridge.
+      markConsumerCancelled();
       try {
         await reader.cancel(reason);
       } finally {
@@ -199,19 +250,44 @@ function toCancelableWebStream(
 function createConcatChildLifecycle(
   child: ReturnType<typeof spawn>,
   workspace: string,
-  onClose: (() => void | Promise<void>) | undefined,
-): { stopChild: () => void } {
+  options: Pick<RecordingConcatOptions, 'onClose' | 'onCompletion'>,
+): {
+  stopChild: () => void;
+  recordOutputBytes: (count: number) => void;
+  markStarted: () => void;
+  markFailed: () => void;
+  markOutputEnded: () => void;
+  markConsumerCancelled: () => void;
+} {
   let cleaned = false;
   let childClosed = false;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
+  let outputEndTimer: ReturnType<typeof setTimeout> | undefined;
   let stopRequested = false;
-  const cleanup = () => {
+  let started = false;
+  let failed = false;
+  let outputEnded = false;
+  let consumerCancelled = false;
+  let bytesProduced = 0;
+  const cleanup = (outcome: RecordingConcatCompletionOutcome, exitCode?: number) => {
     if (cleaned) return;
     cleaned = true;
     if (killTimer) clearTimeout(killTimer);
+    if (outputEndTimer) clearTimeout(outputEndTimer);
     void rm(workspace, { recursive: true, force: true });
     try {
-      void Promise.resolve(onClose?.()).catch(() => undefined);
+      void Promise.resolve(
+        options.onCompletion?.({
+          outcome,
+          bytesProduced,
+          ...(exitCode === undefined ? {} : { exitCode }),
+        }),
+      ).catch(() => undefined);
+    } catch {
+      // Completion telemetry is best-effort and must never crash media playback.
+    }
+    try {
+      void Promise.resolve(options.onClose?.()).catch(() => undefined);
     } catch {
       // Ticket cleanup is best-effort and must never crash a media response.
     }
@@ -236,14 +312,56 @@ function createConcatChildLifecycle(
     }, 5_000);
     killTimer.unref?.();
   };
+  const recordOutputBytes = (count: number) => {
+    if (!Number.isSafeInteger(count) || count <= 0) return;
+    bytesProduced = Math.min(Number.MAX_SAFE_INTEGER, bytesProduced + count);
+  };
+  const markStarted = () => {
+    started = true;
+  };
+  const markFailed = () => {
+    failed = true;
+  };
+  const markOutputEnded = () => {
+    if (outputEnded) return;
+    outputEnded = true;
+    outputEndTimer = setTimeout(() => {
+      // A well-behaved ffmpeg closes immediately after stdout ends. This is a
+      // bounded orphan guard, not a viewer cancellation, so the completion
+      // telemetry still records the clean output EOF accurately.
+      stopChild();
+    }, 5_000);
+    outputEndTimer.unref?.();
+  };
+  const markConsumerCancelled = () => {
+    consumerCancelled = true;
+  };
   // Attach these before waiting on stdout. A missing executable can emit an
   // asynchronous child error before stdout ever becomes readable.
-  child.once('close', () => {
+  child.once('close', (code: number | null) => {
     childClosed = true;
-    cleanup();
+    const outcome: RecordingConcatCompletionOutcome =
+      failed || !started || (code !== null && code !== 0 && !consumerCancelled)
+        ? 'failed'
+        : consumerCancelled
+          ? 'cancelled'
+          : outputEnded || code === 0
+            ? 'completed'
+            : 'failed';
+    cleanup(outcome, code === null ? undefined : code);
   });
-  child.once('error', cleanup);
-  return { stopChild };
+  child.once('error', () => {
+    failed = true;
+    cleanup('failed');
+  });
+  return {
+    stopChild,
+    recordOutputBytes,
+    markStarted,
+    markFailed,
+    markOutputEnded,
+    markConsumerCancelled,
+  };
 }
 
 /**
@@ -257,6 +375,9 @@ function waitForFirstMediaFragment(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   child: ReturnType<typeof spawn>,
   stopChild: () => void,
+  recordOutputBytes: (count: number) => void,
+  markFailed: () => void,
+  markStarted: () => void,
   timeoutMs: number,
 ): Promise<Uint8Array[]> {
   return new Promise((resolve, reject) => {
@@ -274,6 +395,7 @@ function waitForFirstMediaFragment(
       if (settled) return;
       settled = true;
       finish();
+      markFailed();
       // Cancel only the local reader; the lifecycle handles the child and its
       // delayed close. Do not await this: a broken stdout must not extend the
       // bounded startup failure path.
@@ -285,6 +407,9 @@ function waitForFirstMediaFragment(
       if (settled) return;
       settled = true;
       finish();
+      // Set this before resolving: a very short valid recording may cause the
+      // child close event to run before the awaiting caller resumes.
+      markStarted();
       resolve(startupChunks);
     };
     const onChildError = () => fail('spawn_error');
@@ -296,6 +421,7 @@ function waitForFirstMediaFragment(
           if (result.done) {
             fail('exited_before_output');
           } else if (result.value.byteLength > 0) {
+            recordOutputBytes(result.value.byteLength);
             startupBytes += result.value.byteLength;
             if (startupBytes > maxRecordingConcatStartupBytes) {
               // Keep the established public failure taxonomy intentionally

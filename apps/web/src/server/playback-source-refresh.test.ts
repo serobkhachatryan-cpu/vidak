@@ -23,9 +23,11 @@ const env = { W3DS_AUTH_JWT_SECRET: 'playback-source-refresh-test-secret-0123456
 const viewerEName = '@viewer.w3id';
 const streamA = 'v2.opaque-stream-a_12345.signature';
 const streamB = 'v2.opaque-stream-b_12345.signature';
-const mediaUrlA = 'https://media.example.test/a.mp4?signature=source-token-a';
-const mediaUrlB = 'https://media.example.test/b.mp4?signature=source-token-b';
 const now = 1_750_000_000_000;
+// Cross-replica handoffs deliberately require a portable source deadline.
+// Keep ordinary fixtures valid long enough for the deterministic lease tests.
+const mediaUrlA = signedMediaUrl('a.mp4', now + 120_000);
+const mediaUrlB = signedMediaUrl('b.mp4', now + 120_000);
 
 let databaseClient: PGlite | undefined;
 
@@ -40,6 +42,10 @@ function receipt(streamId = streamA, at = now): string {
 
 function binding(streamId = streamA, at = now) {
   return { viewerEName, streamId, now: at };
+}
+
+function signedMediaUrl(path: string, expiresAt: number): string {
+  return `https://media.example.test/${path}?expires=${Math.floor(expiresAt / 1000)}&signature=source-token`;
 }
 
 async function createStorePair(): Promise<{
@@ -81,6 +87,52 @@ describe('playback source-refresh store', () => {
       epoch: first.lease.epoch,
       mediaUrl: mediaUrlA,
     });
+  });
+
+  it('does not retain a ready source handoff past its explicit redirect safety deadline', async () => {
+    const { replicaA, replicaB } = await createStorePair();
+    const first = acquired(await replicaA.claim(binding()));
+    const sourceExpiresAt = now + 30_000;
+    const shortLivedUrl = signedMediaUrl('short-lived.mp4', sourceExpiresAt);
+
+    await expect(
+      replicaA.publish({ ...binding(), lease: first.lease, mediaUrl: shortLivedUrl }),
+    ).resolves.toBe(true);
+    await expect(
+      replicaB.read({ ...binding(streamA, now + 14_999), receipt: receipt(streamA) }),
+    ).resolves.toEqual({ kind: 'ready', epoch: first.lease.epoch, mediaUrl: shortLivedUrl });
+    await expect(
+      replicaB.read({ ...binding(streamA, now + 15_000), receipt: receipt(streamA) }),
+    ).resolves.toEqual({ kind: 'absent' });
+  });
+
+  it('refuses an opaque source without an explicit expiry as a durable handoff', async () => {
+    const { replicaA, replicaB } = await createStorePair();
+    const claim = acquired(await replicaA.claim(binding()));
+    const opaqueUrl = 'https://media.example.test/opaque.mp4?source-token=server-only';
+
+    await expect(
+      replicaA.publish({ ...binding(), lease: claim.lease, mediaUrl: opaqueUrl }),
+    ).resolves.toBe(false);
+    await expect(replicaB.read({ ...binding(), receipt: receipt() })).resolves.toEqual({
+      kind: 'resolving',
+      epoch: claim.lease.epoch,
+    });
+  });
+
+  it('releases exactly an opaque or failed resolving lease so recovery can retry immediately', async () => {
+    const { replicaA, replicaB } = await createStorePair();
+    const first = acquired(await replicaA.claim(binding()));
+
+    await expect(replicaA.release({ ...binding(), lease: first.lease })).resolves.toBe(true);
+    await expect(replicaB.read({ ...binding(), receipt: receipt() })).resolves.toEqual({
+      kind: 'absent',
+    });
+    const second = acquired(await replicaB.claim(binding()));
+    expect(second.lease.token).not.toBe(first.lease.token);
+    // The deleted lease cannot affect the new row even when the epoch starts
+    // over: the exact lease hash is part of every mutation predicate.
+    await expect(replicaA.release({ ...binding(), lease: first.lease })).resolves.toBe(false);
   });
 
   it('uses the database statement clock for production lease predicates', async () => {

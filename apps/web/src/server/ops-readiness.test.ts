@@ -25,10 +25,6 @@ import {
 import { redactSensitiveText } from './ops-redaction';
 import { W3dsAuthError } from './w3ds-auth-errors';
 
-const playbackBridgeUrl =
-  'https://meshenger.example/api/integrations/vidak/recording-playback-grant';
-const playbackBridgeSecret = '0123456789abcdef0123456789abcdef';
-
 describe('ops redaction', () => {
   it('redacts cookies, bearer tokens, credentials, and sensitive configuration', () => {
     const redacted = redactSensitiveText(
@@ -99,8 +95,9 @@ describe('checkReadiness', () => {
       'w3ds_awareness_receipts',
       'recording_concat_tickets',
       'recording_concat_ticket_locks',
-      'playback_resolution_cache',
+      'evault_media_url_cache',
       'playback_source_refresh_epochs',
+      'shared_playback_card_quarantines',
     ]);
   });
 
@@ -146,7 +143,7 @@ describe('checkReadiness', () => {
     expect(probeFfmpeg).toHaveBeenCalledOnce();
   });
 
-  it('fails closed when a playback bridge is partial or invalid', async () => {
+  it('ignores legacy Meshenger bridge variables because shared playback uses W3DS eVault', async () => {
     mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
     const probeFfmpeg = vi.fn(async () => undefined);
     const base = {
@@ -156,69 +153,16 @@ describe('checkReadiness', () => {
     };
 
     for (const bridgeConfig of [
-      { MESHENGER_PLAYBACK_GRANT_URL: playbackBridgeUrl },
+      { MESHENGER_PLAYBACK_GRANT_URL: 'https://meshenger.example/not-a-playback-bridge' },
       {
         MESHENGER_PLAYBACK_GRANT_URL: 'https://meshenger.example/not-the-playback-bridge',
-        VIDAK_PLAYBACK_BRIDGE_SECRET: playbackBridgeSecret,
+        VIDAK_PLAYBACK_BRIDGE_SECRET: 'a-no-longer-used-legacy-bridge-secret',
       },
     ]) {
       const result = await checkReadiness({ ...base, ...bridgeConfig }, { probeFfmpeg });
-      expect(result.ready).toBe(false);
-      if (result.ready) continue;
-      expect(result.failedDependency).toBe('playback_bridge');
+      expect(result).toEqual({ ready: true });
     }
-    expect(probeFfmpeg).not.toHaveBeenCalled();
-  });
-
-  it('accepts a complete valid playback bridge configuration', async () => {
-    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
-    const probeFfmpeg = vi.fn(async () => undefined);
-    const probePlaybackBridge = vi.fn(async () => undefined);
-
-    const result = await checkReadiness(
-      {
-        NODE_ENV: 'development',
-        AUTH_PROVIDER: 'dev',
-        MEDIA_STORAGE_ROOT: mediaRoot,
-        MESHENGER_PLAYBACK_GRANT_URL: playbackBridgeUrl,
-        VIDAK_PLAYBACK_BRIDGE_SECRET: playbackBridgeSecret,
-      },
-      { probeFfmpeg, probePlaybackBridge },
-    );
-
-    expect(result).toEqual({ ready: true });
-    expect(probeFfmpeg).toHaveBeenCalledOnce();
-    expect(probePlaybackBridge).toHaveBeenCalledWith({
-      endpoint: playbackBridgeUrl,
-      secret: playbackBridgeSecret,
-    });
-  });
-
-  it('fails readiness when the configured source bridge does not authenticate its empty probe', async () => {
-    mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-'));
-    const probeFfmpeg = vi.fn(async () => undefined);
-    const bridgeFailure = new Error('source bridge returned 404');
-    const probePlaybackBridge = vi.fn(async () => {
-      throw bridgeFailure;
-    });
-
-    const result = await checkReadiness(
-      {
-        NODE_ENV: 'development',
-        AUTH_PROVIDER: 'dev',
-        MEDIA_STORAGE_ROOT: mediaRoot,
-        MESHENGER_PLAYBACK_GRANT_URL: playbackBridgeUrl,
-        VIDAK_PLAYBACK_BRIDGE_SECRET: playbackBridgeSecret,
-      },
-      { probeFfmpeg, probePlaybackBridge },
-    );
-
-    expect(result).toEqual({
-      ready: false,
-      failedDependency: 'playback_bridge',
-      cause: bridgeFailure,
-    });
-    expect(probeFfmpeg).not.toHaveBeenCalled();
+    expect(probeFfmpeg).toHaveBeenCalledTimes(2);
   });
 
   it('fails closed when only part of the AaaS webhook configuration is supplied', async () => {
@@ -339,7 +283,6 @@ describe('checkReadiness', () => {
     expect(readinessFailureCategory('database')).toBe('migration_readiness');
     expect(readinessFailureCategory('config')).toBe('authentication');
     expect(readinessFailureCategory('awareness_webhook')).toBe('w3ds_sync');
-    expect(readinessFailureCategory('playback_bridge')).toBe('video_playback');
     expect(readinessFailureCategory('ffmpeg')).toBe('video_playback');
   });
 
@@ -473,24 +416,22 @@ describe('health routes', () => {
     }
   });
 
-  it('does not expose incomplete playback-bridge configuration through readiness', async () => {
+  it('does not make legacy Meshenger bridge configuration a readiness dependency', async () => {
     const mediaRoot = await mkdtemp(join(tmpdir(), 'vidak-ready-route-'));
-    const logs: string[] = [];
-    setOperationalLogSinkForTests((line) => logs.push(line));
     vi.stubEnv('NODE_ENV', 'development');
     vi.stubEnv('AUTH_PROVIDER', 'dev');
     vi.stubEnv('MEDIA_STORAGE_ROOT', mediaRoot);
-    vi.stubEnv('MESHENGER_PLAYBACK_GRANT_URL', playbackBridgeUrl);
 
     try {
+      const ffmpeg = join(mediaRoot, 'ffmpeg');
+      await writeFile(ffmpeg, '#!/bin/sh\nexit 0\n');
+      await chmod(ffmpeg, 0o755);
+      vi.stubEnv('PATH', mediaRoot);
+      vi.stubEnv('MESHENGER_PLAYBACK_GRANT_URL', 'https://meshenger.example/not-a-playback-bridge');
+
       const response = await readyGet(new NextRequest('http://localhost/api/health/ready'));
-      expect(response.status).toBe(503);
-      await expect(response.json()).resolves.toEqual({
-        error: { code: 'not_ready', message: 'Service is not ready.' },
-      });
-      expect(logs).toHaveLength(1);
-      expect(logs[0]).toContain('"category":"video_playback"');
-      expect(logs.join('\n')).not.toContain(playbackBridgeUrl);
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toEqual({ status: 'ready' });
     } finally {
       await rm(mediaRoot, { recursive: true, force: true });
     }

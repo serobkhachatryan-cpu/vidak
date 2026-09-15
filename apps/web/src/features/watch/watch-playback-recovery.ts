@@ -41,6 +41,58 @@ export function isCurrentPlaybackGeneration(input: {
 }
 
 /**
+ * A `canplay` event only means that a browser has buffered enough data to
+ * render the current position. A continuous recording uses a one-claim stream
+ * ticket, so if the native media stack abandons that opening before the clock
+ * advances, one fresh ticket is safer than exposing a generic source error.
+ * Never restart after actual playback has advanced: that would lose the
+ * viewer's place in a long recording.
+ */
+export function shouldRetryUnstartedContinuousRecording(input: {
+  isContinuousRecording: boolean;
+  hasPlaybackSource: boolean;
+  hasMeaningfulPlayback: boolean;
+  automaticTicketRetryUsed: boolean;
+}): boolean {
+  return (
+    input.isContinuousRecording &&
+    input.hasPlaybackSource &&
+    !input.hasMeaningfulPlayback &&
+    !input.automaticTicketRetryUsed
+  );
+}
+
+/**
+ * A continuous recording has no media element until its opaque, single-use
+ * ticket is issued. A transient eVault source-read failure at that point is
+ * therefore safe to retry once with a *new* ticket: no bytes have been
+ * exposed and no ticket can have been claimed by the native player yet.
+ *
+ * Keep this deliberately narrower than the media-element recovery above.
+ * Terminal denials, malformed grants, and repeated remote failures must
+ * remain visible rather than silently creating an unbounded sequence of
+ * source authorization requests.
+ */
+export function shouldRetryInitialContinuousRecordingTicket(input: {
+  isContinuousRecording: boolean;
+  errorCode: unknown;
+  automaticTicketRetryUsed: boolean;
+}): boolean {
+  return (
+    input.isContinuousRecording &&
+    input.errorCode === 'remote_unavailable' &&
+    !input.automaticTicketRetryUsed
+  );
+}
+
+/**
+ * Give the eVault's completed shared-proof cache a moment to settle before
+ * the one automatic fresh ticket. This is not a user-visible backoff loop;
+ * it only covers the source-zero handoff race and is intentionally finite.
+ */
+export const initialContinuousRecordingTicketRetryDelayMs = 300;
+
+/**
  * Keep a native-media error from turning into either an unbounded retry loop
  * or a second generic failure while the one permitted reauthorization request
  * is still in flight. Continuous recordings own a separate ticket recovery

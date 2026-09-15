@@ -50,6 +50,11 @@ export interface DiscoveredVideoRecord {
   sourceId: 'w3ds-file' | 'file-record' | 'call-recording' | 'video-message';
   /** Server-only space identity for cache revalidation. Never sent to clients. */
   sourceSpaceKey?: string;
+  /**
+   * Server-only current GroupManifest envelope verified during inventory.
+   * It is copied only into a sealed playback grant, never into card JSON.
+   */
+  sourceGroupManifestId?: string;
   /** Server-only direct-chat identity for current shared-playback verification. */
   sourceChatId?: string;
   /** Server-only viewer-vault Chat envelope used for an O(1) current direct-share proof. */
@@ -280,6 +285,137 @@ function directHistoryCallSessionContext(
   return context(candidate) ?? context(existing);
 }
 
+/** A GroupManifest pointer is valid only for a current group access context. */
+function hasCompatibleGroupManifestContext(item: DiscoveredVideoRecord): boolean {
+  return (
+    item.accessScope === 'shared' &&
+    Boolean(item.sourceSpaceKey) &&
+    item.sourceChatKind === 'group' &&
+    (item.accessBasis === 'membership' ||
+      (item.accessBasis === 'history' && item.sourceChatKind === 'group'))
+  );
+}
+
+/**
+ * A duplicate may carry a fresher current GroupManifest pointer than the
+ * display record. Keep it only when all available group contexts name the
+ * same source space; a pointer must never cross a source boundary merely
+ * because two cards resolve to the same canonical File.
+ */
+function compatibleGroupManifestPointer(
+  selected: DiscoveredVideoRecord,
+  existing: DiscoveredVideoRecord,
+  candidate: DiscoveredVideoRecord,
+): string | undefined {
+  if (!hasCompatibleGroupManifestContext(selected) || !selected.sourceSpaceKey) return undefined;
+  const pointers = [candidate, existing]
+    .filter(
+      (item) =>
+        hasCompatibleGroupManifestContext(item) &&
+        Boolean(item.sourceSpaceKey) &&
+        Boolean(item.sourceGroupManifestId),
+    )
+    .filter((item) => sameEName(item.sourceSpaceKey ?? '', selected.sourceSpaceKey ?? ''));
+  // If a record with a pointer was discovered through another group, do not
+  // transfer either context across the file-identity merge.
+  const allPointerContexts = [candidate, existing].filter(
+    (item) => hasCompatibleGroupManifestContext(item) && Boolean(item.sourceGroupManifestId),
+  );
+  if (pointers.length !== allPointerContexts.length) return undefined;
+  return pointers[0]?.sourceGroupManifestId;
+}
+
+/**
+ * Strip a pointer before restoring the one compatible with the final merged
+ * record. This matters when two different group bindings happen to name the
+ * same canonical File: neither group's proof may silently win that merge.
+ */
+function withCompatibleGroupManifestPointer(
+  selected: DiscoveredVideoRecord,
+  existing: DiscoveredVideoRecord,
+  candidate: DiscoveredVideoRecord,
+): DiscoveredVideoRecord {
+  const unpointed = { ...selected };
+  delete unpointed.sourceGroupManifestId;
+  const sourceGroupManifestId = compatibleGroupManifestPointer(selected, existing, candidate);
+  return sourceGroupManifestId ? { ...unpointed, sourceGroupManifestId } : unpointed;
+}
+
+type ReferencePlaybackContext = Pick<
+  DiscoveredVideoRecord,
+  'sourceSpaceKey' | 'sourceReferenceId' | 'sourceReferenceFileId' | 'accessBasis'
+>;
+
+/**
+ * `accessBasis: reference` is emitted only for a File reference discovered in
+ * the viewer's own vault. It is a portable W3DS authorization artifact: the
+ * private-media route re-reads that exact local reference before opening the
+ * canonical File. Do not infer this context from a File URI or owner alone.
+ *
+ * Validate the stored target again here before transferring it to a richer
+ * historical card. This keeps a malformed/stale reference from authorizing
+ * an adjacent File with a similar presentation record.
+ */
+function viewerReferencePlaybackContext(
+  item: DiscoveredVideoRecord,
+): ReferencePlaybackContext | undefined {
+  if (
+    item.accessScope !== 'shared' ||
+    item.accessBasis !== 'reference' ||
+    !item.sourceSpaceKey ||
+    !item.sourceReferenceId ||
+    !item.sourceReferenceFileId ||
+    item.fileUris.length !== 1
+  ) {
+    return undefined;
+  }
+  const target = parseW3dsFileUri(item.fileUris[0]);
+  if (
+    !target ||
+    !sameEName(target.ownerEName, item.sourceSpaceKey) ||
+    target.metaEnvelopeId !== item.sourceReferenceFileId
+  ) {
+    return undefined;
+  }
+  return {
+    sourceSpaceKey: item.sourceSpaceKey,
+    sourceReferenceId: item.sourceReferenceId,
+    sourceReferenceFileId: item.sourceReferenceFileId,
+    accessBasis: 'reference',
+  };
+}
+
+/**
+ * A direct viewer-vault File reference is stronger and more portable than a
+ * legacy Chat/Call history pointer. When both discovery routes name the exact
+ * same canonical File, keep the call/message presentation record while
+ * preserving the reference as the playback proof. Group context is never
+ * guessed or converted: only an already-validated local reference can take
+ * this path, and a mismatched or generic owner File remains history-gated.
+ */
+function matchingReferencePlaybackContext(
+  existing: DiscoveredVideoRecord,
+  candidate: DiscoveredVideoRecord,
+): ReferencePlaybackContext | undefined {
+  const existingReference = viewerReferencePlaybackContext(existing);
+  const candidateReference = viewerReferencePlaybackContext(candidate);
+  if (Boolean(existingReference) === Boolean(candidateReference)) return undefined;
+
+  const reference = existingReference ? existing : candidate;
+  const history = existingReference ? candidate : existing;
+  if (
+    history.accessScope !== 'shared' ||
+    history.accessBasis !== 'history' ||
+    // A GroupManifest is mutable membership evidence. A local File reference
+    // must not turn a known group recording into a portable direct share.
+    history.sourceChatKind === 'group' ||
+    videoSpaceFileIdentity(reference.fileUris) !== videoSpaceFileIdentity(history.fileUris)
+  ) {
+    return undefined;
+  }
+  return existingReference ?? candidateReference;
+}
+
 /**
  * A catalogue rescan can rediscover one CallSession with a richer ordered
  * source list than the retained checkpoint had. This happens when an old card
@@ -294,6 +430,7 @@ function mergeRepeatedDiscoveryRecord(
 ): DiscoveredVideoRecord {
   const viewerChatGrantId = directHistoryViewerChatGrantId(existing, candidate);
   const callSessionContext = directHistoryCallSessionContext(existing, candidate);
+  const referencePlaybackContext = matchingReferencePlaybackContext(existing, candidate);
   const candidateHasMoreSources = candidate.fileUris.length > existing.fileUris.length;
   const existingHasUsefulTitle = hasUsefulTitle(existing);
   const candidateHasUsefulTitle = hasUsefulTitle(candidate);
@@ -305,11 +442,13 @@ function mergeRepeatedDiscoveryRecord(
       !existingHasUsefulTitle)
       ? candidate
       : existing;
-  return {
+  const merged = {
     ...selected,
     ...(viewerChatGrantId ? { sourceViewerChatGrantId: viewerChatGrantId } : {}),
     ...(callSessionContext ?? {}),
+    ...(referencePlaybackContext ?? {}),
   };
+  return withCompatibleGroupManifestPointer(merged, existing, candidate);
 }
 
 export function dedupeDiscoveredVideos(
@@ -338,6 +477,7 @@ export function dedupeDiscoveredVideos(
     }
     const viewerChatGrantId = directHistoryViewerChatGrantId(existing, item);
     const callSessionContext = directHistoryCallSessionContext(existing, item);
+    const referencePlaybackContext = matchingReferencePlaybackContext(existing, item);
     // Keep a fresh direct-share proof when title/kind ranking selects the
     // retained record, and do not let a richer duplicate silently discard it.
     const retained =
@@ -357,16 +497,18 @@ export function dedupeDiscoveredVideos(
           ? nextHasUsefulTitle
           : kindRank[candidate.kind] > kindRank[retained.kind]));
     const selected = preferNext ? candidate : retained;
-    unique.set(
-      identity,
+    const selectedWithCallSession =
       callSessionContext &&
-        (selected.sourceCallSessionId !== callSessionContext.sourceCallSessionId ||
-          selected.sourceCallSessionVault !== callSessionContext.sourceCallSessionVault ||
-          selected.sourceRecordingVault !== callSessionContext.sourceRecordingVault ||
-          selected.sourceChatKind !== callSessionContext.sourceChatKind)
+      (selected.sourceCallSessionId !== callSessionContext.sourceCallSessionId ||
+        selected.sourceCallSessionVault !== callSessionContext.sourceCallSessionVault ||
+        selected.sourceRecordingVault !== callSessionContext.sourceRecordingVault ||
+        selected.sourceChatKind !== callSessionContext.sourceChatKind)
         ? { ...selected, ...callSessionContext }
-        : selected,
-    );
+        : selected;
+    const merged = referencePlaybackContext
+      ? { ...selectedWithCallSession, ...referencePlaybackContext }
+      : selectedWithCallSession;
+    unique.set(identity, withCompatibleGroupManifestPointer(merged, retained, candidate));
   }
   return [...unique.values()];
 }
@@ -434,12 +576,24 @@ export function discoverFileRecordVideos(
   for (const file of files) {
     if (file.ontology && file.ontology !== ontology) continue;
     const reference = fileRecordReferenceTarget(file);
+    // A File reference stored in the viewer's own eVault is an independent,
+    // current authorization artifact. It must survive a same-URI Message that
+    // was discovered first, so the later de-duplication step can retain the
+    // richer card while promoting this stronger playback proof. References in
+    // any other vault remain subject to normal URI de-duplication.
+    const viewerOwnedReference = Boolean(reference && sameEName(vaultOwnerEName, viewerEName));
     const fileUri =
       reference?.fileUri ??
       optionalW3dsFileUri(file.parsed.uri) ??
       optionalW3dsFileUri(file.parsed.url) ??
       constructW3dsFileUri(vaultOwnerEName, file.id);
-    if (!fileUri || !parseW3dsFileUri(fileUri) || referenced.has(fileUri)) continue;
+    if (
+      !fileUri ||
+      !parseW3dsFileUri(fileUri) ||
+      (!viewerOwnedReference && referenced.has(fileUri))
+    ) {
+      continue;
+    }
     const mime = optionalString(file.parsed.contentType) ?? optionalString(file.parsed.mimeType);
     const decision = classifyAuthorizedMedia({
       payload: { type: 'file', ...file.parsed, mediaUri: fileUri },
@@ -483,11 +637,7 @@ export function discoverFileRecordVideos(
       ...(reference ? { sourceReferenceId: file.id } : {}),
       ...(reference ? { sourceReferenceFileId: reference.metaEnvelopeId } : {}),
       accessBasis:
-        accessScope === 'personal'
-          ? 'personal'
-          : reference && sameEName(vaultOwnerEName, viewerEName)
-            ? 'reference'
-            : 'membership',
+        accessScope === 'personal' ? 'personal' : viewerOwnedReference ? 'reference' : 'membership',
     });
     // The canonical lookup below must still be able to add the richer target
     // record, so only non-reference File rows reserve their URI here.
@@ -507,6 +657,8 @@ export function discoverCallRecordingVideos(input: {
   sourceViewerChatGrantIds?: ReadonlyMap<string, string>;
   /** Group membership needs its own current proof; only direct chats use the source grant bridge. */
   sourceChatKind?: 'direct' | 'group';
+  /** Current group proof captured while indexing this exact group. */
+  sourceGroupManifestId?: string;
 }): DiscoveredVideoRecord[] {
   const discovered: DiscoveredVideoRecord[] = [];
   for (const call of input.calls) {
@@ -566,6 +718,11 @@ export function discoverCallRecordingVideos(input: {
           }
         : {}),
       ...(input.sourceChatKind ? { sourceChatKind: input.sourceChatKind } : {}),
+      ...(accessScope === 'shared' &&
+      input.sourceChatKind === 'group' &&
+      input.sourceGroupManifestId
+        ? { sourceGroupManifestId: input.sourceGroupManifestId }
+        : {}),
       accessBasis: accessScope === 'personal' ? 'personal' : 'history',
     });
   }
@@ -580,6 +737,7 @@ export function discoverVideoMessageVideos(
   sourceChatIdHint?: string,
   sourceViewerChatGrantIdHint?: string,
   sourceViewerChatGrantIds?: ReadonlyMap<string, string>,
+  sourceGroupManifestIdHint?: string,
 ): DiscoveredVideoRecord[] {
   const discovered: DiscoveredVideoRecord[] = [];
   for (const message of messages) {
@@ -611,6 +769,10 @@ export function discoverVideoMessageVideos(
       fileUris,
       ...(sourceSpaceKey ? { vaultOwnerEName: sourceSpaceKey } : {}),
     });
+    const sourceChatKind =
+      accessScope === 'shared' && sourceSpaceKey && sourceGroupManifestIdHint
+        ? ('group' as const)
+        : undefined;
     discovered.push({
       key: `message:${message.id}:${fileUris.join(',')}`,
       fileUris,
@@ -638,6 +800,10 @@ export function discoverVideoMessageVideos(
       ...(sourceSpaceKey ? { sourceSpaceKey } : {}),
       ...(sourceChatId ? { sourceChatId } : {}),
       ...(sourceViewerChatGrantId ? { sourceViewerChatGrantId } : {}),
+      ...(sourceChatKind ? { sourceChatKind } : {}),
+      ...(sourceChatKind && sourceGroupManifestIdHint
+        ? { sourceGroupManifestId: sourceGroupManifestIdHint }
+        : {}),
       accessBasis: accessScope === 'personal' ? 'personal' : 'history',
     });
   }

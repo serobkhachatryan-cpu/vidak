@@ -1,7 +1,9 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import {
   CORRELATION_HEADER,
+  reportOperationalEvent,
   reportOperationalFailure,
+  reportRecordingFfmpegCompletionTiming,
   reportRecordingFfmpegStartupFailureTiming,
   reportRecordingFfmpegTiming,
 } from '../../../../../server/ops-observability';
@@ -10,10 +12,12 @@ import {
   RecordingConcatError,
 } from '../../../../../server/recording-concat';
 import {
+  cancelUnclaimedRecordingConcatTicket,
   claimRecordingConcatTicket,
   RecordingConcatTicketError,
   recordingConcatTicketLeaseHeartbeatMs,
 } from '../../../../../server/recording-concat-ticket';
+import { assertTrustedMutationOrigin } from '../../../../../server/request-security';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -36,6 +40,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ tic
   let sessionValidationMs = 0;
   let ticketClaimMs = 0;
   let ffmpegStartupStartedAt: number | undefined;
+  const rangeRequested = request.headers.has('range');
   try {
     const accessToken =
       getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
@@ -66,6 +71,27 @@ export async function GET(request: NextRequest, context: { params: Promise<{ tic
     // Therefore returning this response means the browser has a real media
     // stream, not merely a process that may never produce one.
     const body = await concatenateRecordingSources(claimed.sourceUrls, {
+      onCompletion: (completion) => {
+        safelyReportFfmpegCompletion({
+          correlationId: claimed.correlationId,
+          outcome: completion.outcome,
+          bytesProduced: completion.bytesProduced,
+          ...(completion.exitCode === undefined ? {} : { exitCode: completion.exitCode }),
+          requestCompletedMs: elapsedMs(requestStartedAt),
+        });
+        if (completion.outcome === 'failed') {
+          try {
+            reportOperationalFailure({
+              category: 'video_playback',
+              correlationId: claimed.correlationId,
+              code: 'recording_unavailable',
+              error: new Error('Continuous recording stopped after startup.'),
+            });
+          } catch {
+            // Diagnostics must never disrupt private-media cleanup.
+          }
+        }
+      },
       onClose: () => {
         void releaseOnce().catch(() => undefined);
       },
@@ -106,6 +132,7 @@ export async function GET(request: NextRequest, context: { params: Promise<{ tic
     });
   } catch (error) {
     await release?.().catch(() => undefined);
+    reportTicketClaimRejection(error, rangeRequested);
     reportStartupFailure(error, {
       correlationId,
       sessionValidationMs,
@@ -115,6 +142,31 @@ export async function GET(request: NextRequest, context: { params: Promise<{ tic
       requestFailedMs: elapsedMs(requestStartedAt),
     });
     return errorResponse(error, correlationId);
+  }
+}
+
+/**
+ * Discards an opaque ticket that a client-side preload never opened. The
+ * cancellation is authenticated and conditional in the ticket store, so a
+ * race with the media GET can never stop a claimed recording. Return the same
+ * no-content response for every ticket state to avoid creating an oracle.
+ */
+export async function DELETE(
+  request: NextRequest,
+  context: { params: Promise<{ ticket: string }> },
+) {
+  try {
+    assertTrustedMutationOrigin(request);
+    const accessToken =
+      getBearerToken(request.headers) ?? request.cookies.get(w3dsAccessCookieName)?.value;
+    if (!accessToken)
+      throw new W3dsAuthError('Authentication is required.', 'invalid_session', 401);
+    const session = await getW3dsAuthService().getSession(accessToken);
+    const { ticket } = await context.params;
+    await cancelUnclaimedRecordingConcatTicket(ticket, session.user);
+    return privateNoContent();
+  } catch (error) {
+    return errorResponse(error);
   }
 }
 
@@ -150,6 +202,42 @@ function safelyReportFfmpegTiming(input: Parameters<typeof reportRecordingFfmpeg
     reportRecordingFfmpegTiming(input);
   } catch {
     // Log aggregation must not affect authenticated media playback.
+  }
+}
+
+function safelyReportFfmpegCompletion(
+  input: Parameters<typeof reportRecordingFfmpegCompletionTiming>[0],
+): void {
+  try {
+    reportRecordingFfmpegCompletionTiming(input);
+  } catch {
+    // Log aggregation must not affect authenticated media playback.
+  }
+}
+
+/**
+ * Native media stacks may reconnect or make range probes. A concat ticket is
+ * intentionally single-claim, so record only a fixed rejection category to
+ * distinguish that case from an eVault or ffmpeg failure. Never log the
+ * ticket, Range header value, viewer, or request URL.
+ */
+function reportTicketClaimRejection(error: unknown, rangeRequested: boolean): void {
+  if (!(error instanceof RecordingConcatTicketError)) return;
+  const baseCode =
+    error.code === 'busy'
+      ? 'recording_ticket_claim_busy'
+      : error.code === 'not_found'
+        ? 'recording_ticket_claim_not_found'
+        : error.code === 'forbidden'
+          ? 'recording_ticket_claim_forbidden'
+          : 'recording_ticket_claim_invalid';
+  try {
+    reportOperationalEvent({
+      category: 'video_playback',
+      code: rangeRequested ? `${baseCode}_range` : baseCode,
+    });
+  } catch {
+    // A safe diagnostic must not replace the browser's sanitized response.
   }
 }
 
@@ -224,6 +312,14 @@ function errorResponse(error: unknown, correlationId?: string): NextResponse {
   response.headers.set('Referrer-Policy', 'no-referrer');
   response.headers.set('X-Content-Type-Options', 'nosniff');
   if (correlationId) response.headers.set(CORRELATION_HEADER, correlationId);
+  return response;
+}
+
+function privateNoContent(): NextResponse {
+  const response = new NextResponse(null, { status: 204 });
+  response.headers.set('Cache-Control', 'private, no-store, max-age=0');
+  response.headers.set('Referrer-Policy', 'no-referrer');
+  response.headers.set('X-Content-Type-Options', 'nosniff');
   return response;
 }
 

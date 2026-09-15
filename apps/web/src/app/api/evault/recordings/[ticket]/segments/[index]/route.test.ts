@@ -7,9 +7,9 @@ const mocks = vi.hoisted(() => ({
   createLibrary: vi.fn(),
   fetch: vi.fn(),
   readSegment: vi.fn(),
+  replaceInitialSegment: vi.fn(),
   replaceSegment: vi.fn(),
-  getPlaybackResolutionCache: vi.fn(),
-  deletePlaybackResolutionCache: vi.fn(),
+  recordConfirmedSharedPlaybackDenial: vi.fn(),
 }));
 
 vi.mock('../../../../../../../server/evault-video-library', async (importOriginal) => ({
@@ -20,17 +20,20 @@ vi.mock('../../../../../../../server/evault-video-library', async (importOrigina
 vi.mock('../../../../../../../server/recording-concat-ticket', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../../../../../../server/recording-concat-ticket')>()),
   readRecordingConcatSegment: mocks.readSegment,
+  replaceRecordingConcatInitialSegment: mocks.replaceInitialSegment,
   replaceRecordingConcatSegment: mocks.replaceSegment,
 }));
 
-vi.mock('../../../../../../../server/playback-resolution-cache', () => ({
-  getPlaybackResolutionCache: mocks.getPlaybackResolutionCache,
-  deletePlaybackResolutionCache: mocks.deletePlaybackResolutionCache,
+vi.mock('../../../../../../../server/video-space/shared-playback-card-quarantine', () => ({
+  recordConfirmedSharedPlaybackDenial: mocks.recordConfirmedSharedPlaybackDenial,
 }));
 
 import { EVaultVideoLibraryError } from '../../../../../../../server/evault-video-library';
 import { setOperationalLogSinkForTests } from '../../../../../../../server/ops-observability';
-import { mintSharedVideoAuthorizationReceipt } from '../../../../../../../server/shared-video-authorization-receipt';
+import {
+  mintSharedVideoAuthorizationReceipt,
+  verifySharedVideoAuthorizationReceipt,
+} from '../../../../../../../server/shared-video-authorization-receipt';
 import { GET } from './route';
 
 const viewer = { eName: '@viewer.w3id' };
@@ -43,11 +46,9 @@ describe('lazy recording segment route', () => {
     mocks.createLibrary.mockReset();
     mocks.fetch.mockReset();
     mocks.readSegment.mockReset();
+    mocks.replaceInitialSegment.mockReset();
     mocks.replaceSegment.mockReset();
-    mocks.getPlaybackResolutionCache.mockReset();
-    mocks.getPlaybackResolutionCache.mockResolvedValue(undefined);
-    mocks.deletePlaybackResolutionCache.mockReset();
-    mocks.deletePlaybackResolutionCache.mockResolvedValue(false);
+    mocks.recordConfirmedSharedPlaybackDenial.mockReset();
     mocks.readSegment.mockReturnValue({
       viewer,
       streamId: 'source-7',
@@ -306,25 +307,31 @@ describe('lazy recording segment route', () => {
     expect(JSON.stringify(mocks.fetch.mock.calls)).not.toContain(initialAuthorizationReceipt);
   });
 
-  it('uses a receipt-bound cache for source zero only after current playable-access validation', async () => {
+  it('rebinds a fresh receipt when source zero expires after ticket issuance', async () => {
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', '12345678901234567890123456789012');
-    const initialAuthorizationReceipt = mintSharedVideoAuthorizationReceipt({
+    const oldReceipt = mintSharedVideoAuthorizationReceipt({
       viewerEName: viewer.eName,
-      streamId: 'source-7',
+      streamId: 'source-expired',
     });
     mocks.readSegment.mockReturnValue({
       viewer,
-      streamId: 'source-7',
+      streamId: 'source-expired',
       correlationId: 'recording-correlation-7',
-      initialAuthorizationReceipt,
+      initialAuthorizationReceipt: oldReceipt,
     });
-    const inspectPlayableStream = vi.fn().mockResolvedValue({ fileUri: 'w3ds://file/source-7' });
-    const resolveMediaUrl = vi.fn();
-    mocks.createLibrary.mockReturnValue({ inspectPlayableStream, resolveMediaUrl });
-    mocks.getPlaybackResolutionCache.mockResolvedValue(
-      'https://source.example/cached.mp4?source-token=kept-server-side',
-    );
-    mocks.fetch.mockResolvedValue(new Response('cached bytes', { status: 206 }));
+    const resolveMediaUrl = vi
+      .fn()
+      .mockRejectedValueOnce(
+        new EVaultVideoLibraryError('The stream expired.', 'stream_expired', 401),
+      )
+      .mockResolvedValueOnce('https://source.example/renewed.mp4');
+    const renewPlayableStream = vi.fn().mockResolvedValue('source-renewed');
+    mocks.createLibrary.mockReturnValue({
+      resolveMediaUrl,
+      renewPlayableStream,
+      invalidateMediaUrl: vi.fn(),
+    });
+    mocks.fetch.mockResolvedValue(new Response('renewed bytes', { status: 206 }));
 
     const response = await GET(
       new NextRequest(
@@ -334,22 +341,47 @@ describe('lazy recording segment route', () => {
     );
 
     expect(response.status).toBe(206);
-    await expect(response.text()).resolves.toBe('cached bytes');
-    expect(mocks.getPlaybackResolutionCache).toHaveBeenCalledWith({
-      receipt: initialAuthorizationReceipt,
-      viewerEName: viewer.eName,
-      streamId: 'source-7',
-    });
-    expect(inspectPlayableStream).toHaveBeenCalledWith(
+    await expect(response.text()).resolves.toBe('renewed bytes');
+    expect(renewPlayableStream).toHaveBeenCalledWith(viewer, 'source-expired');
+    expect(resolveMediaUrl).toHaveBeenNthCalledWith(
+      1,
       viewer,
-      'source-7',
-      expect.objectContaining({ priority: 'interactive' }),
+      'source-expired',
+      expect.objectContaining({ hasRecentSharedAuthorizationReceipt: true }),
     );
-    expect(resolveMediaUrl).not.toHaveBeenCalled();
-    expect(JSON.stringify(mocks.fetch.mock.calls)).not.toContain(initialAuthorizationReceipt);
+    expect(resolveMediaUrl).toHaveBeenNthCalledWith(
+      2,
+      viewer,
+      'source-renewed',
+      expect.not.objectContaining({ hasRecentSharedAuthorizationReceipt: true }),
+    );
+    expect(mocks.replaceSegment).not.toHaveBeenCalled();
+    expect(mocks.replaceInitialSegment).toHaveBeenCalledTimes(1);
+    const freshReceipt = mocks.replaceInitialSegment.mock.calls[0]?.[3];
+    expect(mocks.replaceInitialSegment).toHaveBeenCalledWith(
+      'opaque-ticket',
+      'internal-secret',
+      'source-renewed',
+      freshReceipt,
+    );
+    expect(typeof freshReceipt).toBe('string');
+    expect(
+      verifySharedVideoAuthorizationReceipt({
+        receipt: freshReceipt,
+        viewerEName: viewer.eName,
+        streamId: 'source-renewed',
+      }),
+    ).toBe(true);
+    expect(
+      verifySharedVideoAuthorizationReceipt({
+        receipt: freshReceipt,
+        viewerEName: viewer.eName,
+        streamId: 'source-expired',
+      }),
+    ).toBe(false);
   });
 
-  it('does not proxy a cached source-zero URL after the viewer loses playable access', async () => {
+  it('resolves source zero through the canonical eVault path even with a verified receipt', async () => {
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', '12345678901234567890123456789012');
     const initialAuthorizationReceipt = mintSharedVideoAuthorizationReceipt({
       viewerEName: viewer.eName,
@@ -361,7 +393,43 @@ describe('lazy recording segment route', () => {
       correlationId: 'recording-correlation-7',
       initialAuthorizationReceipt,
     });
-    const inspectPlayableStream = vi
+    const resolveMediaUrl = vi.fn().mockResolvedValue('https://source.example/canonical.mp4');
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
+    mocks.fetch.mockResolvedValue(new Response('canonical bytes', { status: 206 }));
+
+    const response = await GET(
+      new NextRequest(
+        'https://vidak.example/api/evault/recordings/opaque-ticket/segments/0?key=internal-secret',
+      ),
+      { params: Promise.resolve({ ticket: 'opaque-ticket', index: '0' }) },
+    );
+
+    expect(response.status).toBe(206);
+    await expect(response.text()).resolves.toBe('canonical bytes');
+    expect(resolveMediaUrl).toHaveBeenCalledWith(
+      viewer,
+      'source-7',
+      expect.objectContaining({
+        hasRecentSharedAuthorizationReceipt: true,
+        onTiming: expect.any(Function),
+      }),
+    );
+    expect(JSON.stringify(mocks.fetch.mock.calls)).not.toContain(initialAuthorizationReceipt);
+  });
+
+  it('does not proxy a source-zero URL after the canonical eVault resolver denies access', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', '12345678901234567890123456789012');
+    const initialAuthorizationReceipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'source-7',
+    });
+    mocks.readSegment.mockReturnValue({
+      viewer,
+      streamId: 'source-7',
+      correlationId: 'recording-correlation-7',
+      initialAuthorizationReceipt,
+    });
+    const resolveMediaUrl = vi
       .fn()
       .mockRejectedValue(
         new EVaultVideoLibraryError(
@@ -370,11 +438,7 @@ describe('lazy recording segment route', () => {
           403,
         ),
       );
-    const resolveMediaUrl = vi.fn();
-    mocks.createLibrary.mockReturnValue({ inspectPlayableStream, resolveMediaUrl });
-    mocks.getPlaybackResolutionCache.mockResolvedValue(
-      'https://source.example/cached.mp4?source-token=kept-server-side',
-    );
+    mocks.createLibrary.mockReturnValue({ resolveMediaUrl });
 
     const response = await GET(
       new NextRequest(
@@ -384,16 +448,53 @@ describe('lazy recording segment route', () => {
     );
 
     expect(response.status).toBe(403);
-    expect(inspectPlayableStream).toHaveBeenCalledWith(
+    expect(resolveMediaUrl).toHaveBeenCalledWith(
       viewer,
       'source-7',
-      expect.objectContaining({ priority: 'interactive' }),
+      expect.objectContaining({ hasRecentSharedAuthorizationReceipt: true }),
     );
-    expect(resolveMediaUrl).not.toHaveBeenCalled();
     expect(mocks.fetch).not.toHaveBeenCalled();
+    const events = operationalLogs.map((line) => JSON.parse(line));
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'recording_segment_source_resolution_failed_timing',
+          timing: expect.objectContaining({ failureKind: 'authorization_denied' }),
+        }),
+      ]),
+    );
   });
 
-  it('deletes a rejected source-zero cache entry and retries normal resolution once', async () => {
+  it('records a confirmed terminal denial from a later recording segment', async () => {
+    const bindingHash = 'c'.repeat(43);
+    const terminalDenial = new EVaultVideoLibraryError(
+      'The viewer no longer has access.',
+      'authorization_denied',
+      403,
+      undefined,
+      bindingHash,
+    );
+    mocks.readSegment.mockReturnValue({
+      viewer,
+      streamId: 'source-8',
+      correlationId: 'recording-correlation-7',
+    });
+    mocks.createLibrary.mockReturnValue({
+      resolveMediaUrl: vi.fn().mockRejectedValue(terminalDenial),
+    });
+
+    const response = await GET(
+      new NextRequest(
+        'https://vidak.example/api/evault/recordings/opaque-ticket/segments/1?key=internal-secret',
+      ),
+      { params: Promise.resolve({ ticket: 'opaque-ticket', index: '1' }) },
+    );
+
+    expect(response.status).toBe(403);
+    expect(mocks.recordConfirmedSharedPlaybackDenial).toHaveBeenCalledWith(terminalDenial);
+  });
+
+  it('invalidates a rejected canonical source-zero URL and resolves it once more', async () => {
     vi.stubEnv('W3DS_AUTH_JWT_SECRET', '12345678901234567890123456789012');
     const initialAuthorizationReceipt = mintSharedVideoAuthorizationReceipt({
       viewerEName: viewer.eName,
@@ -405,15 +506,15 @@ describe('lazy recording segment route', () => {
       correlationId: 'recording-correlation-7',
       initialAuthorizationReceipt,
     });
-    const inspectPlayableStream = vi.fn().mockResolvedValue({ fileUri: 'w3ds://file/source-7' });
     const invalidateMediaUrl = vi.fn();
-    const resolveMediaUrl = vi.fn().mockResolvedValue('https://source.example/fresh.mp4');
+    const resolveMediaUrl = vi
+      .fn()
+      .mockResolvedValueOnce('https://source.example/rejected.mp4')
+      .mockResolvedValueOnce('https://source.example/fresh.mp4');
     mocks.createLibrary.mockReturnValue({
-      inspectPlayableStream,
       invalidateMediaUrl,
       resolveMediaUrl,
     });
-    mocks.getPlaybackResolutionCache.mockResolvedValue('https://source.example/rejected.mp4');
     mocks.fetch
       .mockResolvedValueOnce(new Response(null, { status: 403 }))
       .mockResolvedValueOnce(new Response('fresh bytes', { status: 206 }));
@@ -427,14 +528,15 @@ describe('lazy recording segment route', () => {
 
     expect(response.status).toBe(206);
     await expect(response.text()).resolves.toBe('fresh bytes');
-    expect(mocks.deletePlaybackResolutionCache).toHaveBeenCalledWith({
-      receipt: initialAuthorizationReceipt,
-      viewerEName: viewer.eName,
-      streamId: 'source-7',
-    });
-    expect(mocks.getPlaybackResolutionCache).toHaveBeenCalledTimes(1);
     expect(invalidateMediaUrl).toHaveBeenCalledWith(viewer, 'source-7');
-    expect(resolveMediaUrl).toHaveBeenCalledWith(
+    expect(resolveMediaUrl).toHaveBeenNthCalledWith(
+      1,
+      viewer,
+      'source-7',
+      expect.objectContaining({ hasRecentSharedAuthorizationReceipt: true }),
+    );
+    expect(resolveMediaUrl).toHaveBeenNthCalledWith(
+      2,
       viewer,
       'source-7',
       expect.objectContaining({ hasRecentSharedAuthorizationReceipt: true }),
@@ -462,6 +564,7 @@ describe('lazy recording segment route', () => {
       correlationId: 'recording-correlation-7',
       code: 'recording_segment_source_resolution_failed_timing',
       timing: {
+        failureKind: 'source',
         sourceResolutionMs: expect.any(Number),
         segmentRequestFailedMs: expect.any(Number),
       },

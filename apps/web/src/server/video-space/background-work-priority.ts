@@ -16,7 +16,14 @@ export interface BackgroundWorkLease {
 }
 
 export function reserveInteractivePlayback(durationMs: number, now = Date.now()): void {
-  interactivePlaybackUntil = Math.max(interactivePlaybackUntil, now + Math.max(0, durationMs));
+  // Callers sometimes only know that the player is about to start and supply
+  // a short warm-up window. A durable inventory wave is far more expensive
+  // than that hint, and allowing it to resume after five seconds can starve a
+  // still-opening private eVault source. Every explicit Watch therefore gets
+  // the same bounded global reservation; a later, longer caller may extend
+  // it but cannot shorten it.
+  const reservationMs = Math.max(interactivePlaybackReservationMs, durationMs, 0);
+  interactivePlaybackUntil = Math.max(interactivePlaybackUntil, now + reservationMs);
   // Previews are resumable derivatives, while playback is an explicitly
   // requested private media stream. Abort only work that opted into this
   // lease; unrelated requests retain their existing behavior.

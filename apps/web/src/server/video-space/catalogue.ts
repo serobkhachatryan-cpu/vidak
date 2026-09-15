@@ -23,6 +23,11 @@ export interface VideoSpaceCatalogueItem {
   accessScope: VideoSpaceAccessScope;
   visibility: VideoSpaceVisibility;
   streamIds: string[];
+  /**
+   * Server-only HMAC for retiring a confirmed stale shared card. It is never
+   * included in browser JSON or used as a playback authorization grant.
+   */
+  sharedCardBindingHash?: string;
   sourceSpaceKey?: string;
   sourceChatId?: string;
   /** Server-only current viewer Chat evidence for a direct historical share. */
@@ -39,9 +44,17 @@ export interface VideoSpaceCatalogueSnapshot {
 }
 
 export interface VideoSpaceStreamGrantInput {
+  /** Server-only card binding HMAC, copied into every sealed recording segment. */
+  sharedCardBindingHash?: string;
   fileUri: string;
   accessScope: VideoSpaceAccessScope;
   sourceSpaceKey?: string;
+  /**
+   * Current GroupManifest envelope verified during private inventory. This is
+   * copied only into the sealed stream grant; catalogue JSON never exposes
+   * it to the browser.
+   */
+  sourceGroupManifestId?: string;
   sourceChatId?: string;
   sourceViewerChatGrantId?: string;
   sourceCallSessionId?: string;
@@ -76,64 +89,78 @@ export function assembleVideoSpaceCatalogue(input: {
   completeness: InventoryCompleteness;
   viewerEName: string;
   toStreamId: (input: VideoSpaceStreamGrantInput) => string;
+  /**
+   * Creates an opaque binding from the stable source context while source
+   * fields are still server-only. No source data is returned from this API.
+   */
+  toSharedCardBindingHash?: (item: DiscoveredVideoRecord) => string | undefined;
 }): VideoSpaceCatalogueSnapshot {
   const unique = dedupeDiscoveredVideos(input.records);
   return {
     items: unique
-      .map((item) => ({
-        id: item.key,
-        kind: item.kind,
-        title: privateLibraryDisplayTitle(item.title, item.accessScope),
-        ...(item.durationSeconds !== undefined ? { durationSeconds: item.durationSeconds } : {}),
-        ...(item.shape ? { shape: item.shape } : {}),
-        ...(item.createdAt ? { createdAt: item.createdAt } : {}),
-        accessScope: item.accessScope,
-        visibility: visibilityForEVaultVideo({
+      .map((item) => {
+        const sharedCardBindingHash =
+          item.accessScope === 'shared' ? input.toSharedCardBindingHash?.(item) : undefined;
+        return {
+          id: item.key,
+          kind: item.kind,
+          title: privateLibraryDisplayTitle(item.title, item.accessScope),
+          ...(item.durationSeconds !== undefined ? { durationSeconds: item.durationSeconds } : {}),
+          ...(item.shape ? { shape: item.shape } : {}),
+          ...(item.createdAt ? { createdAt: item.createdAt } : {}),
           accessScope: item.accessScope,
-          viewerEName: input.viewerEName,
-        }),
-        // Stream grants are viewer-bound. Shared grants retain only opaque,
-        // server-side source context so their authorization can be checked on
-        // every media request before the foreign File is opened.
-        streamIds: canIssueViewerStream(item)
-          ? item.fileUris.map((fileUri) =>
-              input.toStreamId({
-                fileUri,
-                accessScope: item.accessScope,
-                ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
-                ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
-                ...(item.sourceViewerChatGrantId
-                  ? { sourceViewerChatGrantId: item.sourceViewerChatGrantId }
-                  : {}),
-                ...(item.sourceCallSessionId
-                  ? { sourceCallSessionId: item.sourceCallSessionId }
-                  : {}),
-                ...(item.sourceCallSessionVault
-                  ? { sourceCallSessionVault: item.sourceCallSessionVault }
-                  : {}),
-                ...(item.sourceRecordingVault
-                  ? { sourceRecordingVault: item.sourceRecordingVault }
-                  : {}),
-                ...(item.sourceChatKind ? { sourceChatKind: item.sourceChatKind } : {}),
-                ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
-                ...(item.sourceReferenceFileId
-                  ? { sourceReferenceFileId: item.sourceReferenceFileId }
-                  : {}),
-                ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
-              }),
-            )
-          : [],
-        ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
-        ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
-        ...(item.sourceViewerChatGrantId
-          ? { sourceViewerChatGrantId: item.sourceViewerChatGrantId }
-          : {}),
-        ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
-        ...(item.sourceReferenceFileId
-          ? { sourceReferenceFileId: item.sourceReferenceFileId }
-          : {}),
-        ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
-      }))
+          visibility: visibilityForEVaultVideo({
+            accessScope: item.accessScope,
+            viewerEName: input.viewerEName,
+          }),
+          // Stream grants are viewer-bound. Shared grants retain only opaque,
+          // server-side source context so their authorization can be checked on
+          // every media request before the foreign File is opened.
+          streamIds: canIssueViewerStream(item)
+            ? item.fileUris.map((fileUri) =>
+                input.toStreamId({
+                  ...(sharedCardBindingHash ? { sharedCardBindingHash } : {}),
+                  fileUri,
+                  accessScope: item.accessScope,
+                  ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
+                  ...(item.sourceGroupManifestId
+                    ? { sourceGroupManifestId: item.sourceGroupManifestId }
+                    : {}),
+                  ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
+                  ...(item.sourceViewerChatGrantId
+                    ? { sourceViewerChatGrantId: item.sourceViewerChatGrantId }
+                    : {}),
+                  ...(item.sourceCallSessionId
+                    ? { sourceCallSessionId: item.sourceCallSessionId }
+                    : {}),
+                  ...(item.sourceCallSessionVault
+                    ? { sourceCallSessionVault: item.sourceCallSessionVault }
+                    : {}),
+                  ...(item.sourceRecordingVault
+                    ? { sourceRecordingVault: item.sourceRecordingVault }
+                    : {}),
+                  ...(item.sourceChatKind ? { sourceChatKind: item.sourceChatKind } : {}),
+                  ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
+                  ...(item.sourceReferenceFileId
+                    ? { sourceReferenceFileId: item.sourceReferenceFileId }
+                    : {}),
+                  ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
+                }),
+              )
+            : [],
+          ...(item.sourceSpaceKey ? { sourceSpaceKey: item.sourceSpaceKey } : {}),
+          ...(item.sourceChatId ? { sourceChatId: item.sourceChatId } : {}),
+          ...(item.sourceViewerChatGrantId
+            ? { sourceViewerChatGrantId: item.sourceViewerChatGrantId }
+            : {}),
+          ...(item.sourceReferenceId ? { sourceReferenceId: item.sourceReferenceId } : {}),
+          ...(item.sourceReferenceFileId
+            ? { sourceReferenceFileId: item.sourceReferenceFileId }
+            : {}),
+          ...(item.accessBasis ? { accessBasis: item.accessBasis } : {}),
+          ...(sharedCardBindingHash ? { sharedCardBindingHash } : {}),
+        };
+      })
       .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? '')),
     completeness: input.completeness,
   };

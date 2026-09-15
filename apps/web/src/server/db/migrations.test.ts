@@ -41,7 +41,9 @@ const requiredTables = [
   'recording_concat_tickets',
   'recording_concat_ticket_locks',
   'playback_resolution_cache',
+  'evault_media_url_cache',
   'playback_source_refresh_epochs',
+  'shared_playback_card_quarantines',
 ] as const;
 
 const requiredIndexes = [
@@ -124,7 +126,9 @@ const requiredIndexes = [
   'recording_concat_tickets_expires_idx',
   'recording_concat_tickets_viewer_expires_idx',
   'playback_resolution_cache_expires_idx',
+  'evault_media_url_cache_expires_idx',
   'playback_source_refresh_epochs_expires_idx',
+  'shared_playback_card_quarantines_expires_idx',
 ] as const;
 
 describe('database migrations (empty database → current set)', () => {
@@ -166,7 +170,7 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ hash: string; created_at: number }>(
       'select hash, created_at from drizzle.__drizzle_migrations order by created_at',
     );
-    expect(applied.rows).toHaveLength(29);
+    expect(applied.rows).toHaveLength(31);
 
     await client.query(
       `insert into video_preview_assets (
@@ -293,6 +297,24 @@ describe('database migrations (empty database → current set)', () => {
       expect.arrayContaining(['viewer_e_name', 'stream_id', 'receipt', 'media_url']),
     );
 
+    const eVaultMediaUrlCacheColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'evault_media_url_cache'
+       order by 1`,
+    );
+    expect(eVaultMediaUrlCacheColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining([
+        'binding_hash',
+        'generation',
+        'encrypted_payload',
+        'media_expires_at',
+        'expires_at',
+      ]),
+    );
+    expect(eVaultMediaUrlCacheColumns.rows.map((row) => row.column_name)).not.toEqual(
+      expect.arrayContaining(['viewer_e_name', 'stream_id', 'receipt', 'media_url']),
+    );
+
     const playbackSourceRefreshEpochColumns = await client.query<{ column_name: string }>(
       `select column_name from information_schema.columns
        where table_schema = 'public' and table_name = 'playback_source_refresh_epochs'
@@ -311,6 +333,18 @@ describe('database migrations (empty database → current set)', () => {
     );
     expect(playbackSourceRefreshEpochColumns.rows.map((row) => row.column_name)).not.toEqual(
       expect.arrayContaining(['viewer_e_name', 'stream_id', 'receipt', 'media_url']),
+    );
+
+    const sharedPlaybackCardQuarantineColumns = await client.query<{ column_name: string }>(
+      `select column_name from information_schema.columns
+       where table_schema = 'public' and table_name = 'shared_playback_card_quarantines'
+       order by 1`,
+    );
+    expect(sharedPlaybackCardQuarantineColumns.rows.map((row) => row.column_name)).toEqual(
+      expect.arrayContaining(['binding_hash', 'expires_at', 'created_at', 'updated_at']),
+    );
+    expect(sharedPlaybackCardQuarantineColumns.rows.map((row) => row.column_name)).not.toEqual(
+      expect.arrayContaining(['viewer_e_name', 'item_id', 'stream_id', 'source_uri', 'media_url']),
     );
 
     const syncColumns = await client.query<{ column_name: string }>(
@@ -498,6 +532,6 @@ describe('database migrations (empty database → current set)', () => {
     const applied = await client.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(Number(applied.rows[0]?.count)).toBe(29);
+    expect(Number(applied.rows[0]?.count)).toBe(31);
   });
 });

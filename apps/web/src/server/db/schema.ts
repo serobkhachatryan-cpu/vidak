@@ -1018,6 +1018,32 @@ export const playbackResolutionCache = pgTable(
 );
 
 /**
+ * Cross-replica cache for canonical eVault File redirects. Unlike the
+ * receipt-bound handoff above, this cache is bound to the full server-side
+ * viewer/source context. `generation` is a durable random CAS token: a source
+ * rejection replaces it before deleting the payload, so an older resolver can
+ * never write a rejected URL back after invalidation.
+ */
+export const eVaultMediaUrlCache = pgTable(
+  'evault_media_url_cache',
+  {
+    /** HMAC of the complete viewer/source binding; no identity is stored. */
+    bindingHash: text('binding_hash').primaryKey(),
+    /** Random opaque durable write fence, never browser-visible. */
+    generation: text('generation').notNull(),
+    /** AES-GCM ciphertext only; null is an invalidation tombstone. */
+    encryptedPayload: text('encrypted_payload'),
+    /** Actual safe cache lifetime of the resolved signed redirect. */
+    mediaExpiresAt: timestamp('media_expires_at', { withTimezone: true, mode: 'date' }),
+    /** Retention for an entry or tombstone; it outlives an in-flight write lease. */
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('evault_media_url_cache_expires_idx').on(table.expiresAt)],
+);
+
+/**
  * Cross-replica ordering state for an explicit shared-video source recovery.
  * The primary key is a server-keyed fingerprint of the exact viewer and
  * opaque stream grant. It contains no browser-readable identity, receipt, or
@@ -1038,6 +1064,23 @@ export const playbackSourceRefreshEpochs = pgTable(
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
   },
   (table) => [index('playback_source_refresh_epochs_expires_idx').on(table.expiresAt)],
+);
+
+/**
+ * A bounded, server-only tombstone for a card that a live shared-playback
+ * proof conclusively denied. The key is an HMAC over the viewer and durable
+ * source context; no eName, card id, stream grant, source metadata, URL, or
+ * entitlement decision is persisted. This table never authorizes playback.
+ */
+export const sharedPlaybackCardQuarantines = pgTable(
+  'shared_playback_card_quarantines',
+  {
+    bindingHash: text('binding_hash').primaryKey(),
+    expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'date' }).notNull(),
+  },
+  (table) => [index('shared_playback_card_quarantines_expires_idx').on(table.expiresAt)],
 );
 
 export type ChannelImportOAuthStateRow = typeof channelImportOAuthStates.$inferSelect;

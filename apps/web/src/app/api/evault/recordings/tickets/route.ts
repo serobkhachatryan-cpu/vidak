@@ -17,10 +17,12 @@ import {
 } from '../../../../../server/recording-concat-ticket';
 import { assertTrustedMutationOrigin } from '../../../../../server/request-security';
 import {
+  mintSharedVideoAuthorizationReceipt,
   SharedVideoAuthorizationReceiptConfigurationError,
   sharedVideoAuthorizationReceiptCookieName,
   verifySharedVideoAuthorizationReceipt,
 } from '../../../../../server/shared-video-authorization-receipt';
+import { recordConfirmedSharedPlaybackDenial } from '../../../../../server/video-space/shared-playback-card-quarantine';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -33,12 +35,12 @@ const maxTicketRequestBytes = 1_536 * 1_024;
 
 /**
  * Keeps a long recording's sealed stream grants out of the browser URL. The
- * request validates only the first grant locally. Later grants remain opaque
- * until ffmpeg reaches their segment, so a long recording can start without
- * spending its opening path decrypting every future chunk. The first source
- * may start a viewer-bound authorization warmup only after its ticket exists;
- * that overlaps the browser navigation but never exposes a media URL or
- * opens any later segment.
+ * request establishes a valid authorization for only the first source before
+ * issuing the ticket. Later grants remain opaque until ffmpeg reaches their
+ * segment, so a long recording stays continuous without spending its opening
+ * path decrypting every future chunk. Completing source zero first (or
+ * reusing its already-valid receipt) prevents the ticket, ffmpeg, and a
+ * browser warmup from racing the same shared-access proof.
  */
 /**
  * Shared implementation for the legacy /recordings/tickets endpoint and the
@@ -108,31 +110,34 @@ export async function createRecordingConcatTicket(
       validFirstStreamId,
       options?.initialAuthorizationReceipt,
     );
+    // A continuous player cannot recover if the ticket races segment zero's
+    // initial shared-source proof: ffmpeg may receive its first loopback URL
+    // before a concurrently launched warmup has established the proof. Reuse
+    // a valid completed receipt, otherwise do the one required authorization
+    // before returning an opaque ticket. Its media URL remains in the
+    // server-only resolver cache; only a short signed hint is placed in the
+    // encrypted ticket for a segment request on another replica.
+    const ticketAuthorizationReceipt =
+      initialAuthorizationReceipt ??
+      (await authorizeFirstSegmentBeforeTicket(
+        library,
+        session.user,
+        validFirstStreamId,
+        correlationId,
+      ));
     const ticketIssuedStartedAt = performance.now();
     const ticketStreamIds = [validFirstStreamId, ...streamIds.slice(1)];
-    const { playbackPath } = initialAuthorizationReceipt
+    const { playbackPath } = ticketAuthorizationReceipt
       ? await issueRecordingConcatTicket(
           session.user,
           ticketStreamIds,
           undefined,
           correlationId,
           undefined,
-          { initialAuthorizationReceipt },
+          { initialAuthorizationReceipt: ticketAuthorizationReceipt },
         )
       : await issueRecordingConcatTicket(session.user, ticketStreamIds, undefined, correlationId);
     ticketIssuedMs = elapsedMs(ticketIssuedStartedAt);
-    // This is an explicit Watch action. Start only segment zero's existing
-    // viewer-bound authorization path while the browser receives the opaque
-    // ticket and starts ffmpeg. The segment route always repeats that check
-    // before bytes stream, and a failure remains private and does not make
-    // issuing the ticket fail.
-    startFirstSegmentWarmup(
-      library,
-      session.user,
-      validFirstStreamId,
-      correlationId,
-      Boolean(initialAuthorizationReceipt),
-    );
     safelyReportTicketTiming({
       correlationId,
       sessionValidationMs,
@@ -143,6 +148,11 @@ export async function createRecordingConcatTicket(
     });
     return privateJson({ playbackUrl: playbackPath }, 200, correlationId);
   } catch (error) {
+    // Watch may now mount from its already viewer-bound card instead of
+    // waiting for a duplicate catalogue lookup. Preserve the same durable
+    // stale-card suppression as every other interactive media route, but only
+    // for the library's typed terminal live-proof marker.
+    recordConfirmedSharedPlaybackDenial(error);
     return errorResponse(error, correlationId);
   }
 }
@@ -152,17 +162,17 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * Runs the existing segment-zero authorization warmup without adding it to
- * the ticket response path. Its timing callback is fixed-schema and has no
- * access to the media URL returned by the library.
+ * Completes source-zero authorization before an opaque recording ticket can
+ * be returned. The resolver's private media URL stays server-only; the ticket
+ * receives only a fresh viewer-and-stream-bound receipt so segment zero can
+ * reuse this completed proof across replicas without starting it again.
  */
-function startFirstSegmentWarmup(
+async function authorizeFirstSegmentBeforeTicket(
   library: ReturnType<typeof createEVaultVideoLibrary>,
   user: Parameters<ReturnType<typeof createEVaultVideoLibrary>['authorizePlayableStream']>[0],
   streamId: string,
   correlationId: string,
-  hasRecentSharedAuthorizationReceipt: boolean,
-): void {
+): Promise<string | undefined> {
   const startedAt = performance.now();
   let timing: MediaResolutionTiming | undefined;
   const recordTiming = (next: MediaResolutionTiming): void => {
@@ -178,20 +188,40 @@ function startFirstSegmentWarmup(
         ...observed,
       });
     } catch {
-      // Observability must not turn a detached warmup into a rejection.
+      // Observability must not alter an authorization result.
     }
   };
-  void library
-    .authorizePlayableStream(user, streamId, {
+  try {
+    await library.authorizePlayableStream(user, streamId, {
       priority: 'interactive',
+      // A source-zero ticket is a confirmed Watch action. When a legacy
+      // eVault exposes the File only through GraphQL metadata, retain the
+      // normal bounded source deadline instead of failing at the shorter
+      // generic interactive compatibility cutoff. The catalogue warmer makes
+      // this path exceptional rather than routine.
+      allowExtendedLegacyFileMetadataWait: true,
       onTiming: recordTiming,
-      ...(hasRecentSharedAuthorizationReceipt ? { hasRecentSharedAuthorizationReceipt: true } : {}),
-    })
-    .then(
-      () => report(true),
-      () => report(false),
-    )
-    .catch(() => undefined);
+    });
+    report(true);
+  } catch (error) {
+    report(false);
+    throw error;
+  }
+
+  // A receipt is an optimization, not a grant. A configuration-less local
+  // environment can still keep the already authorized result on this replica;
+  // production receives the signed, portable handoff below.
+  try {
+    const receipt = mintSharedVideoAuthorizationReceipt({ viewerEName: user.eName, streamId });
+    return verifySharedVideoAuthorizationReceipt({ receipt, viewerEName: user.eName, streamId })
+      ? receipt
+      : undefined;
+  } catch (error) {
+    if (error instanceof SharedVideoAuthorizationReceiptConfigurationError) {
+      return undefined;
+    }
+    throw error;
+  }
 }
 
 /**
@@ -279,14 +309,23 @@ function mergeMediaResolutionTiming(
   next: MediaResolutionTiming,
 ): MediaResolutionTiming {
   if (!current) return next;
+  // `onTiming` reports a cumulative snapshot for one authorization attempt.
+  // Nested failure boundaries may observe that same object more than once;
+  // adding snapshots turns a five-second source proof into misleading ten- or
+  // fifteen-second telemetry. Keep the furthest completed phase instead.
   return {
-    mediaUrlCacheHit: current.mediaUrlCacheHit && next.mediaUrlCacheHit,
-    sharedAccessVerificationMs:
-      current.sharedAccessVerificationMs + next.sharedAccessVerificationMs,
-    eVaultResolutionMs: current.eVaultResolutionMs + next.eVaultResolutionMs,
-    directFileDereferenceMs: current.directFileDereferenceMs + next.directFileDereferenceMs,
-    platformTokenMs: current.platformTokenMs + next.platformTokenMs,
-    metadataReadMs: current.metadataReadMs + next.metadataReadMs,
+    mediaUrlCacheHit: current.mediaUrlCacheHit || next.mediaUrlCacheHit,
+    sharedAccessVerificationMs: Math.max(
+      current.sharedAccessVerificationMs,
+      next.sharedAccessVerificationMs,
+    ),
+    eVaultResolutionMs: Math.max(current.eVaultResolutionMs, next.eVaultResolutionMs),
+    directFileDereferenceMs: Math.max(
+      current.directFileDereferenceMs,
+      next.directFileDereferenceMs,
+    ),
+    platformTokenMs: Math.max(current.platformTokenMs, next.platformTokenMs),
+    metadataReadMs: Math.max(current.metadataReadMs, next.metadataReadMs),
   };
 }
 

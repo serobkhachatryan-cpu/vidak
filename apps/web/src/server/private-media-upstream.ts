@@ -17,6 +17,45 @@ import 'server-only';
 export const defaultPrivateMediaHeaderTimeoutMs = 12_000;
 export const maxPrivateMediaRedirects = 1;
 
+/**
+ * A File redirect may be a short-lived CDN URL. An eVault does not have to
+ * expose its signing policy, so an unrecognised URL is deliberately useful
+ * only for the opening/range burst that just resolved it; it is never treated
+ * as a four-hour source merely because the playback grant lives that long.
+ */
+export const unknownPrivateMediaUrlCacheTtlMs = 15_000;
+/** Leave time to start a range before an explicitly signed URL expires. */
+export const privateMediaUrlExpirySafetyMarginMs = 15_000;
+/** The cache caller can apply a tighter stream/grant bound. */
+export const maxPrivateMediaUrlCacheTtlMs = 4 * 60 * 60 * 1000;
+
+export type PrivateMediaUrlCacheExpiry =
+  | {
+      /** A recognised signed-URL expiry, minus the startup safety margin. */
+      kind: 'explicit';
+      ttlMs: number;
+      expiresAt: number;
+    }
+  | {
+      /** No portable expiry metadata: retain only the immediate range burst. */
+      kind: 'unknown';
+      ttlMs: number;
+    };
+
+export interface PrivateMediaUrlCacheExpiryOptions {
+  /** Injectable for deterministic callers and tests. Milliseconds since epoch. */
+  now?: number;
+  /**
+   * Caller-controlled ceiling, normally the remaining viewer stream/grant
+   * lifetime. It can only reduce the result; it never extends a URL cache.
+   */
+  maxTtlMs?: number;
+  /** Optional tighter bound for an unrecognised signed URL. */
+  unknownTtlMs?: number;
+  /** Optional conservative margin before an explicit URL expiration. */
+  safetyMarginMs?: number;
+}
+
 export type PrivateMediaUpstreamFailure =
   | { kind: 'caller_cancelled' }
   | { kind: 'pre_header_timeout' }
@@ -313,6 +352,50 @@ export function isRefreshablePrivateMediaFailure(failure: PrivateMediaUpstreamFa
 }
 
 /**
+ * Chooses a safe cache lifetime for a canonical eVault File redirect without
+ * making the cache depend on a particular storage provider. Recognised AWS,
+ * Google, Azure SAS, CloudFront, and generic expiry parameters are bounded by
+ * their actual deadline. A URL with no portable expiry evidence receives only
+ * a very short burst cache, never the stream's normal multi-hour lifetime.
+ *
+ * `undefined` is intentionally fail-closed: it means a malformed recognised
+ * expiry, an already-near-expiry URL, an unsafe URL, or invalid options. The
+ * caller must not cache that source and should resolve it through its eVault
+ * again for the next range.
+ */
+export function resolvePrivateMediaUrlCacheExpiry(
+  mediaUrl: string,
+  options: PrivateMediaUrlCacheExpiryOptions = {},
+): PrivateMediaUrlCacheExpiry | undefined {
+  const url = parseSafePrivateMediaUpstreamUrl(mediaUrl);
+  const now = normalizeEpochMs(options.now ?? Date.now());
+  const maxTtlMs = normalizePositiveTtl(options.maxTtlMs ?? maxPrivateMediaUrlCacheTtlMs);
+  const unknownTtlMs = normalizePositiveTtl(
+    options.unknownTtlMs ?? unknownPrivateMediaUrlCacheTtlMs,
+  );
+  const safetyMarginMs = normalizeNonNegativeTtl(
+    options.safetyMarginMs ?? privateMediaUrlExpirySafetyMarginMs,
+  );
+  if (!url || now === undefined || maxTtlMs === undefined || unknownTtlMs === undefined) {
+    return undefined;
+  }
+  if (safetyMarginMs === undefined) return undefined;
+
+  const signedExpiry = signedUrlExpiry(url);
+  if (signedExpiry.kind === 'invalid') return undefined;
+  if (signedExpiry.kind === 'known') {
+    const remainingMs = signedExpiry.expiresAt - now - safetyMarginMs;
+    const ttlMs = Math.min(maxTtlMs, Math.floor(remainingMs));
+    if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) return undefined;
+    return { kind: 'explicit', ttlMs, expiresAt: signedExpiry.expiresAt };
+  }
+
+  const ttlMs = Math.min(maxTtlMs, unknownTtlMs);
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) return undefined;
+  return { kind: 'unknown', ttlMs };
+}
+
+/**
  * Neutral URL guard for server-only private-media transport. It intentionally
  * accepts neither HTTP nor literal local/private destinations. It performs no
  * DNS lookup, so callers that need DNS-rebinding resistance need a pinned or
@@ -402,4 +485,142 @@ function isPrivateIpv6(host: string): boolean {
     /^fe[89ab][0-9a-f]:/.test(host) ||
     /^f[cd][0-9a-f]{2}:/.test(host)
   );
+}
+
+type SignedUrlExpiry =
+  | { kind: 'none' }
+  | { kind: 'invalid' }
+  | { kind: 'known'; expiresAt: number };
+
+/**
+ * Query parameters commonly used by signed object-storage URLs. All values
+ * that look like an expiry must parse successfully; a malformed value is not
+ * silently downgraded to the short unknown cache because that could still
+ * retain a source beyond an unparseable short deadline.
+ */
+function signedUrlExpiry(url: URL): SignedUrlExpiry {
+  const expirations: number[] = [];
+  let hasExplicitExpiry = false;
+  const addExpiry = (expiresAt: number | undefined): boolean => {
+    hasExplicitExpiry = true;
+    if (expiresAt === undefined) return false;
+    expirations.push(expiresAt);
+    return true;
+  };
+  const addDurationExpiry = (dateName: string, durationName: string): boolean => {
+    const dates = queryParameterValues(url, dateName);
+    const durations = queryParameterValues(url, durationName);
+    if (dates.length === 0 && durations.length === 0) return true;
+    hasExplicitExpiry = true;
+    if (dates.length !== 1 || durations.length !== 1) return false;
+    const [dateValue] = dates;
+    const [durationValue] = durations;
+    if (!dateValue || !durationValue) return false;
+    const issuedAt = parseSigningTimestamp(dateValue);
+    const durationMs = parseDurationSeconds(durationValue);
+    if (issuedAt === undefined || durationMs === undefined) return false;
+    return addExpiry(addEpochMs(issuedAt, durationMs));
+  };
+
+  // AWS Signature V4 and Google Cloud Storage V4 both bind expiry to the
+  // signing timestamp plus a duration. Do not treat the duration as an epoch.
+  if (!addDurationExpiry('x-amz-date', 'x-amz-expires')) return { kind: 'invalid' };
+  if (!addDurationExpiry('x-goog-date', 'x-goog-expires')) return { kind: 'invalid' };
+
+  // Azure SAS uses `se`; CloudFront and several object stores commonly use
+  // an epoch in `Expires`; signed application URLs often use `exp`/`expiry`.
+  for (const parameterName of ['expires', 'expiry', 'expiration', 'exp', 'se']) {
+    for (const value of queryParameterValues(url, parameterName)) {
+      if (!addExpiry(parseAbsoluteExpiry(value))) return { kind: 'invalid' };
+    }
+  }
+
+  if (!hasExplicitExpiry) return { kind: 'none' };
+  const expiresAt = Math.min(...expirations);
+  return Number.isSafeInteger(expiresAt) ? { kind: 'known', expiresAt } : { kind: 'invalid' };
+}
+
+function queryParameterValues(url: URL, expectedName: string): string[] {
+  const expected = expectedName.toLowerCase();
+  const values: string[] = [];
+  for (const [name, value] of url.searchParams) {
+    if (name.toLowerCase() === expected) values.push(value);
+  }
+  return values;
+}
+
+function parseSigningTimestamp(value: string): number | undefined {
+  const match = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/.exec(value);
+  if (!match) return undefined;
+  const [, yearValue, monthValue, dayValue, hourValue, minuteValue, secondValue] = match;
+  const year = Number(yearValue);
+  const month = Number(monthValue);
+  const day = Number(dayValue);
+  const hour = Number(hourValue);
+  const minute = Number(minuteValue);
+  const second = Number(secondValue);
+  const parsed = Date.UTC(year, month - 1, day, hour, minute, second);
+  if (!Number.isSafeInteger(parsed)) return undefined;
+  const date = new Date(parsed);
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day ||
+    date.getUTCHours() !== hour ||
+    date.getUTCMinutes() !== minute ||
+    date.getUTCSeconds() !== second
+  ) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function parseDurationSeconds(value: string): number | undefined {
+  if (!/^\d+$/.test(value)) return undefined;
+  const seconds = Number(value);
+  if (!Number.isSafeInteger(seconds)) return undefined;
+  const milliseconds = seconds * 1000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+}
+
+function parseAbsoluteExpiry(value: string): number | undefined {
+  if (/^\d+$/.test(value)) {
+    const numeric = Number(value);
+    if (!Number.isSafeInteger(numeric)) return undefined;
+    // Unix seconds are currently ten digits. Treat an eleven-or-more digit
+    // value as milliseconds instead of guessing a far-future seconds value.
+    const milliseconds = numeric < 100_000_000_000 ? numeric * 1000 : numeric;
+    return normalizeEpochMs(milliseconds);
+  }
+  // `se` is typically an ISO-8601 Azure SAS date. Keep this deliberately
+  // strict: Date.parse accepts ambiguous locale forms that are unsafe here.
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})$/.test(value)
+  ) {
+    return undefined;
+  }
+  return normalizeEpochMs(Date.parse(value));
+}
+
+function normalizeEpochMs(value: number): number | undefined {
+  return Number.isSafeInteger(value) && value >= 0 && value <= 8_640_000_000_000_000
+    ? value
+    : undefined;
+}
+
+function normalizePositiveTtl(value: number): number | undefined {
+  return Number.isFinite(value) && value > 0 && Number.isSafeInteger(Math.floor(value))
+    ? Math.floor(value)
+    : undefined;
+}
+
+function normalizeNonNegativeTtl(value: number): number | undefined {
+  return Number.isFinite(value) && value >= 0 && Number.isSafeInteger(Math.floor(value))
+    ? Math.floor(value)
+    : undefined;
+}
+
+function addEpochMs(epochMs: number, durationMs: number): number | undefined {
+  if (epochMs > Number.MAX_SAFE_INTEGER - durationMs) return undefined;
+  return normalizeEpochMs(epochMs + durationMs);
 }

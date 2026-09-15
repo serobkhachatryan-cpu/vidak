@@ -64,6 +64,13 @@ export const documentedVideoSources: ReadonlyArray<{
 /** Chat / group records used to follow authorized and historical references, never as UI categories. */
 export const documentedAuthorizationOntologies = {
   chat: '550e8400-e29b-41d4-a716-446655440003',
+  /**
+   * The W3DS web3 adapter writes GroupManifest records on the same historic
+   * ontology id as Chat. Callers must therefore validate the full manifest
+   * shape and bound group eName; ontology identity alone is never authority.
+   */
+  groupManifestPrimary: '550e8400-e29b-41d4-a716-446655440003',
+  /** Alternate schema id used by older GroupManifest writers. */
   groupManifest: 'a8bfb7cf-3200-4b25-9ea9-ee41100f212e',
 } as const;
 

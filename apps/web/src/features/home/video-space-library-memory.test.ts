@@ -40,4 +40,28 @@ describe('video space library memory', () => {
 
     expect(memory.get('account-a', 'personal-1')).toBeUndefined();
   });
+
+  it('removes one stale card without touching another account or sibling card', () => {
+    const memory = createVideoSpaceLibraryMemory();
+    const shared = {
+      id: 'shared-stale',
+      title: 'Shared cut',
+      accessScope: 'shared' as const,
+      visibility: 'shared-with-me' as const,
+    };
+    const personal = {
+      id: 'personal-1',
+      title: 'Mine',
+      accessScope: 'personal' as const,
+      visibility: 'private' as const,
+    };
+    memory.set('account-a', [shared, personal]);
+    memory.set('account-b', [shared]);
+
+    memory.remove('account-a', shared.id);
+
+    expect(memory.get('account-a', shared.id)).toBeUndefined();
+    expect(memory.get('account-a', personal.id)).toEqual(personal);
+    expect(memory.get('account-b', shared.id)).toEqual(shared);
+  });
 });

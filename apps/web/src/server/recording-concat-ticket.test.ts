@@ -9,6 +9,7 @@ vi.mock('server-only', () => ({}));
 
 import type { W3dsDatabase } from './db/client';
 import {
+  cancelUnclaimedRecordingConcatTicket,
   claimRecordingConcatTicket,
   InMemoryRecordingConcatTicketStore,
   issueRecordingConcatTicket,
@@ -18,9 +19,14 @@ import {
   readRecordingConcatSegment,
   recordingConcatTicketActiveLeaseMs,
   renewRecordingConcatTicketLease,
+  replaceRecordingConcatInitialSegment,
   replaceRecordingConcatSegment,
   resolveInternalMediaOrigin,
 } from './recording-concat-ticket';
+import {
+  mintSharedVideoAuthorizationReceipt,
+  verifySharedVideoAuthorizationReceipt,
+} from './shared-video-authorization-receipt';
 
 const migrationsFolder = resolve(dirname(fileURLToPath(import.meta.url)), '../../drizzle');
 const viewer = { eName: '@viewer.w3id', eVaultUri: 'https://vault.example' };
@@ -36,6 +42,7 @@ beforeEach(() => {
 afterEach(async () => {
   await databaseClient?.close();
   databaseClient = undefined;
+  vi.unstubAllEnvs();
 });
 
 describe('recording concat tickets', () => {
@@ -126,6 +133,39 @@ describe('recording concat tickets', () => {
     await expect(
       readRecordingConcatSegment(opened.ticket, key, '1', 8 * 60 * 60_000 + 2, store),
     ).rejects.toBeInstanceOf(RecordingConcatTicketError);
+  });
+
+  it('cancels only a viewer-bound unopened ticket and preserves active playback', async () => {
+    const unopened = await issueRecordingConcatTicket(viewer, ['one', 'two'], 0, undefined, store);
+
+    await expect(
+      cancelUnclaimedRecordingConcatTicket(unopened.ticket, { eName: '@other.w3id' }, store, 1),
+    ).resolves.toBe(false);
+    await expect(
+      cancelUnclaimedRecordingConcatTicket(unopened.ticket, viewer, store, 1),
+    ).resolves.toBe(true);
+    await expect(
+      claimRecordingConcatTicket(unopened.ticket, viewer, loopbackOrigin, 2, store),
+    ).rejects.toBeInstanceOf(RecordingConcatTicketError);
+
+    const opened = await issueRecordingConcatTicket(viewer, ['three', 'four'], 0, undefined, store);
+    const claimed = await claimRecordingConcatTicket(
+      opened.ticket,
+      viewer,
+      loopbackOrigin,
+      1,
+      store,
+    );
+    const key = new URL(claimed.sourceUrls[0] ?? '').searchParams.get('key');
+
+    await expect(
+      cancelUnclaimedRecordingConcatTicket(opened.ticket, viewer, store, 2),
+    ).resolves.toBe(false);
+    await expect(
+      readRecordingConcatSegment(opened.ticket, key, '0', 2, store),
+    ).resolves.toMatchObject({
+      streamId: 'three',
+    });
   });
 
   it('does not consume a ticket when the configured internal origin is unsafe', async () => {
@@ -236,6 +276,64 @@ describe('recording concat tickets', () => {
     });
   });
 
+  it('persists a fresh receipt with an already-authorized source-zero renewal', async () => {
+    vi.stubEnv('W3DS_AUTH_JWT_SECRET', '12345678901234567890123456789012');
+    const oldReceipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'old-first',
+    });
+    const renewedReceipt = mintSharedVideoAuthorizationReceipt({
+      viewerEName: viewer.eName,
+      streamId: 'renewed-first',
+    });
+    const issued = await issueRecordingConcatTicket(
+      viewer,
+      ['old-first', 'second'],
+      0,
+      undefined,
+      store,
+      { initialAuthorizationReceipt: oldReceipt },
+    );
+    const claimed = await claimRecordingConcatTicket(
+      issued.ticket,
+      viewer,
+      loopbackOrigin,
+      1,
+      store,
+    );
+    const key = new URL(claimed.sourceUrls[0] ?? '').searchParams.get('key');
+
+    await replaceRecordingConcatInitialSegment(
+      issued.ticket,
+      key,
+      'renewed-first',
+      renewedReceipt,
+      2,
+      store,
+    );
+
+    const renewed = await readRecordingConcatSegment(issued.ticket, key, '0', 3, store);
+    expect(renewed).toMatchObject({
+      viewer,
+      streamId: 'renewed-first',
+      initialAuthorizationReceipt: renewedReceipt,
+    });
+    expect(
+      verifySharedVideoAuthorizationReceipt({
+        receipt: renewed.initialAuthorizationReceipt,
+        viewerEName: viewer.eName,
+        streamId: 'renewed-first',
+      }),
+    ).toBe(true);
+    expect(
+      verifySharedVideoAuthorizationReceipt({
+        receipt: renewed.initialAuthorizationReceipt,
+        viewerEName: viewer.eName,
+        streamId: 'old-first',
+      }),
+    ).toBe(false);
+  });
+
   it('renews a live lease without shortening the playback lifetime', async () => {
     const issued = await issueRecordingConcatTicket(viewer, ['one', 'two'], 0, undefined, store);
     const claimed = await claimRecordingConcatTicket(
@@ -321,14 +419,79 @@ describe('recording concat tickets', () => {
       streamId: 'sealed-stream-two',
       correlationId: 'recording-correlation-2',
     });
+    const renewedInitialReceipt = 'svr1.opaque-renewed-initial-receipt.signature';
+    await replaceRecordingConcatInitialSegment(
+      issued.ticket,
+      key,
+      'sealed-stream-one-renewed',
+      renewedInitialReceipt,
+      1_003,
+      issuingReplica,
+    );
     await expect(
-      claimRecordingConcatTicket(issued.ticket, viewer, loopbackOrigin, 1_003, issuingReplica),
+      readRecordingConcatSegment(issued.ticket, key, '0', 1_004, playbackReplica),
+    ).resolves.toEqual({
+      viewer,
+      streamId: 'sealed-stream-one-renewed',
+      correlationId: 'recording-correlation-2',
+      initialAuthorizationReceipt: renewedInitialReceipt,
+    });
+    await expect(
+      claimRecordingConcatTicket(issued.ticket, viewer, loopbackOrigin, 1_005, issuingReplica),
     ).rejects.toThrow('already opening');
 
     await claimed.release();
     await expect(
-      readRecordingConcatSegment(issued.ticket, key, '0', 1_004, playbackReplica),
+      readRecordingConcatSegment(issued.ticket, key, '0', 1_006, playbackReplica),
     ).rejects.toBeInstanceOf(RecordingConcatTicketError);
+  });
+
+  it('uses the durable claimed fence when cancelling across PostgreSQL replicas', async () => {
+    databaseClient = new PGlite();
+    const database = drizzle(databaseClient) as unknown as W3dsDatabase;
+    await migrate(database, { migrationsFolder });
+    const encryptionKey = Buffer.alloc(32, 12);
+    const issuingReplica = new PostgresRecordingConcatTicketStore(database, encryptionKey);
+    const playbackReplica = new PostgresRecordingConcatTicketStore(database, encryptionKey);
+
+    const unopened = await issueRecordingConcatTicket(
+      viewer,
+      ['unopened-one', 'unopened-two'],
+      0,
+      undefined,
+      issuingReplica,
+    );
+    await expect(
+      cancelUnclaimedRecordingConcatTicket(unopened.ticket, viewer, playbackReplica, 1),
+    ).resolves.toBe(true);
+    await expect(
+      claimRecordingConcatTicket(unopened.ticket, viewer, loopbackOrigin, 2, issuingReplica),
+    ).rejects.toBeInstanceOf(RecordingConcatTicketError);
+
+    const opened = await issueRecordingConcatTicket(
+      viewer,
+      ['opened-one', 'opened-two'],
+      0,
+      undefined,
+      issuingReplica,
+    );
+    const claimed = await claimRecordingConcatTicket(
+      opened.ticket,
+      viewer,
+      loopbackOrigin,
+      1,
+      playbackReplica,
+    );
+    const key = new URL(claimed.sourceUrls[0] ?? '').searchParams.get('key');
+
+    await expect(
+      cancelUnclaimedRecordingConcatTicket(opened.ticket, viewer, issuingReplica, 2),
+    ).resolves.toBe(false);
+    await expect(
+      readRecordingConcatSegment(opened.ticket, key, '0', 2, issuingReplica),
+    ).resolves.toMatchObject({
+      streamId: 'opened-one',
+    });
   });
 
   it('recovers admission slots after a crashed replica lease expires', async () => {

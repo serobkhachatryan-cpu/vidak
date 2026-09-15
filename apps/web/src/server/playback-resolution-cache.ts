@@ -6,7 +6,10 @@ import { and, eq, lte } from 'drizzle-orm';
 
 import { getPlaybackW3dsDatabase, type W3dsDatabase } from './db/client';
 import { playbackResolutionCache } from './db/schema';
-import { parseSafePrivateMediaUpstreamUrl } from './private-media-upstream';
+import {
+  parseSafePrivateMediaUpstreamUrl,
+  resolvePrivateMediaUrlCacheExpiry,
+} from './private-media-upstream';
 import {
   sharedVideoAuthorizationReceiptTtlMs,
   verifySharedVideoAuthorizationReceipt,
@@ -111,15 +114,20 @@ export class PostgresPlaybackResolutionCache implements PlaybackResolutionCache 
 
   async put(input: PutPlaybackResolutionCacheInput): Promise<boolean> {
     const authorized = this.authorize(input);
-    const mediaUrl = normalizeSafeMediaUrl(input.mediaUrl);
-    const ttlMs = normalizeTtl(input.ttlMs);
-    if (!authorized || !mediaUrl || ttlMs === undefined || !canAddTtl(authorized.now, ttlMs)) {
+    const cacheEntry = authorized
+      ? durableCacheEntry(input.mediaUrl, authorized.now, input.ttlMs)
+      : undefined;
+    if (!authorized || !cacheEntry) {
       return false;
     }
 
     const now = new Date(authorized.now);
-    const expiresAt = new Date(authorized.now + ttlMs);
-    const encryptedPayload = encryptPayload(mediaUrl, authorized.receiptHash, this.encryptionKey);
+    const expiresAt = new Date(authorized.now + cacheEntry.ttlMs);
+    const encryptedPayload = encryptPayload(
+      cacheEntry.mediaUrl,
+      authorized.receiptHash,
+      this.encryptionKey,
+    );
     try {
       await this.db.transaction(async (tx) => {
         // Opportunistic bounded cleanup keeps this ephemeral table from
@@ -254,17 +262,22 @@ export class InMemoryPlaybackResolutionCache implements PlaybackResolutionCache 
 
   async put(input: PutPlaybackResolutionCacheInput): Promise<boolean> {
     const authorized = this.authorize(input);
-    const mediaUrl = normalizeSafeMediaUrl(input.mediaUrl);
-    const ttlMs = normalizeTtl(input.ttlMs);
-    if (!authorized || !mediaUrl || ttlMs === undefined || !canAddTtl(authorized.now, ttlMs)) {
+    const cacheEntry = authorized
+      ? durableCacheEntry(input.mediaUrl, authorized.now, input.ttlMs)
+      : undefined;
+    if (!authorized || !cacheEntry) {
       return false;
     }
     this.pruneExpired(authorized.now);
-    const encryptedPayload = encryptPayload(mediaUrl, authorized.receiptHash, this.encryptionKey);
+    const encryptedPayload = encryptPayload(
+      cacheEntry.mediaUrl,
+      authorized.receiptHash,
+      this.encryptionKey,
+    );
     const existing = this.entries.get(authorized.receiptHash);
     this.entries.set(authorized.receiptHash, {
       encryptedPayload,
-      expiresAt: authorized.now + ttlMs,
+      expiresAt: authorized.now + cacheEntry.ttlMs,
       createdAt: existing?.createdAt ?? authorized.now,
       updatedAt: authorized.now,
     });
@@ -482,6 +495,25 @@ function normalizeTtl(value: number | undefined): number | undefined {
   if (value === undefined) return maxPlaybackResolutionCacheTtlMs;
   if (!Number.isFinite(value) || value <= 0) return undefined;
   return Math.min(maxPlaybackResolutionCacheTtlMs, Math.floor(value));
+}
+
+/**
+ * A receipt proves the caller and stream, but it says nothing about how long
+ * the eVault's object-storage redirect remains usable. This table is read on
+ * other replicas, so retain only redirects whose provider exposes an explicit
+ * expiration; unknown URLs may use the short in-process range burst instead.
+ */
+function durableCacheEntry(
+  value: string,
+  now: number,
+  callerTtlMs: number | undefined,
+): { mediaUrl: string; ttlMs: number } | undefined {
+  const mediaUrl = normalizeSafeMediaUrl(value);
+  const maxTtlMs = normalizeTtl(callerTtlMs);
+  if (!mediaUrl || maxTtlMs === undefined || !canAddTtl(now, maxTtlMs)) return undefined;
+  const expiry = resolvePrivateMediaUrlCacheExpiry(mediaUrl, { now, maxTtlMs });
+  if (expiry?.kind !== 'explicit' || !canAddTtl(now, expiry.ttlMs)) return undefined;
+  return { mediaUrl, ttlMs: expiry.ttlMs };
 }
 
 function canAddTtl(now: number, ttlMs: number): boolean {

@@ -6,6 +6,8 @@ const libraryMemoryLifetimeMs = 2 * 60 * 1_000;
 type LibraryMemory = {
   get(userId: string, itemId: string): VideoSpaceLibraryItem | undefined;
   set(userId: string, items: readonly VideoSpaceLibraryItem[]): void;
+  /** Removes only one known stale card for the current signed-in account. */
+  remove(userId: string, itemId: string): void;
 };
 
 /**
@@ -26,6 +28,17 @@ export function createVideoSpaceLibraryMemory(options?: { now?: () => number }):
     },
     set(userId, items) {
       cache.set(userId, items.map(cloneItem));
+    },
+    remove(userId, itemId) {
+      const items = cache.get(userId);
+      if (!items) return;
+      const retained = items.filter((item) => item.id !== itemId);
+      if (retained.length === items.length) return;
+      if (retained.length === 0) {
+        cache.clear(userId);
+        return;
+      }
+      cache.set(userId, retained.map(cloneItem));
     },
   };
 }

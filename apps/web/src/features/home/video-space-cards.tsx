@@ -5,7 +5,9 @@ import { Button, VideoSpacePoster } from '@w3ds/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef } from 'react';
+import { preloadContinuousRecordingTicket } from '../watch/recording-ticket-preload';
 import {
+  cancelCancellableSharedVideoAuthorizationHoverWork,
   scheduleSharedVideoAuthorizationWarmup,
   warmSharedVideoAuthorization,
 } from './shared-video-authorization-warmup';
@@ -105,27 +107,51 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   const visibilityLabel = videoSpaceVisibilityLabels[video.visibility];
   const watchHref = `/watch/space/${encodeURIComponent(video.id)}`;
   const canPlay = canPlayLibraryVideo(video);
+  const streamIds = video.streamIds ?? [];
+  const streamId = streamIds[0];
+  const isSharedContinuousRecording = video.accessScope === 'shared' && streamIds.length > 1;
   const cancelSharedAuthorizationWarmup = useCallback(() => {
     cancelScheduledAuthorization.current?.();
     cancelScheduledAuthorization.current = undefined;
   }, []);
+  const preloadContinuousTicket = useCallback(() => {
+    cancelSharedAuthorizationWarmup();
+    if (!isSharedContinuousRecording) return;
+    // A hover from another card is speculative work with a distinct server
+    // pending key. Stop it before the selected recording performs the one
+    // real source-zero ticket preflight.
+    cancelCancellableSharedVideoAuthorizationHoverWork();
+    // A long shared recording has a single source-zero handoff: start the
+    // actual opaque ticket only for a confirmed in-app navigation. The Watch
+    // page joins this promise instead of issuing a second authorization path.
+    preloadContinuousRecordingTicket(streamIds);
+  }, [cancelSharedAuthorizationWarmup, isSharedContinuousRecording, streamIds]);
   const warmSharedAuthorization = useCallback(() => {
     cancelSharedAuthorizationWarmup();
-    const streamId = video.streamIds?.[0];
-    if (video.accessScope !== 'shared' || !streamId) return;
+    if (isSharedContinuousRecording || video.accessScope !== 'shared' || !streamId) return;
     // Pointer-down/click remains the immediate, authoritative warmup path.
     warmSharedVideoAuthorization(`/api/evault/videos/${encodeURIComponent(streamId)}/authorize`);
-  }, [cancelSharedAuthorizationWarmup, video.accessScope, video.streamIds]);
+  }, [cancelSharedAuthorizationWarmup, isSharedContinuousRecording, streamId, video.accessScope]);
   const scheduleSharedAuthorizationWarmup = useCallback(() => {
-    const streamId = video.streamIds?.[0];
-    if (video.accessScope !== 'shared' || !streamId) return;
+    if (isSharedContinuousRecording || video.accessScope !== 'shared' || !streamId) return;
     cancelSharedAuthorizationWarmup();
     // A short dwell offers a likely Watch click a head start without starting
     // authorization for every visible card or building a hover-request burst.
     cancelScheduledAuthorization.current = scheduleSharedVideoAuthorizationWarmup(
       `/api/evault/videos/${encodeURIComponent(streamId)}/authorize`,
     );
-  }, [cancelSharedAuthorizationWarmup, video.accessScope, video.streamIds]);
+  }, [cancelSharedAuthorizationWarmup, isSharedContinuousRecording, streamId, video.accessScope]);
+  const prepareButtonWatch = useCallback(() => {
+    if (isSharedContinuousRecording) preloadContinuousTicket();
+    else warmSharedAuthorization();
+    router.push(watchHref);
+  }, [
+    isSharedContinuousRecording,
+    preloadContinuousTicket,
+    router,
+    warmSharedAuthorization,
+    watchHref,
+  ]);
   useEffect(
     () => () => {
       cancelSharedAuthorizationWarmup();
@@ -156,12 +182,23 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
           prefetch={false}
           aria-label={`Watch ${video.title}`}
           className="block"
-          onPointerEnter={scheduleSharedAuthorizationWarmup}
+          onPointerEnter={
+            isSharedContinuousRecording ? undefined : scheduleSharedAuthorizationWarmup
+          }
           onPointerLeave={cancelSharedAuthorizationWarmup}
-          onFocus={scheduleSharedAuthorizationWarmup}
+          onFocus={isSharedContinuousRecording ? undefined : scheduleSharedAuthorizationWarmup}
           onBlur={cancelSharedAuthorizationWarmup}
-          onPointerDown={warmSharedAuthorization}
-          onClick={warmSharedAuthorization}
+          onPointerDown={
+            isSharedContinuousRecording ? cancelSharedAuthorizationWarmup : warmSharedAuthorization
+          }
+          {...(isSharedContinuousRecording
+            ? {
+                // Next only invokes this for a real same-document navigation.
+                // New tabs and modified clicks have no in-memory handoff to
+                // join, so they mint their own single-use ticket.
+                onNavigate: preloadContinuousTicket,
+              }
+            : { onClick: warmSharedAuthorization })}
         >
           {poster}
         </Link>
@@ -176,15 +213,18 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
         {canPlay ? (
           <Button
             size="sm"
-            onPointerEnter={scheduleSharedAuthorizationWarmup}
+            onPointerEnter={
+              isSharedContinuousRecording ? undefined : scheduleSharedAuthorizationWarmup
+            }
             onPointerLeave={cancelSharedAuthorizationWarmup}
-            onFocus={scheduleSharedAuthorizationWarmup}
+            onFocus={isSharedContinuousRecording ? undefined : scheduleSharedAuthorizationWarmup}
             onBlur={cancelSharedAuthorizationWarmup}
-            onPointerDown={warmSharedAuthorization}
-            onClick={() => {
-              warmSharedAuthorization();
-              router.push(watchHref);
-            }}
+            onPointerDown={
+              isSharedContinuousRecording
+                ? cancelSharedAuthorizationWarmup
+                : warmSharedAuthorization
+            }
+            onClick={prepareButtonWatch}
           >
             Watch video
           </Button>

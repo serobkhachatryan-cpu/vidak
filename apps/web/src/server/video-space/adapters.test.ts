@@ -145,6 +145,84 @@ describe('video space adapters', () => {
     ]);
   });
 
+  it('carries a verified current GroupManifest id only through shared group records', () => {
+    const groupEName = '@group.w3id';
+    const sourceGroupManifestId = 'current-group-manifest';
+    const calls = discoverCallRecordingVideos({
+      viewerEName: viewer,
+      sourceEName: groupEName,
+      sourceChatKind: 'group',
+      sourceGroupManifestId,
+      referenced: new Set(),
+      calls: [
+        {
+          id: 'group-call',
+          ontology: 'e815ba40-ef85-4a2b-b6cf-e05a86d4afbd',
+          parsed: {
+            participants: [viewer, owner],
+            chatId: 'group-chat',
+            recording: { mediaIsVideo: true, mediaUri: fileUri, recordingVault: owner },
+          },
+        },
+      ],
+    });
+    const messages = discoverVideoMessageVideos(
+      [
+        {
+          id: 'group-message',
+          ontology: '550e8400-e29b-41d4-a716-446655440004',
+          parsed: {
+            type: 'video',
+            fileId: fileUri,
+            senderEName: owner,
+          },
+        },
+      ],
+      new Set(),
+      viewer,
+      groupEName,
+      'group-chat',
+      undefined,
+      undefined,
+      sourceGroupManifestId,
+    );
+
+    expect(calls).toEqual([
+      expect.objectContaining({
+        sourceChatKind: 'group',
+        sourceGroupManifestId,
+      }),
+    ]);
+    expect(messages).toEqual([
+      expect.objectContaining({
+        sourceChatKind: 'group',
+        sourceGroupManifestId,
+      }),
+    ]);
+
+    const personalMessage = discoverVideoMessageVideos(
+      [
+        {
+          id: 'personal-message',
+          ontology: '550e8400-e29b-41d4-a716-446655440004',
+          parsed: {
+            type: 'video',
+            fileId: 'w3ds://file?id=@viewer.w3id/personal-clip',
+            senderEName: viewer,
+          },
+        },
+      ],
+      new Set(),
+      viewer,
+      groupEName,
+      'group-chat',
+      undefined,
+      undefined,
+      sourceGroupManifestId,
+    );
+    expect(personalMessage[0]).not.toHaveProperty('sourceGroupManifestId');
+  });
+
   it('prefers the Messages-by-Chat context over a conflicting legacy payload chat id', () => {
     expect(
       discoverVideoMessageVideos(
@@ -274,6 +352,66 @@ describe('video space adapters', () => {
       }),
     ]);
     expect(referenced.has('w3ds://file?id=@friend.w3id/canonical-clip')).toBe(false);
+  });
+
+  it('keeps a viewer-owned File reference when the matching Message was discovered first', () => {
+    const referenced = new Set<string>();
+    const messages = discoverVideoMessageVideos(
+      [
+        {
+          id: 'message-before-reference',
+          ontology: '550e8400-e29b-41d4-a716-446655440004',
+          parsed: {
+            type: 'video',
+            chatId: 'direct-chat',
+            fileId: fileUri,
+            file: { filename: 'Shared clip.mp4' },
+            senderEName: owner,
+          },
+        },
+      ],
+      referenced,
+      viewer,
+      owner,
+      'direct-chat',
+    );
+    expect(referenced.has(fileUri)).toBe(true);
+
+    const localReference = discoverFileRecordVideos(
+      viewer,
+      [
+        {
+          id: 'local-reference-after-message',
+          ontology: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          parsed: {
+            isReference: true,
+            canonicalOwnerEName: owner,
+            canonicalFileId: 'clip-1',
+          },
+        },
+      ],
+      referenced,
+      viewer,
+    );
+
+    expect(localReference).toEqual([
+      expect.objectContaining({
+        accessScope: 'shared',
+        accessBasis: 'reference',
+        sourceSpaceKey: owner,
+        sourceReferenceId: 'local-reference-after-message',
+        sourceReferenceFileId: 'clip-1',
+      }),
+    ]);
+    expect(dedupeDiscoveredVideos([...messages, ...localReference])).toEqual([
+      expect.objectContaining({
+        key: `message:message-before-reference:${fileUri}`,
+        accessBasis: 'reference',
+        sourceSpaceKey: owner,
+        sourceReferenceId: 'local-reference-after-message',
+        sourceReferenceFileId: 'clip-1',
+      }),
+    ]);
   });
 
   it('keeps a CallSession on its resolved canonical vault when media lives elsewhere', () => {
@@ -427,6 +565,152 @@ describe('video space adapters', () => {
         sourceRecordingVault: '@friend.w3id',
         sourceChatKind: 'direct',
       },
+    ]);
+  });
+
+  it('promotes a matching viewer-vault File reference over a legacy direct recording proof', () => {
+    const directRecording: DiscoveredVideoRecord = {
+      key: 'call:direct-recording',
+      fileUris: [fileUri],
+      kind: 'call-recording',
+      title: 'Client call',
+      accessScope: 'shared',
+      sourceId: 'call-recording',
+      sourceSpaceKey: owner,
+      sourceChatId: 'direct-chat',
+      sourceChatKind: 'direct',
+      accessBasis: 'history',
+    };
+    const viewerReference: DiscoveredVideoRecord = {
+      key: 'file:@viewer.w3id:local-reference',
+      fileUris: [fileUri],
+      kind: 'file',
+      title: 'Shared video',
+      accessScope: 'shared',
+      sourceId: 'file-record',
+      sourceSpaceKey: owner,
+      sourceReferenceId: 'local-reference',
+      sourceReferenceFileId: 'clip-1',
+      accessBasis: 'reference',
+    };
+
+    expect(dedupeDiscoveredVideos([viewerReference, directRecording])).toEqual([
+      {
+        ...directRecording,
+        sourceSpaceKey: owner,
+        sourceReferenceId: 'local-reference',
+        sourceReferenceFileId: 'clip-1',
+        accessBasis: 'reference',
+      },
+    ]);
+  });
+
+  it('does not promote a local File reference over a known group recording', () => {
+    const groupRecording: DiscoveredVideoRecord = {
+      key: 'call:group-recording',
+      fileUris: [fileUri],
+      kind: 'call-recording',
+      title: 'Group call',
+      accessScope: 'shared',
+      sourceId: 'call-recording',
+      sourceSpaceKey: owner,
+      sourceChatId: 'group-chat',
+      sourceChatKind: 'group',
+      accessBasis: 'history',
+    };
+    const viewerReference: DiscoveredVideoRecord = {
+      key: 'file:@viewer.w3id:group-reference',
+      fileUris: [fileUri],
+      kind: 'file',
+      title: 'Shared video',
+      accessScope: 'shared',
+      sourceId: 'file-record',
+      sourceSpaceKey: owner,
+      sourceReferenceId: 'group-reference',
+      sourceReferenceFileId: 'clip-1',
+      accessBasis: 'reference',
+    };
+
+    expect(dedupeDiscoveredVideos([viewerReference, groupRecording])).toEqual([groupRecording]);
+  });
+
+  it('never transfers a GroupManifest pointer between different group bindings', () => {
+    const firstGroup: DiscoveredVideoRecord = {
+      key: 'call:first-group',
+      fileUris: [fileUri],
+      kind: 'call-recording',
+      title: 'First group call',
+      accessScope: 'shared',
+      sourceId: 'call-recording',
+      sourceSpaceKey: '@first-group.w3id',
+      sourceChatId: 'group-chat',
+      sourceChatKind: 'group',
+      sourceGroupManifestId: 'first-manifest',
+      accessBasis: 'history',
+    };
+    const secondGroup: DiscoveredVideoRecord = {
+      ...firstGroup,
+      key: 'call:second-group',
+      title: 'Second group call',
+      sourceSpaceKey: '@second-group.w3id',
+      sourceGroupManifestId: 'second-manifest',
+    };
+
+    expect(dedupeDiscoveredVideos([firstGroup, secondGroup])).toEqual([
+      expect.not.objectContaining({ sourceGroupManifestId: expect.any(String) }),
+    ]);
+  });
+
+  it('retains the latest compatible GroupManifest pointer for the same group', () => {
+    const stale: DiscoveredVideoRecord = {
+      key: 'call:group-recording',
+      fileUris: [fileUri],
+      kind: 'call-recording',
+      title: 'Group recording',
+      accessScope: 'shared',
+      sourceId: 'call-recording',
+      sourceSpaceKey: '@group.w3id',
+      sourceChatId: 'group-chat',
+      sourceChatKind: 'group',
+      sourceGroupManifestId: 'stale-manifest',
+      accessBasis: 'history',
+    };
+    const current: DiscoveredVideoRecord = {
+      ...stale,
+      sourceGroupManifestId: 'current-manifest',
+    };
+
+    expect(dedupeDiscoveredVideos([stale, current])).toEqual([current]);
+  });
+
+  it('does not promote a malformed local reference with a mismatched canonical file id', () => {
+    const directRecording: DiscoveredVideoRecord = {
+      key: 'call:direct-recording',
+      fileUris: [fileUri],
+      kind: 'call-recording',
+      title: 'Client call',
+      accessScope: 'shared',
+      sourceId: 'call-recording',
+      sourceSpaceKey: owner,
+      sourceChatId: 'direct-chat',
+      sourceChatKind: 'direct',
+      accessBasis: 'history',
+    };
+    const malformedReference: DiscoveredVideoRecord = {
+      key: 'file:@viewer.w3id:bad-reference',
+      fileUris: [fileUri],
+      kind: 'file',
+      title: 'Shared video',
+      accessScope: 'shared',
+      sourceId: 'file-record',
+      sourceSpaceKey: owner,
+      sourceReferenceId: 'bad-reference',
+      sourceReferenceFileId: 'a-different-file',
+      accessBasis: 'reference',
+    };
+
+    expect(dedupeDiscoveredVideos([malformedReference, directRecording])).toEqual([
+      directRecording,
     ]);
   });
 

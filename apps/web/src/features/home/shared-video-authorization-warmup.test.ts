@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  cancelCancellableSharedVideoAuthorizationHoverWork,
   resetSharedVideoAuthorizationWarmupsForTests,
   scheduleSharedVideoAuthorizationWarmup,
   warmSharedVideoAuthorization,
@@ -155,6 +156,37 @@ describe('shared video authorization warmup', () => {
       '/clicked-after-hover?priority=warmup',
       '/clicked-after-hover',
     ]);
+  });
+
+  it('cancels all speculative hover work before a continuous recording opens', async () => {
+    vi.useFakeTimers();
+    let activeHoverSignal: AbortSignal | undefined;
+    const fetcher = vi.fn((url: string, options?: RequestInit) => {
+      if (url === '/active-hover?priority=warmup') {
+        activeHoverSignal = options?.signal ?? undefined;
+        return new Promise<Response>((_resolve, reject) => {
+          activeHoverSignal?.addEventListener(
+            'abort',
+            () => reject(new DOMException('Aborted', 'AbortError')),
+            { once: true },
+          );
+        });
+      }
+      return Promise.resolve(new Response(null, { status: 204 }));
+    });
+    vi.stubGlobal('fetch', fetcher);
+
+    scheduleSharedVideoAuthorizationWarmup('/active-hover');
+    await vi.advanceTimersByTimeAsync(400);
+    scheduleSharedVideoAuthorizationWarmup('/queued-hover');
+    await vi.advanceTimersByTimeAsync(400);
+    scheduleSharedVideoAuthorizationWarmup('/scheduled-hover');
+
+    cancelCancellableSharedVideoAuthorizationHoverWork();
+    expect(activeHoverSignal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual(['/active-hover?priority=warmup']);
   });
 
   it('rewarms before the server-side shared-access proof expires', async () => {

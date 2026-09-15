@@ -42,7 +42,8 @@ export type InventoryTaskKind =
   | 'direct-history'
   | 'direct-calls'
   | 'author-messages'
-  | 'resolve-media';
+  | 'resolve-media'
+  | 'prewarm-call-media';
 
 export interface PersistedInventoryTask {
   id: string;
@@ -102,6 +103,18 @@ export interface InventoryJobStore {
   ): Promise<boolean>;
   loadOpenTasks(jobId: string): Promise<PersistedInventoryTask[]>;
   saveTask(task: PersistedInventoryTask): Promise<void>;
+  /**
+   * Reconciles the durable pending/in-progress task rows against one in-memory
+   * checkpoint. `previous` is the open-task snapshot loaded before the wave;
+   * unchanged rows keep their database identity and timestamps instead of
+   * being deleted and reinserted on every checkpoint.
+   */
+  syncOpenTasks(
+    jobId: string,
+    previous: PersistedInventoryTask[],
+    next: PersistedInventoryTask[],
+  ): Promise<void>;
+  /** Explicit reset used when a job is restarted; unlike sync, removes all open rows. */
   replaceOpenTasks(jobId: string, tasks: PersistedInventoryTask[]): Promise<void>;
   recoverStaleLocks(now: number, staleMs?: number): Promise<void>;
   vaultNotBefore(vaultKey: string, now: number): Promise<number>;
@@ -114,6 +127,10 @@ export interface InventoryJobStore {
 
 const drainLockTtlMs = 45_000;
 const maxPersistedLibraryMetadata = 128;
+// Large shared libraries may contain hundreds of retained cards. Persist them
+// in bounded multi-row statements rather than one round trip per unchanged
+// card on every resumable inventory wave.
+const persistedInventoryItemBatchSize = 250;
 
 export function inventoryDrainGateKey(jobId: string): string {
   return `inventory-drain:${jobId}`;
@@ -190,6 +207,38 @@ function cloneTask(task: PersistedInventoryTask): PersistedInventoryTask {
   return { ...task, payload: { ...task.payload } };
 }
 
+/**
+ * This deliberately compares the fields that are written to
+ * video_space_inventory_tasks, but not the caller-generated id. A checkpoint
+ * creates a fresh in-memory task object for every queued item, while Postgres
+ * preserves the old id on the `(job_id, task_key)` conflict target.
+ */
+function samePersistedOpenTask(
+  current: PersistedInventoryTask,
+  next: PersistedInventoryTask,
+): boolean {
+  return (
+    current.jobId === next.jobId &&
+    current.taskKey === next.taskKey &&
+    current.kind === next.kind &&
+    current.vaultKey === next.vaultKey &&
+    current.ontologyId === next.ontologyId &&
+    current.cursorAfter === next.cursorAfter &&
+    current.attempts === next.attempts &&
+    current.notBefore === next.notBefore &&
+    current.status === next.status &&
+    current.priority === next.priority &&
+    current.lockedUntil === next.lockedUntil &&
+    JSON.stringify(toPostgresJson(current.payload)) === JSON.stringify(toPostgresJson(next.payload))
+  );
+}
+
+function taskMapByKey(tasks: PersistedInventoryTask[]): Map<string, PersistedInventoryTask> {
+  // Queue deduplication normally makes task keys unique. Retain the existing
+  // replaceOpenTasks behavior for malformed input as well: the last copy wins.
+  return new Map(tasks.map((task) => [task.taskKey, task]));
+}
+
 export function createMemoryInventoryJobStore(): InventoryJobStore {
   const jobs = new Map<string, InventoryJobRecord>();
   const tasks = new Map<string, PersistedInventoryTask[]>();
@@ -258,6 +307,43 @@ export function createMemoryInventoryJobStore(): InventoryJobStore {
       const index = list.findIndex((item) => item.taskKey === task.taskKey);
       if (index === -1) list.push(cloneTask(task));
       else list[index] = cloneTask(task);
+    },
+    async syncOpenTasks(jobId, previous, next) {
+      const previousByKey = taskMapByKey(previous);
+      const nextByKey = taskMapByKey(next);
+      const list = tasks.get(jobId) ?? [];
+      const currentByKey = taskMapByKey(
+        list.filter((task) => task.status === 'pending' || task.status === 'in_progress'),
+      );
+      // The next checkpoint is the complete desired open set. Retain only
+      // terminal rows here; every pending/in-progress row is re-added below
+      // exactly once. The previous predicate accidentally retained pending
+      // rows as well, duplicating an unchanged task in the in-memory store.
+      const retained = list.filter(
+        (task) => task.status !== 'pending' && task.status !== 'in_progress',
+      );
+      for (const nextTask of nextByKey.values()) {
+        const previousTask = previousByKey.get(nextTask.taskKey);
+        const currentTask = currentByKey.get(nextTask.taskKey);
+        if (
+          previousTask &&
+          currentTask &&
+          samePersistedOpenTask(previousTask, nextTask) &&
+          samePersistedOpenTask(currentTask, nextTask)
+        ) {
+          retained.push(cloneTask(currentTask));
+          continue;
+        }
+        retained.push(
+          cloneTask({
+            ...nextTask,
+            // Match Postgres's conflict update: a changed task preserves its
+            // durable id, while a truly new task receives the caller's id.
+            id: currentTask?.id ?? nextTask.id,
+          }),
+        );
+      }
+      tasks.set(jobId, retained);
     },
     async replaceOpenTasks(jobId, next) {
       tasks.set(jobId, next.map(cloneTask));
@@ -388,6 +474,9 @@ async function upsertInventoryTask(
     .onConflictDoUpdate({
       target: [videoSpaceInventoryTasks.jobId, videoSpaceInventoryTasks.taskKey],
       set: {
+        kind: task.kind,
+        vaultKey: task.vaultKey,
+        ontologyId: task.ontologyId,
         cursorAfter: task.cursorAfter,
         attempts: task.attempts,
         notBefore: new Date(task.notBefore),
@@ -549,20 +638,30 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
           ownerEVaultUri: job.ownerEVaultUri,
         })
         .where(eq(videoSpaceInventoryJobs.id, job.id));
-      for (const item of job.items) {
-        const card = toPostgresJson(item as unknown as Record<string, unknown>);
-        await db()
-          .insert(videoSpaceInventoryItems)
-          .values({
+      const cards = new Map(
+        job.items.map((item) => [
+          item.id,
+          {
             id: `${job.id}:${item.id}`,
             jobId: job.id,
             itemKey: item.id,
-            card,
+            card: toPostgresJson(item as unknown as Record<string, unknown>),
             createdAt: now,
-          })
+          },
+        ]),
+      );
+      const rows = [...cards.values()];
+      for (let index = 0; index < rows.length; index += persistedInventoryItemBatchSize) {
+        await db()
+          .insert(videoSpaceInventoryItems)
+          .values(rows.slice(index, index + persistedInventoryItemBatchSize))
           .onConflictDoUpdate({
             target: [videoSpaceInventoryItems.jobId, videoSpaceInventoryItems.itemKey],
-            set: { card },
+            set: { card: sql`excluded.card` },
+            // Postgres still checks the uniqueness constraint, but it avoids
+            // rewriting the JSONB row, its indexes, and WAL when the durable
+            // card did not change during this small inventory wave.
+            setWhere: sql`${videoSpaceInventoryItems.card} is distinct from excluded.card`,
           });
       }
       // A completed catalogue is the only safe point to reconcile cards:
@@ -624,6 +723,34 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
     },
     async saveTask(task) {
       await upsertInventoryTask(db(), task);
+    },
+    async syncOpenTasks(jobId, previous, next) {
+      const previousByKey = taskMapByKey(previous);
+      const nextByKey = taskMapByKey(next);
+      const staleKeys = [...previousByKey.keys()].filter((taskKey) => !nextByKey.has(taskKey));
+      const changed = [...nextByKey.values()].filter((nextTask) => {
+        const previousTask = previousByKey.get(nextTask.taskKey);
+        return !previousTask || !samePersistedOpenTask(previousTask, nextTask);
+      });
+      if (staleKeys.length === 0 && changed.length === 0) return;
+
+      await db().transaction(async (tx) => {
+        for (const taskKey of staleKeys) {
+          await tx
+            .delete(videoSpaceInventoryTasks)
+            .where(
+              and(
+                eq(videoSpaceInventoryTasks.jobId, jobId),
+                eq(videoSpaceInventoryTasks.taskKey, taskKey),
+                or(
+                  eq(videoSpaceInventoryTasks.status, 'pending'),
+                  eq(videoSpaceInventoryTasks.status, 'in_progress'),
+                ),
+              ),
+            );
+        }
+        for (const task of changed) await upsertInventoryTask(tx, task);
+      });
     },
     async replaceOpenTasks(jobId, next) {
       await db().transaction(async (tx) => {

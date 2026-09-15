@@ -106,6 +106,162 @@ describe('inventory coordinator', () => {
     expect(scanLibrary).not.toHaveBeenCalled();
   });
 
+  it('hides only a confirmed-quarantined shared card from a library snapshot', async () => {
+    const staleBindingHash = 'a'.repeat(43);
+    const healthyBindingHash = 'b'.repeat(43);
+    const stale = video({
+      id: 'shared-stale',
+      title: 'No longer shared',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sharedCardBindingHash: staleBindingHash,
+    });
+    const healthy = video({
+      id: 'shared-healthy',
+      title: 'Still shared',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sharedCardBindingHash: healthyBindingHash,
+    });
+    const personal = video({ id: 'personal-1', title: 'Mine' });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([stale, healthy, personal]), 'done', {
+        personalPages: 1,
+        sharedSpaces: 2,
+        failed: 0,
+      });
+      return library([stale, healthy, personal]);
+    });
+    const matching = vi.fn(
+      async (hashes: readonly string[]) =>
+        new Set(hashes.includes(staleBindingHash) ? [staleBindingHash] : []),
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      sharedCardQuarantineStore: { matching },
+      log: () => undefined,
+    });
+
+    const snapshot = await coordinator.getSnapshot({ eName: '@viewer.w3id' }, { scope: 'all' });
+
+    expect(snapshot.items.map((item) => item.id)).toEqual(['shared-healthy', 'personal-1']);
+    expect(JSON.stringify(snapshot.items)).not.toContain(staleBindingHash);
+    expect(JSON.stringify(snapshot.items)).not.toContain(healthyBindingHash);
+  });
+
+  it('does not rescan or re-expose a quarantined in-memory exact card', async () => {
+    const staleBindingHash = 'c'.repeat(43);
+    const stale = video({
+      id: 'shared-stale',
+      title: 'No longer shared',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sharedCardBindingHash: staleBindingHash,
+    });
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([stale]), 'done', {
+        personalPages: 0,
+        sharedSpaces: 1,
+        failed: 0,
+      });
+      return library([stale]);
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      sharedCardQuarantineStore: { matching: async () => new Set([staleBindingHash]) },
+      log: () => undefined,
+    });
+
+    await coordinator.getSnapshot({ eName: '@viewer.w3id' }, { scope: 'all' });
+    const item = await coordinator.getItem(
+      { eName: '@viewer.w3id' },
+      { itemId: stale.id, scope: 'all' },
+    );
+
+    expect(item).toBeUndefined();
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears a quarantine only after a fresh positive shared-source recheck', async () => {
+    const bindingHash = 'e'.repeat(43);
+    const shared = video({
+      id: 'shared-restored',
+      title: 'Restored share',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sourceSpaceKey: '@owner.w3id',
+      accessBasis: 'membership',
+      sharedCardBindingHash: bindingHash,
+    });
+    let quarantined = true;
+    const clear = vi.fn(async (hash: string) => {
+      if (hash === bindingHash) quarantined = false;
+      return true;
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({
+        scanLibrary: async (_user, options) => {
+          options.onSnapshot(library([shared]), 'done', {
+            personalPages: 0,
+            sharedSpaces: 1,
+            failed: 0,
+          });
+          return library([shared]);
+        },
+        probeSharedSpaceAccess: vi.fn().mockResolvedValue({ access: 'ok', member: true }),
+      }),
+      sharedCardQuarantineStore: {
+        matching: async (hashes) =>
+          new Set(quarantined && hashes.includes(bindingHash) ? [bindingHash] : []),
+        clear,
+      },
+      log: () => undefined,
+    });
+
+    await coordinator.getSnapshot({ eName: '@viewer.w3id' }, { scope: 'shared' });
+    await vi.waitFor(() => expect(clear).toHaveBeenCalledWith(bindingHash));
+    const restored = await coordinator.getSnapshot({ eName: '@viewer.w3id' }, { scope: 'shared' });
+    expect(restored.items.map((item) => item.id)).toEqual([shared.id]);
+  });
+
+  it('does not fall back to a source scan for a quarantined persisted exact card', async () => {
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    const job = await store.createJob({
+      ownerEName: '@viewer.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const staleBindingHash = 'd'.repeat(43);
+    const stale = video({
+      id: 'shared-stale',
+      title: 'No longer shared',
+      accessScope: 'shared',
+      visibility: 'shared-with-me',
+      sharedCardBindingHash: staleBindingHash,
+    });
+    await store.saveJob({
+      ...job,
+      status: 'complete',
+      completeness: { ...job.completeness, complete: true, retryNeeded: false },
+      ledger: { drainFinished: true, catalogueVersion: VIDEO_SPACE_CATALOGUE_VERSION },
+      items: [stale],
+    });
+    const scanLibrary = vi.fn();
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      sharedCardQuarantineStore: { matching: async () => new Set([staleBindingHash]) },
+      log: () => undefined,
+    });
+
+    const item = await coordinator.getItem(
+      { eName: '@viewer.w3id' },
+      { itemId: stale.id, scope: 'all' },
+    );
+
+    expect(item).toBeUndefined();
+    expect(scanLibrary).not.toHaveBeenCalled();
+  });
+
   it('reuses a fresh in-memory exact card without another source scan', async () => {
     const target = video({ id: 'personal-target', title: 'Personal target' });
     const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
@@ -1032,9 +1188,119 @@ describe('inventory coordinator', () => {
     ).toBe(true);
     expect(
       scanLibrary.mock.calls.some(
-        (call) => (call[1] as { maxVaultsPerWave?: number }).maxVaultsPerWave === 2,
+        (call) => (call[1] as { maxVaultsPerWave?: number }).maxVaultsPerWave === 1,
       ),
     ).toBe(true);
+  });
+
+  it('does not let repeated catalogue polls trigger a durable eVault drain', async () => {
+    const refreshing = { ...completeInventory, complete: false, retrying: 1 };
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    const scanLibrary = vi.fn(
+      async (_user: unknown, options: { drain?: boolean; onSnapshot: SnapshotHandler }) => {
+        options.onSnapshot(library([], refreshing), 'batch', {
+          personalPages: 0,
+          sharedSpaces: 0,
+          failed: 0,
+        });
+        return library([], refreshing);
+      },
+    );
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    await coordinator.getSnapshot({ eName: '@person.w3id' }, { scope: 'all' });
+    // Give any accidentally fire-and-forget work a turn. An HTTP poll only
+    // serves its snapshot; the process-level scheduler owns remote drains.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(
+      scanLibrary.mock.calls.every((call) => (call[1] as { drain?: boolean }).drain !== true),
+    ).toBe(true);
+
+    await coordinator.pumpRunning();
+    expect(
+      scanLibrary.mock.calls.some((call) => (call[1] as { drain?: boolean }).drain === true),
+    ).toBe(true);
+  });
+
+  it('runs only one durable owner job per pump wave so catalogue catch-up cannot flood eVaults', async () => {
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    await store.createJob({
+      ownerEName: '@first.w3id',
+      ownerEVaultUri: 'https://first-vault.example',
+    });
+    await store.createJob({
+      ownerEName: '@second.w3id',
+      ownerEVaultUri: 'https://second-vault.example',
+    });
+    const refreshing = { ...completeInventory, complete: false, retrying: 1 };
+    const scanLibrary = vi.fn(async (_user: unknown, options: { onSnapshot: SnapshotHandler }) => {
+      options.onSnapshot(library([], refreshing), 'batch', {
+        personalPages: 0,
+        sharedSpaces: 0,
+        failed: 0,
+      });
+      return library([], refreshing);
+    });
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    await coordinator.pumpRunning();
+
+    expect(scanLibrary).toHaveBeenCalledTimes(1);
+    expect(scanLibrary).toHaveBeenCalledWith(
+      expect.objectContaining({ eName: expect.stringMatching(/^@(first|second)\.w3id$/) }),
+      expect.objectContaining({ drain: true, maxWaves: 1, maxVaultsPerWave: 1 }),
+    );
+  });
+
+  it('uses one preemptible pump wave for queued shared recording warmups', async () => {
+    const store = createMemoryInventoryJobStore();
+    setInventoryJobStoreForTests(store);
+    const job = await store.createJob({
+      ownerEName: '@person.w3id',
+      ownerEVaultUri: 'https://vault.example',
+    });
+    await store.saveJob({
+      ...job,
+      ledger: {
+        ...job.ledger,
+        queue: [
+          {
+            type: 'prewarm-call-media',
+            attempts: 0,
+            vaultKey: '@media.w3id',
+            fileUri: 'w3ds://file?id=@media.w3id/recording-part-1',
+            recordKey: 'call:@group.w3id/recording-1',
+            streamGrant: {},
+          },
+        ],
+      },
+    });
+    const scanLibrary = vi.fn().mockResolvedValue(library([]));
+    const coordinator = createInventoryCoordinator({
+      createScanner: () => ({ scanLibrary, probeSharedSpaceAccess: vi.fn() }),
+      log: () => undefined,
+    });
+
+    await coordinator.pumpRunning();
+
+    expect(scanLibrary).toHaveBeenCalledWith(
+      { eName: '@person.w3id', eVaultUri: 'https://vault.example' },
+      expect.objectContaining({ drain: true, maxWaves: 1, maxVaultsPerWave: 1 }),
+    );
   });
 
   it('keeps progress polling active when the foreground checkpoint leaves durable work', async () => {

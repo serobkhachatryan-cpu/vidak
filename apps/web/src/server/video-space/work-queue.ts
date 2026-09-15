@@ -136,8 +136,24 @@ export async function drainFairVaultQueue<T extends DeferredWork>(
     const chosen: T[] = [];
     const deferred: T[] = [];
     let vaults = 0;
-    for (const items of readyByVault.values()) {
-      items.sort((a, b) => options.priority(a) - options.priority(b) || a.attempts - b.attempts);
+    // Priority used to be applied only after choosing eVaults in insertion
+    // order. A newly discovered File prewarm could therefore wait behind a
+    // deep-history vault even though it had a better per-item priority. Sort
+    // vault buckets by their best ready work before enforcing the wave cap.
+    const orderedVaults = [...readyByVault.entries()]
+      .map(([vault, items], insertionOrder) => {
+        items.sort((a, b) => options.priority(a) - options.priority(b) || a.attempts - b.attempts);
+        const best = items[0];
+        return best ? { vault, items, best, insertionOrder } : undefined;
+      })
+      .filter((value) => value !== undefined)
+      .sort(
+        (left, right) =>
+          options.priority(left.best) - options.priority(right.best) ||
+          left.best.attempts - right.best.attempts ||
+          left.insertionOrder - right.insertionOrder,
+      );
+    for (const { items } of orderedVaults) {
       if (vaults < maxVaults) {
         const next = items.shift();
         if (next) chosen.push(next);

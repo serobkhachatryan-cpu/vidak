@@ -652,35 +652,39 @@ command.
 
 ### Shared-call recording playback rollout
 
-Shared Meshenger recordings have a separate source-side authorization boundary.
-The browser never receives a Meshenger media URL and Vidak never copies the
-recording bytes. To avoid the legacy multi-query source scan on the first
-playback request, deploy the two ends as one release sequence:
+Shared recordings use the canonical W3DS File URI as their playback source.
+After Vidak verifies the viewer-bound stream admission, it resolves the file
+owner through the W3DS Registry and dereferences
+`GET /files/:metaEnvelopeId` against that owner's eVault with the owner
+`X-ENAME`. The browser receives neither an eVault media URL nor another
+application's credential, and Vidak does not copy the recording bytes.
+
+This is a W3DS cross-app path: deploying Vidak does **not** require a
+Meshenger peer endpoint, a cross-service shared secret, or a change to the
+application that originally wrote the file. Deploy and verify it as follows:
 
 1. Apply Vidak migrations, including the durable continuous-recording ticket
-   tables **and** the `playback_resolution_cache` table, before routing any new
-   Vidak instance. The latter is an encrypted, receipt-bound, maximum-45-second
-   handoff: it lets a player request landing on another replica reuse a just
-   completed authorization without persisting a viewer identity, stream grant,
-   media URL in plaintext, or media bytes.
-2. Deploy the Meshenger endpoint
-   `POST /api/integrations/vidak/recording-playback-grant`. It must validate the
-   dedicated HMAC request, perform only exact viewer/Chat/CallSession/File
-   checks, return a short-lived source URL only to Vidak, and reject a signed
-   empty `{}` with `400` plus `Cache-Control: no-store`.
-3. Configure the same dedicated 32+ character
-   `VIDAK_PLAYBACK_BRIDGE_SECRET` in both services and set Vidak's
-   `MESHENGER_PLAYBACK_GRANT_URL` to that exact HTTPS endpoint. Do not use a
-   W3DS session secret or a browser-visible variable for this capability.
-4. Start Vidak with the new configuration and require
-   `GET /api/health/ready` to return `200`. A configured endpoint that is
-   missing, unauthenticated, cacheable, or otherwise incompatible makes
-   readiness fail with the internal `playback_bridge` dependency rather than
-   silently falling back to the slow path.
-5. With an authorized test account, open a shared short video and a long call
+   tables, `evault_media_url_cache`, and `playback_source_refresh_epochs`, before
+   routing any new Vidak instance. The canonical eVault cache stores only an
+   encrypted redirect and a generation fence, bounded by the redirect's own
+   verified expiry. The recovery table prevents an expired redirect from being
+   revived by a late request on another replica. The older
+   `playback_resolution_cache` table may remain temporarily for rollback, but
+   it is not a live playback dependency and must not gate readiness.
+2. Start Vidak with its normal W3DS configuration and require
+   `GET /api/health/ready` to return `200`. No playback-bridge variables are
+   needed for this readiness check or for shared W3DS File playback.
+3. With an authorized test account, open a shared short video and a long call
    recording. Confirm that the first media request receives bytes, that the
    recording remains one continuous stream across every source segment, and
    that no source URL appears in browser devtools, page HTML, or logs.
+
+   The canonical `/files/:id` redirect is the first eVault operation. For an
+   interactive shared watch only, Vidak starts the owner eVault's documented
+   GraphQL File-metadata compatibility read after a short hedge if that redirect
+   has not returned. The first valid eVault result wins; this avoids waiting on
+   a slow legacy `/files` implementation while never making a Messenger or
+   peer-app request.
 
    The private proxy treats a source as started only once headers and a
    non-empty first media byte have arrived; a source that stalls after headers
@@ -688,14 +692,16 @@ playback request, deploy the two ends as one release sequence:
    refresh rather than leaving the browser on a permanently loading response.
    A continuous recording is joined through one opaque ticket and ffmpeg
    stream (up to 512 ordered source files), never a browser-visible sequence
-   of 20-minute video elements. Confirm that `ffmpeg -version` succeeds in
-   every deployed Vidak image and that the native player can seek/play through
-   at least one source boundary.
+   of 20-minute video elements. Every internal recording segment uses that same
+   canonical eVault resolver and cache; no receipt URL cache bypass is allowed.
+   Confirm that `ffmpeg -version` succeeds in every deployed Vidak image and
+   that the native player can seek/play through at least one source boundary.
 
-The endpoint is intentionally optional for a staged rollout. Leaving both
-variables absent preserves the existing exact authorization fallback; setting
-only one, or configuring an undeployed endpoint, is treated as a deployment
-failure instead of a hidden latency regression.
+`MESHENGER_PLAYBACK_GRANT_URL` and `VIDAK_PLAYBACK_BRIDGE_SECRET` are legacy
+variables and are intentionally ignored by Vidak. They are not a W3DS contract,
+are never required for cross-app File URI playback, and neither readiness nor
+the player makes a peer-service request when they are present. The canonical
+user eVault remains the sole cross-app media path.
 
 ### Environment validation
 

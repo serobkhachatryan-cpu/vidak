@@ -13,16 +13,24 @@ import {
 } from '../home/video-space-model';
 import { libraryWatchItemLookupPath } from './library-watch-item-lookup';
 import {
+  createContinuousRecordingTicket,
+  takePreloadedContinuousRecordingTicket,
+} from './recording-ticket-preload';
+import {
+  initialContinuousRecordingTicketRetryDelayMs,
   isCurrentPlaybackGeneration,
   type PlaybackFailure,
   playbackFailureForAuthorizationCode,
   sharedVideoHandoffRetryDelay,
   shouldAwaitSharedVideoHandoff,
+  shouldRetryInitialContinuousRecordingTicket,
+  shouldRetryUnstartedContinuousRecording,
   singleVideoSourceRecoveryAction,
 } from './watch-playback-recovery';
 import { WatchRecoveryActions } from './watch-recovery-actions';
 
 const playbackSpeeds = [0.5, 0.75, 1, 1.25, 1.5, 2] as const;
+const terminalAuthorizationCheckTimeoutMs = 10_000;
 
 function formatPlaybackSpeed(speed: number) {
   return `${speed}×`;
@@ -44,6 +52,15 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
   const router = useRouter();
   const user = useCurrentUser();
   const cachedItem = user ? videoSpaceLibraryMemory.get(user.id, itemId) : undefined;
+  // The card already carries a viewer-bound opaque stream grant. Reuse it to
+  // render Watch immediately, including for shared cards: blocking the route
+  // on a second catalogue lookup was adding seconds before a person could
+  // even press Play. This is deliberately not an authorization decision.
+  // The ticket/media route validates the session and sealed stream, then
+  // requires a current source proof unless it has a valid short-lived
+  // server-issued receipt. No source bytes are exposed by this cache itself,
+  // and a terminal shared denial removes the card through
+  // `onSharedAccessDenied` below.
   const [item, setItem] = useState<VideoSpaceLibraryItem | undefined>(cachedItem);
   const [status, setStatus] = useState<'loading' | 'ready' | 'missing' | 'error'>(
     cachedItem ? 'ready' : 'loading',
@@ -52,6 +69,9 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
 
   const returnToVideoSpace = () => router.push('/');
   const reportPlaybackProblem = () => router.push('/support');
+  const removeStaleSharedCard = useCallback(() => {
+    if (user) videoSpaceLibraryMemory.remove(user.id, itemId);
+  }, [itemId, user]);
   const retryOpeningVideo = () => {
     setItem(undefined);
     setStatus('loading');
@@ -65,10 +85,9 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
       setItem(cached);
       setStatus('ready');
       // Navigation from the library already has a viewer-bound opaque stream
-      // grant. Do not immediately reload the entire private catalogue just to
-      // rediscover the same card: that used to make Watch contend with the
-      // video source itself. The media route rechecks authorization before
-      // any bytes are streamed.
+      // grant. Do not put a second catalogue lookup on the Watch critical
+      // path: the ticket/media route rechecks authorization before any bytes
+      // are streamed, including for shared cards.
       return () => {
         cancelled = true;
       };
@@ -92,7 +111,7 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
         setItem(undefined);
         setStatus('missing');
       } catch {
-        if (!cancelled && !cached) setStatus('error');
+        if (!cancelled) setStatus('error');
       }
     })();
     return () => {
@@ -163,6 +182,7 @@ export function LibraryWatchPage({ itemId }: { itemId: string }) {
             video={item}
             onReturnToVideoSpace={returnToVideoSpace}
             onReportPlaybackProblem={reportPlaybackProblem}
+            onSharedAccessDenied={removeStaleSharedCard}
           />
         ) : null}
       </Page>
@@ -174,10 +194,12 @@ function LibraryWatchPlayer({
   video,
   onReturnToVideoSpace,
   onReportPlaybackProblem,
+  onSharedAccessDenied,
 }: {
   video: VideoSpaceLibraryItem;
   onReturnToVideoSpace: () => void;
   onReportPlaybackProblem: () => void;
+  onSharedAccessDenied: () => void;
 }) {
   const [playbackError, setPlaybackError] = useState<PlaybackFailure | undefined>();
   const [playbackAttempt, setPlaybackAttempt] = useState(0);
@@ -185,12 +207,16 @@ function LibraryWatchPlayer({
   const [playerLoading, setPlayerLoading] = useState(true);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [recordingPlaybackUrl, setRecordingPlaybackUrl] = useState<string | undefined>();
-  const [automaticTicketRetryUsed, setAutomaticTicketRetryUsed] = useState(false);
+  const [continuousRecordingReadyToOpen, setContinuousRecordingReadyToOpen] = useState(false);
   const [waitingForSourceHandoff, setWaitingForSourceHandoff] = useState(false);
   const player = useRef<HTMLVideoElement>(null);
   const reachedCanPlay = useRef(false);
+  const hasMeaningfulRecordingPlayback = useRef(false);
+  const automaticTicketRetryUsed = useRef(false);
   const automaticSourceRecoveryUsed = useRef(false);
   const sourceRecoveryController = useRef<AbortController | undefined>(undefined);
+  const terminalAuthorizationCheckUsed = useRef(false);
+  const terminalAuthorizationCheckController = useRef<AbortController | undefined>(undefined);
   const sourceHandoffRetryTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const sourceHandoffRetryPending = useRef(false);
   const sourceHandoffRetryAttempt = useRef(0);
@@ -281,74 +307,103 @@ function LibraryWatchPlayer({
   useEffect(() => {
     sourceRecoveryController.current?.abort();
     sourceRecoveryController.current = undefined;
+    terminalAuthorizationCheckController.current?.abort();
+    terminalAuthorizationCheckController.current = undefined;
     clearSourceHandoffRetry();
     committedVideoId.current = video.id;
     automaticSourceRecoveryUsed.current = false;
+    terminalAuthorizationCheckUsed.current = false;
     setPlaybackError(undefined);
     resetPlaybackAttempt();
     setPlayerLoading(true);
     setPlaybackSpeed(1);
-    setAutomaticTicketRetryUsed(false);
+    setContinuousRecordingReadyToOpen(false);
     setRecordingPlaybackUrl(undefined);
     reachedCanPlay.current = false;
+    hasMeaningfulRecordingPlayback.current = false;
+    automaticTicketRetryUsed.current = false;
     return () => {
       sourceRecoveryController.current?.abort();
+      terminalAuthorizationCheckController.current?.abort();
       clearSourceHandoffRetry();
     };
   }, [clearSourceHandoffRetry, video.id]);
 
   useEffect(() => {
-    setPlayerLoading(true);
+    // A continuous source is a single-use server stream. With `preload=none`,
+    // a ready ticket intentionally waits for the viewer to press Play rather
+    // than allowing the native player to consume and abandon it while paused.
+    setPlayerLoading(!isContinuousRecording || !playbackSource);
     reachedCanPlay.current = false;
-  }, [playbackSource]);
+    hasMeaningfulRecordingPlayback.current = false;
+  }, [isContinuousRecording, playbackSource]);
 
   useEffect(() => {
     if (!isContinuousRecording) {
       setRecordingPlaybackUrl(undefined);
+      setContinuousRecordingReadyToOpen(false);
       return;
     }
     if (!streamId) return;
     const controller = new AbortController();
     let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
     setRecordingPlaybackUrl(undefined);
+    setContinuousRecordingReadyToOpen(false);
     setPlayerLoading(true);
     void (async () => {
+      // A normal library click starts this exact ticket before the SPA route
+      // changes. Join it once for the initial opening; a later player retry
+      // must issue a fresh one because a concat ticket is single-claim.
+      const preloadedTicket =
+        playbackAttempt === 0 ? takePreloadedContinuousRecordingTicket(streamIds) : undefined;
       try {
-        // Create the ticket under segment zero's API subtree. Its receipt
-        // cookie is scoped to this exact stream, so a later warmup for another
-        // shared card cannot overwrite the first source's fast handoff before
-        // a long continuous recording starts.
-        const response = await fetch(
-          `/api/evault/videos/${encodeURIComponent(streamId)}/recording-ticket`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ streamIds }),
-            signal: controller.signal,
-          },
-        );
-        const body = (await response.json().catch(() => undefined)) as
-          | { playbackUrl?: unknown }
-          | undefined;
-        const playbackUrl = body?.playbackUrl;
-        if (
-          !response.ok ||
-          typeof playbackUrl !== 'string' ||
-          !playbackUrl.startsWith('/api/evault/recordings/')
-        ) {
-          throw new Error('Continuous recording ticket is unavailable.');
+        const ticket = await (preloadedTicket?.promise ??
+          createContinuousRecordingTicket(streamIds, controller.signal));
+        if (!ticket.playbackUrl) {
+          if (
+            !cancelled &&
+            shouldRetryInitialContinuousRecordingTicket({
+              isContinuousRecording,
+              errorCode: ticket.errorCode,
+              automaticTicketRetryUsed: automaticTicketRetryUsed.current,
+            })
+          ) {
+            // A failed source-zero authorization cannot have started the
+            // native recording stream, so one fresh opaque ticket is safe.
+            // Wait briefly for a just-completed eVault proof to become
+            // reusable across replicas rather than surfacing a transient
+            // source race as an immediate playback error.
+            automaticTicketRetryUsed.current = true;
+            retryTimer = setTimeout(() => {
+              if (!cancelled && committedVideoId.current === video.id) {
+                advancePlaybackAttempt();
+              }
+            }, initialContinuousRecordingTicketRetryDelayMs);
+            return;
+          }
+          if (!cancelled) showPlaybackFailure(ticket.errorCode);
+          return;
         }
-        if (!cancelled) setRecordingPlaybackUrl(playbackUrl);
-      } catch {
-        if (!cancelled && !controller.signal.aborted) {
+        if (!cancelled) {
+          setRecordingPlaybackUrl(ticket.playbackUrl);
+          // The opaque ticket is ready, but a continuous server stream must
+          // not start until the viewer explicitly presses the native Play
+          // control. That prevents a paused preload from consuming a
+          // single-claim stream before it is actually watched.
+          setContinuousRecordingReadyToOpen(true);
           setPlayerLoading(false);
-          setPlaybackError(playbackFailureForAuthorizationCode('remote_unavailable'));
         }
+      } finally {
+        // The map retains a preloaded promise just long enough for an effect
+        // replay to join it. Once this Watch attempt has adopted its result, do
+        // not let a later automatic player retry reuse a claimed ticket.
+        preloadedTicket?.release();
       }
     })();
     return () => {
       cancelled = true;
+      if (retryTimer !== undefined) clearTimeout(retryTimer);
       controller.abort();
     };
   }, [isContinuousRecording, playbackAttempt, streamId, streamIdsKey]);
@@ -372,6 +427,17 @@ function LibraryWatchPlayer({
   const changePlaybackSpeed = (speed: number) => {
     setPlaybackSpeed(speed);
     if (player.current) player.current.playbackRate = speed;
+  };
+
+  const showPlaybackFailure = (code: unknown): void => {
+    if (code === 'authorization_denied' && video.accessScope === 'shared') {
+      // The server has conclusively rejected this viewer's current share.
+      // Remove only this account's short-lived card so returning to the grid
+      // cannot immediately reopen the now-quarantined stale item.
+      onSharedAccessDenied();
+    }
+    setPlayerLoading(false);
+    setPlaybackError(playbackFailureForAuthorizationCode(code));
   };
 
   const retrySingleVideoAfterAuthorizationFailure = (): boolean => {
@@ -421,21 +487,67 @@ function LibraryWatchPlayer({
           ) {
             return;
           }
-          setPlayerLoading(false);
-          setPlaybackError(playbackFailureForAuthorizationCode(body?.error?.code));
+          showPlaybackFailure(body?.error?.code);
           return;
         }
         setPlaybackError(undefined);
         advancePlaybackAttempt();
       } catch {
         if (controller.signal.aborted || committedVideoId.current !== video.id) return;
-        setPlayerLoading(false);
-        setPlaybackError(playbackFailureForAuthorizationCode('remote_unavailable'));
+        showPlaybackFailure('remote_unavailable');
       } finally {
         // A change of item or an aborted request may take either early return
         // above. Releasing only this controller keeps a newer recovery intact
         // while preventing the current player from being stuck as "in flight".
         finishSourceRecovery();
+      }
+    })();
+    return true;
+  };
+
+  const checkTerminalAuthorizationFailure = (): boolean => {
+    if (
+      isContinuousRecording ||
+      !streamId ||
+      !automaticSourceRecoveryUsed.current ||
+      terminalAuthorizationCheckUsed.current
+    ) {
+      return false;
+    }
+    terminalAuthorizationCheckUsed.current = true;
+    const controller = new AbortController();
+    terminalAuthorizationCheckController.current = controller;
+    const timeout = setTimeout(() => controller.abort(), terminalAuthorizationCheckTimeoutMs);
+    setPlayerLoading(true);
+    void (async () => {
+      try {
+        // A native media error hides the protected HTTP response body. After
+        // the one recovery POST has already been used, make exactly one
+        // bounded authorization request so a real revoked share is displayed
+        // as such instead of falling through to a generic source error.
+        const response = await fetch(
+          `/api/evault/videos/${encodeURIComponent(streamId)}/authorize?priority=interactive`,
+          {
+            cache: 'no-store',
+            credentials: 'same-origin',
+            signal: controller.signal,
+          },
+        );
+        const body = (await response.json().catch(() => undefined)) as
+          | { error?: { code?: unknown } }
+          | undefined;
+        if (controller.signal.aborted || committedVideoId.current !== video.id) return;
+        // A successful authorization cannot prove that this browser's native
+        // source is healthy; do not restart it here or create another loop.
+        showPlaybackFailure(response.ok ? 'remote_unavailable' : body?.error?.code);
+      } catch {
+        if (controller.signal.aborted || committedVideoId.current !== video.id) return;
+        showPlaybackFailure('remote_unavailable');
+      } finally {
+        clearTimeout(timeout);
+        if (terminalAuthorizationCheckController.current === controller) {
+          terminalAuthorizationCheckController.current = undefined;
+        }
       }
     })();
     return true;
@@ -456,11 +568,16 @@ function LibraryWatchPlayer({
               onPrimary={() => {
                 sourceRecoveryController.current?.abort();
                 sourceRecoveryController.current = undefined;
+                terminalAuthorizationCheckController.current?.abort();
+                terminalAuthorizationCheckController.current = undefined;
                 clearSourceHandoffRetry();
                 automaticSourceRecoveryUsed.current = false;
+                terminalAuthorizationCheckUsed.current = false;
+                hasMeaningfulRecordingPlayback.current = false;
+                automaticTicketRetryUsed.current = false;
                 setPlaybackError(undefined);
                 setPlayerLoading(true);
-                setAutomaticTicketRetryUsed(false);
+                setContinuousRecordingReadyToOpen(false);
                 advancePlaybackAttempt();
               }}
               secondaryLabel="Back to your video space"
@@ -480,27 +597,46 @@ function LibraryWatchPlayer({
             className="aspect-video w-full bg-black"
             controls
             playsInline
-            preload="auto"
+            preload={isContinuousRecording ? 'none' : 'auto'}
             src={playbackSource}
+            onLoadStart={(event) => {
+              if (!isCurrentPlaybackElement(event.currentTarget)) return;
+              if (isContinuousRecording) return;
+              setContinuousRecordingReadyToOpen(false);
+              setPlayerLoading(true);
+            }}
+            onPlay={(event) => {
+              if (!isCurrentPlaybackElement(event.currentTarget) || !isContinuousRecording) return;
+              // With `preload=none`, a continuous source should remain visibly
+              // ready until the viewer's native Play action actually begins
+              // its one server stream.
+              setContinuousRecordingReadyToOpen(false);
+              setPlayerLoading(true);
+            }}
             onCanPlay={(event) => {
               if (!isCurrentPlaybackElement(event.currentTarget)) return;
               reachedCanPlay.current = true;
               clearSourceHandoffRetry();
+              setContinuousRecordingReadyToOpen(false);
               setPlayerLoading(false);
             }}
             onError={(event) => {
               if (!isCurrentPlaybackElement(event.currentTarget)) return;
-              // A native video element can retry a non-seekable streamed
-              // response while it is still opening. Give a continuous
-              // recording one new opaque ticket before surfacing an error;
-              // once playback has started, do not silently restart it.
+              // `canplay` can be reached from only a short buffered fMP4
+              // fragment while the native player remains paused. Recover once
+              // unless playback has actually advanced; after that point an
+              // automatic restart would lose a viewer's place in a long call.
               if (
-                isContinuousRecording &&
-                playbackSource &&
-                !reachedCanPlay.current &&
-                !automaticTicketRetryUsed
+                shouldRetryUnstartedContinuousRecording({
+                  isContinuousRecording,
+                  hasPlaybackSource: Boolean(playbackSource),
+                  hasMeaningfulPlayback: hasMeaningfulRecordingPlayback.current,
+                  automaticTicketRetryUsed: automaticTicketRetryUsed.current,
+                })
               ) {
-                setAutomaticTicketRetryUsed(true);
+                automaticTicketRetryUsed.current = true;
+                setContinuousRecordingReadyToOpen(false);
+                setPlayerLoading(true);
                 advancePlaybackAttempt();
                 return;
               }
@@ -515,11 +651,23 @@ function LibraryWatchPlayer({
                 return;
               }
               if (retrySingleVideoAfterAuthorizationFailure()) return;
+              if (checkTerminalAuthorizationFailure()) return;
               setPlayerLoading(false);
               setPlaybackError(playbackFailureForAuthorizationCode(undefined));
             }}
             onLoadedMetadata={(event) => {
               event.currentTarget.playbackRate = playbackSpeed;
+            }}
+            onTimeUpdate={(event) => {
+              const element = event.currentTarget;
+              if (!isCurrentPlaybackElement(element)) return;
+              if (
+                !element.paused &&
+                Number.isFinite(element.currentTime) &&
+                element.currentTime > 0.1
+              ) {
+                hasMeaningfulRecordingPlayback.current = true;
+              }
             }}
           />
           <div className="absolute top-3 right-3 z-10 flex items-start gap-2">
@@ -568,6 +716,15 @@ function LibraryWatchPlayer({
               {waitingForSourceHandoff
                 ? 'Waiting for the shared video source…'
                 : 'Opening private video…'}
+            </div>
+          ) : null}
+          {continuousRecordingReadyToOpen && isContinuousRecording && playbackSource ? (
+            <div
+              className="pointer-events-none absolute inset-0 flex items-center justify-center px-4 text-center text-sm font-medium text-white"
+              role="status"
+              aria-live="polite"
+            >
+              Press play to open this recording
             </div>
           ) : null}
         </div>

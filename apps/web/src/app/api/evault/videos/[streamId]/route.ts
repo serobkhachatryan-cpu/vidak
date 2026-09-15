@@ -12,20 +12,20 @@ import {
   reportVideoSourceResolutionFailureTiming,
   resolveCorrelationId,
 } from '../../../../../server/ops-observability';
-import { getPlaybackResolutionCache } from '../../../../../server/playback-resolution-cache';
 import {
   claimPlaybackSourceRefresh,
-  failPlaybackSourceRefresh,
   type PlaybackSourceRefreshClaim,
   type PlaybackSourceRefreshState,
   publishPlaybackSourceRefresh,
   readPlaybackSourceRefresh,
+  releasePlaybackSourceRefresh,
 } from '../../../../../server/playback-source-refresh';
 import {
   isRefreshablePrivateMediaFailure,
   openPrivateMediaUpstream,
   type PrivateMediaUpstreamFailure,
   type PrivateMediaUpstreamResult,
+  resolvePrivateMediaUrlCacheExpiry,
 } from '../../../../../server/private-media-upstream';
 import {
   fingerprintSharedVideoAuthorizationReceipt,
@@ -39,6 +39,7 @@ import {
   cacheInitialMediaRange,
   getCachedMediaRange,
 } from '../../../../../server/video-source-warmup';
+import { recordConfirmedSharedPlaybackDenial } from '../../../../../server/video-space/shared-playback-card-quarantine';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -61,12 +62,6 @@ interface CachedReceiptResolution {
   mediaUrl: string;
   expiresAt: number;
   revision: number;
-}
-interface PendingReceiptResolutionRead {
-  promise: Promise<string | undefined>;
-  revision: number;
-  active: boolean;
-  expiresAt: number;
 }
 interface CachedSourceRefreshState {
   state: PlaybackSourceRefreshState;
@@ -96,7 +91,6 @@ interface PendingSourceRefreshStateRead {
 }
 const cachedReceiptResolutions = new Map<string, CachedReceiptResolution>();
 const receiptResolutionRevisions = new Map<string, ReceiptResolutionRevision>();
-const pendingReceiptResolutionReads = new Map<string, PendingReceiptResolutionRead>();
 const cachedSourceRefreshStates = new Map<string, CachedSourceRefreshState>();
 const pendingSourceRefreshStateReads = new Map<string, PendingSourceRefreshStateRead>();
 let nextForcedSourceRefreshReadId = 1;
@@ -195,10 +189,7 @@ export async function GET(
       sharedAuthorizationReceipts.find((receipt) =>
         hasVerifiedSharedAuthorizationReceipt(receipt, session.user.eName, candidateStreamId),
       );
-    const resolveSource = async (
-      candidateStreamId: string,
-      options?: { bypassLegacyReceiptResolutionCache?: boolean },
-    ): Promise<string> => {
+    const resolveSource = async (candidateStreamId: string): Promise<string> => {
       const authorizationReceipt = authorizationReceiptFor(candidateStreamId);
       // Capture the receipt-local generation before any awaited source work.
       // A concurrent upstream rejection advances it; an older pending resolver
@@ -209,26 +200,11 @@ export async function GET(
       const hasRecentSharedAuthorizationReceipt = Boolean(authorizationReceipt);
       try {
         if (authorizationReceipt) {
-          const locallyResolvedMediaUrl = readLocalReceiptResolution(authorizationReceipt);
-          if (locallyResolvedMediaUrl) {
-            // A receipt is a bounded, viewer-and-stream-bound source
-            // generation. Reusing its local URL avoids a database round trip
-            // for every native range, but never bypasses current media access.
-            // If the source has died, its upstream rejection below starts the
-            // durable recovery rather than leaking the URL to the browser.
-            await library.inspectPlayableStream(session.user, candidateStreamId, {
-              priority: 'interactive',
-              signal: request.signal,
-            });
-            usedReceiptBoundResolutionCache = authorizationReceipt;
-            recordMediaResolutionTiming(cachedResolutionTiming());
-            return locallyResolvedMediaUrl;
-          }
-          // A refresh epoch is checked before the older receipt cache. Its
-          // resolving/unavailable states are explicit fences on a cold
-          // replica. Once this receipt has a local source generation, later
-          // ranges use its 45-second bounded authorization window instead of
-          // synchronously reading Postgres for every seek.
+          // Read the durable recovery fence before *any* URL reuse. A local
+          // source from another replica can otherwise reopen a redirect that
+          // has already been rejected and fenced elsewhere. This replaces the
+          // legacy receipt-cache read with the canonical eVault resolver's
+          // source-bound cache after an absent state is confirmed.
           const refreshRead = await readBoundSourceRefreshState(
             authorizationReceipt,
             session.user.eName,
@@ -279,31 +255,25 @@ export async function GET(
               throw sourceRefreshUnavailable();
             }
           }
-        }
-        if (authorizationReceipt && !options?.bypassLegacyReceiptResolutionCache) {
-          const cachedMediaUrl = await readReceiptBoundResolutionCache(
-            authorizationReceipt,
-            session.user.eName,
-            candidateStreamId,
-          );
-          if (cachedMediaUrl) {
-            // A durable URL cache is never an authorization grant. The
-            // receipt names a bounded source generation, and the playable
-            // source check remains mandatory before every media reuse.
-            await library.inspectPlayableStream(session.user, candidateStreamId, {
-              priority: 'interactive',
-              signal: request.signal,
-            });
-            usedReceiptBoundResolutionCache = authorizationReceipt;
-            if (receiptResolutionGeneration !== undefined) {
-              rememberReceiptResolution(
-                authorizationReceipt,
-                cachedMediaUrl,
-                receiptResolutionGeneration,
-              );
+          // A durable store error is intentionally not a reason to reuse a
+          // local redirect: it may conceal a recovery claimed on another
+          // replica. A fresh eVault resolution below remains authorized and
+          // has its own source-expiry-aware cache.
+          if (refreshRead.kind === 'state' && refreshRead.state.kind === 'absent') {
+            const locallyResolvedMediaUrl = readLocalReceiptResolution(authorizationReceipt);
+            if (locallyResolvedMediaUrl) {
+              // A receipt is a bounded, viewer-and-stream-bound source
+              // generation. It is valid only after the current durable fence
+              // says no source recovery exists, and every reuse rechecks
+              // current playable access before opening the private upstream.
+              await library.inspectPlayableStream(session.user, candidateStreamId, {
+                priority: 'interactive',
+                signal: request.signal,
+              });
+              usedReceiptBoundResolutionCache = authorizationReceipt;
+              recordMediaResolutionTiming(cachedResolutionTiming());
+              return locallyResolvedMediaUrl;
             }
-            recordMediaResolutionTiming(cachedResolutionTiming());
-            return cachedMediaUrl;
           }
         }
         const resolved =
@@ -319,12 +289,13 @@ export async function GET(
             : await library.resolveMediaUrl(session.user, candidateStreamId);
         // This local mapping is a receipt-bounded source generation. Later
         // ranges still make the library's current playable-access check, but
-        // do not pay a database epoch read for every native seek.
+        // do not pay another eVault resolver after the durable fence has
+        // confirmed that no cross-replica recovery is in progress.
         if (authorizationReceipt && receiptResolutionGeneration !== undefined) {
           rememberReceiptResolution(authorizationReceipt, resolved, receiptResolutionGeneration);
           // Treat this newly created receipt-local generation exactly like a
-          // legacy/durable cache hit if upstream rejects it below. Otherwise
-          // its stale URL would survive the recovery fence on this replica.
+          // cache hit if upstream rejects it below. Otherwise its stale URL
+          // could survive the recovery fence on this replica.
           usedReceiptBoundResolutionCache = authorizationReceipt;
         }
         return resolved;
@@ -390,6 +361,37 @@ export async function GET(
           onTiming: recordMediaResolutionTiming,
         });
         resolvedFreshMediaUrl = freshMediaUrl;
+        const freshSourceExpiry = resolvePrivateMediaUrlCacheExpiry(freshMediaUrl);
+        if (!freshSourceExpiry) {
+          discardResolvedFreshSource();
+          await releaseBoundSourceRefresh({
+            viewerEName: session.user.eName,
+            streamId: candidateStreamId,
+            lease: claim.lease,
+          });
+          throw sourceRefreshUnavailable();
+        }
+        if (freshSourceExpiry.kind === 'unknown') {
+          // An opaque redirect can still serve this request's short local
+          // range burst, but it has no portable expiry proof and must never
+          // become an encrypted cross-replica handoff. Release the exact
+          // lease before returning so another replica resolves canonically.
+          const released = await releaseBoundSourceRefresh({
+            viewerEName: session.user.eName,
+            streamId: candidateStreamId,
+            lease: claim.lease,
+          });
+          if (!released) {
+            discardResolvedFreshSource();
+            throw sourceRefreshUnavailable();
+          }
+          if (authorizationReceipt) {
+            forgetSourceRefreshState(authorizationReceipt);
+            replaceReceiptResolution(authorizationReceipt, freshMediaUrl);
+            usedReceiptBoundResolutionCache = authorizationReceipt;
+          }
+          return freshMediaUrl;
+        }
         const published = await publishBoundSourceRefresh({
           viewerEName: session.user.eName,
           streamId: candidateStreamId,
@@ -671,6 +673,11 @@ export async function GET(
       if (usedReceiptBoundResolutionCache) {
         forgetReceiptBoundResolutionCache(usedReceiptBoundResolutionCache);
       }
+      // Fence the canonical eVault redirect before the recovery claim. This
+      // reaches every replica through the durable eVault cache's generation,
+      // so a concurrent player cannot revive the rejected URL while this
+      // request is resolving its replacement.
+      await library.invalidateMediaUrl?.(session.user, resolvedStreamId);
       const recoveredSourceResolutionStartedAt = performance.now();
       try {
         // The durable lease turns this source rejection into exactly one
@@ -751,6 +758,11 @@ export async function GET(
     return new NextResponse(body, { status: upstream.status, headers });
   } catch (error) {
     reportSourceResolutionFailureTiming();
+    // This is an authoritative browser media request. The helper records
+    // nothing unless the library attached its private, completed-live-proof
+    // marker, so an upstream 401/403 or transient source failure cannot hide
+    // a valid shared card.
+    recordConfirmedSharedPlaybackDenial(error);
     logProxyFailure(error, correlationId);
     return errorResponse(error, correlationId);
   }
@@ -947,14 +959,38 @@ async function publishBoundSourceRefresh(input: {
   });
 }
 
+/**
+ * Releases an exact resolving lease when no durable redirect may be
+ * published. Like claim/publish, this must never leave the player waiting on
+ * a stalled database operation; a false result means the local forced source
+ * is discarded rather than returned across an unknown replica state.
+ */
+async function releaseBoundSourceRefresh(input: {
+  viewerEName: string;
+  streamId: string;
+  lease: Extract<PlaybackSourceRefreshClaim, { kind: 'acquired' }>['lease'];
+}): Promise<boolean> {
+  const operation = Promise.resolve()
+    .then(() => releasePlaybackSourceRefresh(input))
+    .then(
+      (released) => released === true,
+      () => false,
+    );
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<boolean>((resolve) => {
+    timeout = setTimeout(() => resolve(false), sourceRefreshPublishTimeoutMs);
+  });
+  return Promise.race([operation, deadline]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
+
 function releaseSourceRefreshClaim(input: {
   viewerEName: string;
   streamId: string;
   lease: Extract<PlaybackSourceRefreshClaim, { kind: 'acquired' }>['lease'];
 }): void {
-  void Promise.resolve()
-    .then(() => failPlaybackSourceRefresh(input))
-    .catch(() => false);
+  void releaseBoundSourceRefresh(input);
 }
 
 /**
@@ -1031,81 +1067,6 @@ async function readBoundSourceRefreshState(
     if (timeout) clearTimeout(timeout);
   });
   pendingSourceRefreshStateReads.set(key, entry);
-  return entry.promise;
-}
-
-/**
- * The legacy receipt cache remains a latency optimization for ordinary
- * warmups. It never gets to bypass a durable resolving/unavailable epoch.
- */
-async function readReceiptBoundResolutionCache(
-  receipt: string | undefined,
-  viewerEName: string,
-  streamId: string,
-): Promise<string | undefined> {
-  if (!receipt) return undefined;
-  const now = Date.now();
-  pruneReceiptLocalState(now);
-  const key = receiptResolutionCacheKey(receipt);
-  const cached = cachedReceiptResolutions.get(key);
-  const revision = receiptResolutionRevision(key);
-  if (cached && cached.revision === revision && cached.expiresAt > now) return cached.mediaUrl;
-
-  // A source rejection advances the receipt-local generation while an older
-  // database read can still be in flight. Track both operations separately;
-  // overwriting the old entry would hide an orphaned query from the cap.
-  const pendingKey = `${key}\u0000${revision}`;
-  const existing = pendingReceiptResolutionReads.get(pendingKey);
-  if (existing) {
-    return existing.promise;
-  }
-  if (pendingReceiptResolutionReads.size >= maxPendingReceiptResolutionReads) {
-    return undefined;
-  }
-
-  const entry: PendingReceiptResolutionRead = {
-    promise: Promise.resolve(undefined),
-    revision,
-    active: true,
-    expiresAt: now + sourceRefreshReadTimeoutMs,
-  };
-  const databaseRead = Promise.resolve()
-    .then(() => getPlaybackResolutionCache({ receipt, viewerEName, streamId }))
-    .catch(() => undefined);
-  const completed = databaseRead
-    .then((mediaUrl) => {
-      // A rejected source can finish a delayed database read after another
-      // range has replaced it. Never return or reinsert that stale result.
-      if (
-        !entry.active ||
-        pendingReceiptResolutionReads.get(pendingKey) !== entry ||
-        receiptResolutionRevision(key) !== revision
-      ) {
-        return undefined;
-      }
-      if (mediaUrl) cacheReceiptResolutionByKey(key, mediaUrl, Date.now(), revision);
-      return mediaUrl;
-    })
-    .finally(() => {
-      if (pendingReceiptResolutionReads.get(pendingKey) === entry) {
-        pendingReceiptResolutionReads.delete(pendingKey);
-      }
-    });
-
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<string | undefined>((resolve) => {
-    timeout = setTimeout(() => {
-      entry.active = false;
-      resolve(undefined);
-    }, sourceRefreshReadTimeoutMs);
-  });
-  // As above, the coalesced entry itself carries the deadline. Returning the
-  // raw database promise to a later range would reintroduce an unbounded
-  // wait despite the first range timing out.
-  entry.promise = Promise.race([completed, deadline]).finally(() => {
-    if (timeout) clearTimeout(timeout);
-  });
-  pendingReceiptResolutionReads.set(pendingKey, entry);
   return entry.promise;
 }
 
@@ -1225,6 +1186,16 @@ function cacheReceiptResolutionByKey(
 ): void {
   pruneReceiptLocalState(now);
   if (receiptResolutionRevision(key) !== revision) return;
+  // A receipt authorizes a viewer/stream pair; it is not evidence that the
+  // eVault's object-storage redirect remains valid for the full receipt TTL.
+  // Keep an unknown URL only for the helper's small in-process range burst,
+  // and bound recognised signed URLs before their source expiration.
+  const sourceExpiry = resolvePrivateMediaUrlCacheExpiry(mediaUrl, {
+    now,
+    maxTtlMs: receiptResolutionLocalTtlMs,
+  });
+  if (!sourceExpiry) return;
+  const mediaExpiresAt = now + sourceExpiry.ttlMs;
   // A normal warm write may be the first entry for a receipt. Keep its
   // generation for at least as long as the URL so a later rejection can fence
   // an older resolver that began before the write.
@@ -1242,7 +1213,7 @@ function cacheReceiptResolutionByKey(
   }
   cachedReceiptResolutions.set(key, {
     mediaUrl,
-    expiresAt: now + receiptResolutionLocalTtlMs,
+    expiresAt: mediaExpiresAt,
     revision,
   });
 }
@@ -1253,11 +1224,6 @@ function pruneReceiptLocalState(now: number): void {
   }
   for (const [key, cached] of cachedSourceRefreshStates) {
     if (cached.expiresAt <= now) cachedSourceRefreshStates.delete(key);
-  }
-  for (const [_key, entry] of pendingReceiptResolutionReads) {
-    if (entry.expiresAt <= now) {
-      entry.active = false;
-    }
   }
   for (const [_key, entry] of pendingSourceRefreshStateReads) {
     if (entry.expiresAt <= now) {

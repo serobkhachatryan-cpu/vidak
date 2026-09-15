@@ -9,22 +9,21 @@ import {
   reportRecordingSegmentTiming,
 } from '../../../../../../../server/ops-observability';
 import {
-  deletePlaybackResolutionCache,
-  getPlaybackResolutionCache,
-} from '../../../../../../../server/playback-resolution-cache';
-import {
   isRefreshablePrivateMediaFailure,
   openPrivateMediaUpstream,
 } from '../../../../../../../server/private-media-upstream';
 import {
   RecordingConcatTicketError,
   readRecordingConcatSegment,
+  replaceRecordingConcatInitialSegment,
   replaceRecordingConcatSegment,
 } from '../../../../../../../server/recording-concat-ticket';
 import {
+  mintSharedVideoAuthorizationReceipt,
   SharedVideoAuthorizationReceiptConfigurationError,
   verifySharedVideoAuthorizationReceipt,
 } from '../../../../../../../server/shared-video-authorization-receipt';
+import { recordConfirmedSharedPlaybackDenial } from '../../../../../../../server/video-space/shared-playback-card-quarantine';
 
 export const runtime = 'nodejs';
 
@@ -52,6 +51,8 @@ export async function GET(
   let upstreamResponseHeadersMs = 0;
   let upstreamAttempts = 0;
   let sourceResolutionFailed = false;
+  let sourceResolutionFailureKind: 'authorization_denied' | 'authorization_retry' | 'source' =
+    'source';
   let finalUpstreamStartedAt = 0;
   const recordMediaResolutionTiming = (timing: MediaResolutionTiming): void => {
     mediaResolutionTiming = mergeMediaResolutionTiming(mediaResolutionTiming, timing);
@@ -76,6 +77,7 @@ export async function GET(
     if (!shouldReportInitialSegmentTiming || !correlationId || !sourceResolutionFailed) return;
     safelyReportSegmentSourceResolutionFailureTiming({
       correlationId,
+      failureKind: sourceResolutionFailureKind,
       sourceResolutionMs,
       ...sourceTiming(),
       segmentRequestFailedMs: elapsedMs(requestStartedAt),
@@ -95,39 +97,11 @@ export async function GET(
       segment.streamId,
     );
     const library = createEVaultVideoLibrary();
-    let usedReceiptBoundResolutionCache = false;
     const resolveCurrentSegment = async (
       candidateStreamId: string,
-      options?: { bypassReceiptBoundResolutionCache?: boolean },
     ): Promise<{ streamId: string; mediaUrl: string }> => {
       const sourceResolutionStartedAt = performance.now();
       try {
-        if (
-          candidateStreamId === segment.streamId &&
-          hasRecentSharedAuthorizationReceipt &&
-          !options?.bypassReceiptBoundResolutionCache
-        ) {
-          const cachedMediaUrl = await readReceiptBoundResolutionCache(
-            segment.initialAuthorizationReceipt,
-            segment.viewer.eName,
-            candidateStreamId,
-          );
-          if (cachedMediaUrl) {
-            // The encrypted handoff is only a very recent source-resolution
-            // result. inspectBoundStream is metadata-only, so it cannot prove
-            // that a revoked source is still playable. Recheck the viewer's
-            // current source access before opening cached bytes; the receipt
-            // and cache binding are verified independently as well.
-            await library.inspectPlayableStream(segment.viewer, candidateStreamId, {
-              priority: 'interactive',
-              signal: request.signal,
-            });
-            usedReceiptBoundResolutionCache = true;
-            if (shouldReportInitialSegmentTiming)
-              recordMediaResolutionTiming(cachedResolutionTiming());
-            return { streamId: candidateStreamId, mediaUrl: cachedMediaUrl };
-          }
-        }
         return await resolveSegmentMedia(
           library,
           segment.viewer,
@@ -142,6 +116,7 @@ export async function GET(
         );
       } catch (error) {
         sourceResolutionFailed = true;
+        sourceResolutionFailureKind = recordingSourceResolutionFailureKind(error);
         throw error;
       } finally {
         sourceResolutionMs += elapsedMs(sourceResolutionStartedAt);
@@ -166,14 +141,6 @@ export async function GET(
       upstreamResult.kind === 'failure' &&
       isRefreshablePrivateMediaFailure(upstreamResult.failure)
     ) {
-      if (usedReceiptBoundResolutionCache) {
-        void deleteReceiptBoundResolutionCache(
-          segment.initialAuthorizationReceipt,
-          segment.viewer.eName,
-          resolvedStreamId,
-        );
-        usedReceiptBoundResolutionCache = false;
-      }
       try {
         await library.invalidateMediaUrl(segment.viewer, resolvedStreamId);
       } catch (error) {
@@ -181,9 +148,7 @@ export async function GET(
           throw error;
         }
       }
-      ({ streamId: resolvedStreamId, mediaUrl } = await resolveCurrentSegment(resolvedStreamId, {
-        bypassReceiptBoundResolutionCache: true,
-      }));
+      ({ streamId: resolvedStreamId, mediaUrl } = await resolveCurrentSegment(resolvedStreamId));
       upstreamResult = await openUpstream();
     }
     if (upstreamResult.kind === 'failure') {
@@ -236,6 +201,10 @@ export async function GET(
     return new NextResponse(observedUpstreamBody, { status: upstream.status, headers });
   } catch (error) {
     reportSourceResolutionFailureTiming();
+    // A later segment can be the first request to discover that the entire
+    // continuous shared recording was revoked. Record only a typed terminal
+    // live denial; warmup and upstream failures never reach this marker.
+    recordConfirmedSharedPlaybackDenial(error);
     return errorResponse(error);
   }
 }
@@ -315,8 +284,46 @@ async function resolveSegmentMedia(
   } catch (error) {
     if (!(error instanceof EVaultVideoLibraryError) || error.code !== 'stream_expired') throw error;
     const renewed = await library.renewPlayableStream(viewer, streamId);
-    await replaceRecordingConcatSegment(ticket, segmentKey, index, renewed);
-    return { streamId: renewed, mediaUrl: await resolveMediaUrl(renewed, false) };
+    // A renewal creates a new sealed stream, so the old source-zero receipt
+    // cannot be reused. Complete the canonical eVault authorization first;
+    // only then mint and persist a receipt bound to the replacement stream so
+    // a retry or a different replica does not immediately repeat the shared
+    // access proof. If receipt configuration is unavailable, the ordinary
+    // replacement path clears the old hint and remains safe.
+    const mediaUrl = await resolveMediaUrl(renewed, false);
+    const renewedInitialReceipt =
+      index === '0' ? mintRenewedInitialAuthorizationReceipt(viewer.eName, renewed) : undefined;
+    if (renewedInitialReceipt) {
+      await replaceRecordingConcatInitialSegment(
+        ticket,
+        segmentKey,
+        renewed,
+        renewedInitialReceipt,
+      );
+    } else {
+      await replaceRecordingConcatSegment(ticket, segmentKey, index, renewed);
+    }
+    return { streamId: renewed, mediaUrl };
+  }
+}
+
+/**
+ * A receipt is only a short-lived cross-replica optimization. Configuration
+ * absence must never turn an already-authorized renewal into a player error;
+ * the ticket replacement then clears the stale receipt instead.
+ */
+function mintRenewedInitialAuthorizationReceipt(
+  viewerEName: string,
+  streamId: string,
+): string | undefined {
+  try {
+    const receipt = mintSharedVideoAuthorizationReceipt({ viewerEName, streamId });
+    return verifySharedVideoAuthorizationReceipt({ receipt, viewerEName, streamId })
+      ? receipt
+      : undefined;
+  } catch (error) {
+    if (error instanceof SharedVideoAuthorizationReceiptConfigurationError) return undefined;
+    throw error;
   }
 }
 
@@ -336,39 +343,19 @@ function hasVerifiedSegmentAuthorizationReceipt(
   }
 }
 
-/** The cache is a best-effort cross-replica handoff, never a media grant. */
-async function readReceiptBoundResolutionCache(
-  receipt: string | undefined,
-  viewerEName: string,
-  streamId: string,
-): Promise<string | undefined> {
-  if (!receipt) return undefined;
-  try {
-    return await getPlaybackResolutionCache({ receipt, viewerEName, streamId });
-  } catch {
-    return undefined;
+/**
+ * Preserve the meaningful authorization distinction without ever emitting a
+ * source message, URL, stream, ticket, or viewer identity into timing logs.
+ */
+function recordingSourceResolutionFailureKind(
+  error: unknown,
+): 'authorization_denied' | 'authorization_retry' | 'source' {
+  if (!(error instanceof EVaultVideoLibraryError)) return 'source';
+  if (error.code === 'authorization_denied') return 'authorization_denied';
+  if (error.code === 'remote_unavailable' || error.code === 'rate_limited') {
+    return 'authorization_retry';
   }
-}
-
-/** Remove a rejected source URL without allowing a cache fault to stop ffmpeg. */
-function deleteReceiptBoundResolutionCache(
-  receipt: string | undefined,
-  viewerEName: string,
-  streamId: string,
-): Promise<boolean> {
-  if (!receipt) return Promise.resolve(false);
-  return deletePlaybackResolutionCache({ receipt, viewerEName, streamId }).catch(() => false);
-}
-
-function cachedResolutionTiming(): MediaResolutionTiming {
-  return {
-    mediaUrlCacheHit: true,
-    sharedAccessVerificationMs: 0,
-    eVaultResolutionMs: 0,
-    directFileDereferenceMs: 0,
-    platformTokenMs: 0,
-    metadataReadMs: 0,
-  };
+  return 'source';
 }
 
 /**

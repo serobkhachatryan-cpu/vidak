@@ -12,14 +12,14 @@ import {
   type VideoAuthorizationFailureKind,
   type VideoAuthorizationTimingMode,
 } from '../../../../../../server/ops-observability';
-import { putPlaybackResolutionCache } from '../../../../../../server/playback-resolution-cache';
 import {
   claimPlaybackSourceRefresh,
-  failPlaybackSourceRefresh,
   type PlaybackSourceRefreshLease,
   publishPlaybackSourceRefresh,
   readPlaybackSourceRefresh,
+  releasePlaybackSourceRefresh,
 } from '../../../../../../server/playback-source-refresh';
+import { resolvePrivateMediaUrlCacheExpiry } from '../../../../../../server/private-media-upstream';
 import { assertTrustedMutationOrigin } from '../../../../../../server/request-security';
 import {
   mintSharedVideoAuthorizationReceipt,
@@ -30,6 +30,7 @@ import {
   sharedVideoStreamAuthorizationReceiptCookieOptions,
   verifySharedVideoAuthorizationReceipt,
 } from '../../../../../../server/shared-video-authorization-receipt';
+import { recordConfirmedSharedPlaybackDenial } from '../../../../../../server/video-space/shared-playback-card-quarantine';
 import {
   getBearerToken,
   getW3dsAuthService,
@@ -131,7 +132,18 @@ async function authorize(
       library.inspectBoundStream(session.user, streamId);
       sourceRefreshBinding = { viewerEName: session.user.eName, streamId };
       sourceRefreshLease = await claimForcedSourceRefresh(sourceRefreshBinding);
-      if (!sourceRefreshLease) throw sourceRefreshUnavailable();
+      if (!sourceRefreshLease) {
+        // A busy/expired durable handoff is not itself evidence about the
+        // viewer's entitlement. Make one bounded, current proof first so a
+        // truly revoked share keeps its explicit 403 instead of being masked
+        // as a transient 503. A healthy proof still leaves the existing
+        // cross-replica owner in charge and returns the normal retry state.
+        await library.proveCurrentPlayableStreamForSourceRefresh(session.user, streamId, {
+          priority: 'interactive',
+          signal: request.signal,
+        });
+        throw sourceRefreshUnavailable();
+      }
       // We own a recoverable lease, so now prove current source access before
       // invalidating or resolving anything. If this proof fails, the outer
       // catch conditionally releases our exact lease; a revoked viewer can
@@ -165,6 +177,13 @@ async function authorize(
         // and intentionally outlives the client-side route transition.
         resolvedMediaUrl = await library.authorizePlayableStream(session.user, streamId, {
           priority: 'interactive',
+          // The user has explicitly opened this video.  Some older eVault
+          // File endpoints require the GraphQL metadata compatibility path,
+          // which can legitimately take longer than the speculative hover
+          // deadline.  Give this one foreground authorization the normal
+          // bounded source deadline instead of failing it early and forcing
+          // a second, visibly slow recovery request.
+          allowExtendedLegacyFileMetadataWait: true,
           // The library validates the stream and advances its source cache
           // generation before resolving. An old in-flight resolution can no
           // longer reinsert the rejected URL after this recovery starts.
@@ -193,18 +212,42 @@ async function authorize(
     // a player request routed to another replica can reuse this exact work.
     if (mode !== 'background') {
       try {
+        let localOnlySourceRefresh = false;
+        let sourceRefreshLeaseForResult: PlaybackSourceRefreshLease | undefined;
         if (refreshSource) {
-          if (typeof resolvedMediaUrl !== 'string' || !sourceRefreshLease) {
+          sourceRefreshLeaseForResult = sourceRefreshLease;
+          if (typeof resolvedMediaUrl !== 'string' || !sourceRefreshLeaseForResult) {
             throw sourceRefreshUnavailable();
+          }
+          const sourceExpiry = resolvePrivateMediaUrlCacheExpiry(resolvedMediaUrl);
+          if (!sourceExpiry) {
+            library.discardLocalForcedSourceResult?.(session.user, streamId);
+            throw sourceRefreshUnavailable();
+          }
+          if (sourceExpiry.kind === 'unknown') {
+            // Keep opaque redirects on the resolving replica only. They are
+            // safe for the immediate local range burst, but without a
+            // portable expiry they must never be placed in a cross-replica
+            // ready handoff or issued as a durable recovery winner.
+            const binding = sourceRefreshBinding;
+            if (!binding) throw sourceRefreshUnavailable();
+            if (!(await releaseForcedSourceRefresh(binding, sourceRefreshLeaseForResult))) {
+              library.discardLocalForcedSourceResult?.(session.user, streamId);
+              throw sourceRefreshUnavailable();
+            }
+            sourceRefreshLease = undefined;
+            sourceRefreshBinding = undefined;
+            localOnlySourceRefresh = true;
           }
           // This conditional update is the cross-replica winner fence. A
           // late request whose lease was superseded can never issue a new
           // cookie, even if its remote resolution completed successfully.
           if (
+            !localOnlySourceRefresh &&
             !(await publishForcedSourceRefresh({
               viewerEName: session.user.eName,
               streamId,
-              lease: sourceRefreshLease,
+              lease: sourceRefreshLeaseForResult,
               mediaUrl: resolvedMediaUrl,
             }))
           ) {
@@ -232,18 +275,18 @@ async function authorize(
         });
         if (!verifiedReceipt) {
           if (refreshSource) throw sourceRefreshUnavailable();
-        } else if (refreshSource) {
+        } else if (refreshSource && !localOnlySourceRefresh) {
           // Re-read the receipt-bound durable state immediately before the
           // response. A second replica may have claimed a newer epoch after
           // our conditional publish; in that case this older request fails
           // closed instead of racing a stale Set-Cookie into the browser.
           if (
-            !sourceRefreshLease ||
+            !sourceRefreshLeaseForResult ||
             !(await isCurrentForcedSourceRefresh({
               receipt,
               viewerEName: session.user.eName,
               streamId,
-              lease: sourceRefreshLease,
+              lease: sourceRefreshLeaseForResult,
             }))
           ) {
             // We may have published successfully and then lost the epoch to
@@ -271,16 +314,6 @@ async function authorize(
           setAuthorizationReceiptCookies(response, receipt, streamId);
         } else {
           setAuthorizationReceiptCookies(response, receipt, streamId);
-          if (typeof resolvedMediaUrl === 'string') {
-            // Ordinary warmups remain latency-first: this best-effort write
-            // must not hold their receipt behind a database transaction.
-            startReceiptBoundResolutionCacheWrite({
-              receipt,
-              viewerEName: session.user.eName,
-              streamId,
-              mediaUrl: resolvedMediaUrl,
-            });
-          }
         }
       } catch (error) {
         // A dev/test setup can exercise the authorization route with a mock
@@ -298,8 +331,12 @@ async function authorize(
     // harmless after a successful publish (it only matches the owner while
     // the row is still resolving), and cannot delete a newer owner's epoch.
     if (sourceRefreshLease && sourceRefreshBinding) {
-      await failForcedSourceRefresh(sourceRefreshBinding, sourceRefreshLease);
+      await releaseForcedSourceRefresh(sourceRefreshBinding, sourceRefreshLease);
     }
+    // Only the explicit interactive recovery path may retire a card, and the
+    // helper accepts only the private marker produced by a completed live
+    // shared-source denial. Generic 401/403 errors remain visible/retryable.
+    if (refreshSource && mode === 'interactive') recordConfirmedSharedPlaybackDenial(error);
     reportTiming(false, error);
     return errorResponse(error);
   }
@@ -326,50 +363,6 @@ function setAuthorizationReceiptCookies(
     receipt,
     sharedVideoAuthorizationReceiptCookieOptions(),
   );
-}
-
-/**
- * The encrypted resolution cache is best-effort after authorization has
- * succeeded. Do not await this promise from the HTTP handler: a pending
- * database transaction must never delay delivery of the verified receipt to
- * the player. The normal media route retains its full authorized resolution
- * fallback if this write never completes.
- */
-function startReceiptBoundResolutionCacheWrite(input: {
-  receipt: string;
-  viewerEName: string;
-  streamId: string;
-  mediaUrl: string;
-}): void {
-  void putReceiptBoundResolutionCacheWhenNoRefreshEpoch(input);
-}
-
-/**
- * A normal warmup can finish with a process-local URL that was superseded by
- * a concurrent recovery on another replica. Do not persist it beneath a new
- * receipt when any refresh epoch exists. If the read races just before a new
- * claim, that receipt/cache is at most 45 seconds old while the later epoch
- * fences playback for 60 seconds, so the stale value still expires first.
- */
-async function putReceiptBoundResolutionCacheWhenNoRefreshEpoch(input: {
-  receipt: string;
-  viewerEName: string;
-  streamId: string;
-  mediaUrl: string;
-}): Promise<boolean> {
-  try {
-    const state = await readPlaybackSourceRefresh({
-      receipt: input.receipt,
-      viewerEName: input.viewerEName,
-      streamId: input.streamId,
-    });
-    if (state.kind !== 'absent') return false;
-  } catch {
-    // A cache write is optional, but a failed fence lookup must never create
-    // a path for a stale process-local URL to outlive a recovery epoch.
-    return false;
-  }
-  return putReceiptBoundResolutionCache(input);
 }
 
 /**
@@ -447,7 +440,7 @@ function awaitBoundedForcedSourceRefreshClaim(
       // owner asynchronously so it cannot make later retries wait a full
       // lease TTL. The conditional release cannot affect another epoch.
       if (deadlineReached) {
-        await failForcedSourceRefresh(binding, claim.lease);
+        await releaseForcedSourceRefresh(binding, claim.lease);
         return undefined;
       }
       return claim.lease;
@@ -465,55 +458,19 @@ function awaitBoundedForcedSourceRefreshClaim(
   });
 }
 
-async function failForcedSourceRefresh(
+function releaseForcedSourceRefresh(
   binding: { viewerEName: string; streamId: string },
   lease: PlaybackSourceRefreshLease,
-): Promise<void> {
-  // The release is bounded for the same reason as publish: cleanup must not
-  // turn a source error into an indefinitely pending HTTP response. Attach
-  // handlers before racing so a late database rejection is always observed.
-  await awaitBoundedForcedSourceRefresh(() =>
-    failPlaybackSourceRefresh({
+): Promise<boolean> {
+  // A failed/opaque recovery must not poison every later player request with
+  // an `unavailable` epoch. Exact lease deletion cannot affect a successor.
+  return awaitBoundedForcedSourceRefresh(() =>
+    releasePlaybackSourceRefresh({
       viewerEName: binding.viewerEName,
       streamId: binding.streamId,
       lease,
     }),
   );
-}
-
-/**
- * The regular warmup deliberately ignores this result. The explicit source
- * refresh awaits it before issuing its replacement receipt, so cross-replica
- * recovery fails closed rather than falling back to a stale local redirect.
- */
-async function putReceiptBoundResolutionCache(
-  input: {
-    receipt: string;
-    viewerEName: string;
-    streamId: string;
-    mediaUrl: string;
-  },
-  options?: { timeoutMs?: number },
-): Promise<boolean> {
-  // Attach the rejection handler before racing the timeout. The underlying
-  // database write can settle after the HTTP response, but it must never
-  // become an unhandled rejection in that case.
-  const completed = Promise.resolve()
-    .then(() => putPlaybackResolutionCache(input))
-    .then(
-      (written) => written === true,
-      () => false,
-    );
-  const timeoutMs = options?.timeoutMs;
-  if (!timeoutMs || timeoutMs <= 0) return completed;
-
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<boolean>((resolve) => {
-    timeout = setTimeout(() => resolve(false), timeoutMs);
-  });
-  return Promise.race([completed, deadline]).finally(() => {
-    if (timeout) clearTimeout(timeout);
-  });
 }
 
 function assertTrustedSourceRefreshRequest(request: NextRequest): void {

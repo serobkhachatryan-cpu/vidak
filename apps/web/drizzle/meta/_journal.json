@@ -204,6 +204,20 @@
       "when": 1788729600000,
       "tag": "0028_playback_source_refresh_epochs",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1788816000000,
+      "tag": "0029_shared_playback_card_quarantines",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1788902400000,
+      "tag": "0030_evault_media_url_cache",
+      "breakpoints": true
     }
   ]
 }
