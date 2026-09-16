@@ -15,35 +15,35 @@ describe('eVault traffic governor', () => {
     vi.useRealTimers();
   });
 
-  it('serializes and spaces resumable eVault requests across the platform lane', async () => {
+  it('paces all eVault control-request starts without holding a response semaphore', async () => {
     vi.useFakeTimers();
-    const first = await acquireEVaultTrafficLease({ trafficClass: 'background' });
-    expect(first).toBeDefined();
+    const startedAt: number[] = [];
 
-    let secondResolved = false;
-    const secondPending = acquireEVaultTrafficLease({ trafficClass: 'background' }).then(
-      (lease) => {
-        secondResolved = true;
-        return lease;
-      },
-    );
-    await Promise.resolve();
-    expect(secondResolved).toBe(false);
+    const first = await acquireEVaultTrafficLease({ trafficClass: 'interactive' });
+    const firstStartedAt = Date.now();
+    startedAt.push(firstStartedAt);
+    const secondPending = acquireEVaultTrafficLease({ trafficClass: 'interactive' }).then((lease) => {
+      startedAt.push(Date.now());
+      return lease;
+    });
 
-    first?.release();
-    await vi.advanceTimersByTimeAsync(999);
-    expect(secondResolved).toBe(false);
+    await vi.advanceTimersByTimeAsync(249);
+    expect(startedAt).toEqual([firstStartedAt]);
     await vi.advanceTimersByTimeAsync(1);
-
     const second = await secondPending;
+
+    // The first source response has not released. The second lease is still
+    // admitted at the next cadence slot so File -> metadata hedges work.
+    expect(first).toBeDefined();
     expect(second).toBeDefined();
-    second?.release();
+    expect(startedAt).toEqual([firstStartedAt, firstStartedAt + 250]);
   });
 
-  it('lets interactive playback preempt active and queued background work', async () => {
+  it('lets interactive playback preempt every active and queued background request', async () => {
     vi.useFakeTimers();
     const active = await acquireEVaultTrafficLease({ trafficClass: 'background' });
     const queued = acquireEVaultTrafficLease({ trafficClass: 'background' });
+    const session = beginInteractiveEVaultTrafficSession();
     const interactive = await acquireEVaultTrafficLease({ trafficClass: 'interactive' });
 
     expect(active?.signal.aborted).toBe(true);
@@ -53,6 +53,42 @@ describe('eVault traffic governor', () => {
 
     active?.release();
     interactive?.release();
+    session.release();
+  });
+
+  it('admits an exact foreground proof batch before applying its sustained cadence', async () => {
+    vi.useFakeTimers();
+    const session = beginInteractiveEVaultTrafficSession();
+    const startedAt: number[] = [];
+    const first = await acquireEVaultTrafficLease({ trafficClass: 'interactive' });
+    const firstStartedAt = Date.now();
+    startedAt.push(firstStartedAt);
+    const second = acquireEVaultTrafficLease({ trafficClass: 'interactive' }).then((lease) => {
+      startedAt.push(Date.now());
+      return lease;
+    });
+    const third = acquireEVaultTrafficLease({ trafficClass: 'interactive' }).then((lease) => {
+      startedAt.push(Date.now());
+      return lease;
+    });
+    await Promise.resolve();
+
+    expect(startedAt).toEqual([firstStartedAt, firstStartedAt, firstStartedAt]);
+    expect(await second).toBeDefined();
+    expect(await third).toBeDefined();
+
+    const fourth = acquireEVaultTrafficLease({ trafficClass: 'interactive' });
+    await vi.advanceTimersByTimeAsync(249);
+    let fourthStarted = false;
+    void fourth.then(() => {
+      fourthStarted = true;
+    });
+    await Promise.resolve();
+    expect(fourthStarted).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await fourth).toBeDefined();
+    first?.release();
+    session.release();
   });
 
   it('holds background work for the full interactive playback transaction', async () => {
@@ -80,11 +116,13 @@ describe('eVault traffic governor', () => {
     resumed?.release();
   });
 
-  it('still spaces the next background request after an interactive preemption', async () => {
+  it('retains the conservative background cadence after an interactive preemption', async () => {
     vi.useFakeTimers();
     const first = await acquireEVaultTrafficLease({ trafficClass: 'background' });
-    await acquireEVaultTrafficLease({ trafficClass: 'interactive' });
+    const interactivePending = acquireEVaultTrafficLease({ trafficClass: 'interactive' });
     first?.release();
+    await vi.advanceTimersByTimeAsync(250);
+    await interactivePending;
 
     let resumed = false;
     const backgroundPending = acquireEVaultTrafficLease({ trafficClass: 'background' }).then(
@@ -93,7 +131,7 @@ describe('eVault traffic governor', () => {
         return lease;
       },
     );
-    await vi.advanceTimersByTimeAsync(999);
+    await vi.advanceTimersByTimeAsync(749);
     expect(resumed).toBe(false);
     await vi.advanceTimersByTimeAsync(1);
 
@@ -102,7 +140,30 @@ describe('eVault traffic governor', () => {
     background?.release();
   });
 
-  it('drops a queued request when its resumable task is cancelled', async () => {
+  it('does not spend a future cadence slot on a cancelled queued request', async () => {
+    vi.useFakeTimers();
+    await acquireEVaultTrafficLease({ trafficClass: 'interactive' });
+    const controller = new AbortController();
+    const cancelled = acquireEVaultTrafficLease({
+      trafficClass: 'interactive',
+      signal: controller.signal,
+    });
+    controller.abort();
+    expect(await cancelled).toBeUndefined();
+
+    const next = acquireEVaultTrafficLease({ trafficClass: 'interactive' });
+    await vi.advanceTimersByTimeAsync(249);
+    let resolved = false;
+    void next.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(await next).toBeDefined();
+  });
+
+  it('keeps background work single-flight and drops it when its durable task is cancelled', async () => {
     vi.useFakeTimers();
     const active = await acquireEVaultTrafficLease({ trafficClass: 'background' });
     const controller = new AbortController();
