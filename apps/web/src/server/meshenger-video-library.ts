@@ -158,7 +158,6 @@ const interactiveSharedProofTimeoutMs = 8_000;
 // outage we return a retryable result instead of silently beginning the old
 // multi-page history scan.
 const interactiveExactSharedCallProofTimeoutMs = 2_500;
-const interactiveGroupManifestHedgeDelayMs = 200;
 // Older eVaults can leave the indexed Chat lookup on a bounded legacy-history
 // scan. Give the normal indexed path a brief head start, then ask for the
 // known Chat envelope directly. The direct read is only a positive hedge: a
@@ -184,6 +183,12 @@ const maxCachedEVaultResolutions = 256;
 // not let that optional attempt consume the whole interactive playback budget
 // before the proven metadata fallback starts.
 const directFileDereferenceTimeoutMs = 2_000;
+// A new eVault can use the ordinary Registry platform credential to isolate a
+// canonical shared File read by tenant. Give an already-started cold credential
+// request only a very small head start before the legacy-compatible File path
+// proceeds without it. This trades at most one direct-file hedge interval for
+// avoiding an old platform-wide quota bucket on the normal first open.
+const sharedFilePlatformTokenWarmupBudgetMs = 250;
 // Some older eVaults have a valid GraphQL File record but a slow or unavailable
 // HTTP File redirect. Start that compatibility read shortly after the direct
 // request instead of serially paying both budgets. The first validated owner-
@@ -587,12 +592,6 @@ export type SharedSpaceAccess = {
   member: boolean;
 };
 type ExactSharedCallProofOutcome = 'not_eligible' | 'verified' | 'denied' | 'retry';
-interface DeferredGroupManifestFallback {
-  /** Starts the fallback immediately once the exact proof is inconclusive. */
-  startNow(): void;
-  /** Stops only an unstarted timer; never aborts shared source work in flight. */
-  cancelIfUnstarted(): void;
-}
 /**
  * A completed exact-record check can either prove the current share, identify
  * a contradiction in its current records, or be inconclusive for a legacy
@@ -2578,6 +2577,17 @@ export class MeshengerVideoLibrary {
               : options?.signal
                 ? 'background-cancellable'
                 : 'backoff';
+        // The documented `/files/:id` redirect is itself a W3DS eVault read.
+        // Start the reusable platform credential before any shared File reaches
+        // that endpoint so a current eVault can apply its tenant-scoped read
+        // quota to the canonical fast path too. A bounded wait immediately
+        // before the File call below makes this effective on a cold playback;
+        // legacy eVaults still accept the ordinary X-ENAME path if Registry is
+        // momentarily unavailable.
+        const sharedFilePlatformToken =
+          grant.accessScope === 'shared'
+            ? this.getPlatformToken(sourceReadPolicy, options?.signal).catch(() => undefined)
+            : undefined;
         const sharedProbeOptions = {
           priority:
             priority === 'interactive'
@@ -2646,21 +2656,11 @@ export class MeshengerVideoLibrary {
         // below, then resolves the owner's eVault and File URI directly; it
         // never calls a source-application bridge or requires a peer secret.
         //
-        // A fully addressed group CallSession has two legitimate current eVault
-        // proofs: its exact file-specific CallSession and the established
-        // GroupManifest fallback. Start the fallback at the same time as the
-        // exact read so a retryable/inconclusive CallSession never adds a second
-        // full remote round trip to the initial recording ticket. Its result is
-        // deliberately not consumed here: the exact proof still decides first,
-        // and a completed contradiction below invalidates this speculative
-        // broad-membership result before any File URL can be opened.
-        const deferredGroupManifestFallback =
-          grant.accessScope === 'shared' &&
-          !usesNativeFileAdmission &&
-          !hasRecentSharedAuthorizationReceipt &&
-          !options?.forceSourceRefresh
-            ? this.deferExactGroupManifestFallback(user, grant, priority, options?.signal, timing)
-            : undefined;
+        // A fully addressed group CallSession has an exact, file-specific
+        // proof and a broader GroupManifest compatibility fallback. On a
+        // constrained eVault, starting both creates a needless concurrent
+        // authorization fan-out. Resolve the exact proof first; only an
+        // inconclusive result below may start the established fallback.
         const exactGroupCallAuthorization =
           grant.accessScope === 'shared' &&
           !usesNativeFileAdmission &&
@@ -2675,7 +2675,6 @@ export class MeshengerVideoLibrary {
           // A current canonical group CallSession contradicts the sealed source
           // context. Do not let an unrelated broad GroupManifest cache revive a
           // different recording from the same group.
-          deferredGroupManifestFallback?.cancelIfUnstarted();
           this.invalidateSharedAccessProofs(user.eName, grant);
           throw this.confirmedSharedPlaybackDenied(grant);
         }
@@ -2692,12 +2691,10 @@ export class MeshengerVideoLibrary {
               ? 'verified'
               : 'not_eligible';
         if (exactSharedCallAuthorization === 'denied') {
-          deferredGroupManifestFallback?.cancelIfUnstarted();
           this.invalidateSharedAccessProofs(user.eName, grant);
           throw this.confirmedSharedPlaybackDenied(grant);
         }
         if (exactSharedCallAuthorization === 'retry') {
-          deferredGroupManifestFallback?.cancelIfUnstarted();
           throw new MeshengerVideoLibraryError(
             'This shared source is temporarily unavailable. Please try again.',
             'remote_unavailable',
@@ -2706,7 +2703,6 @@ export class MeshengerVideoLibrary {
         }
         let currentSharedAccessVerified =
           exactGroupCallAuthorization === 'verified' || exactSharedCallAuthorization === 'verified';
-        if (currentSharedAccessVerified) deferredGroupManifestFallback?.cancelIfUnstarted();
         let currentSharedAccessVerification: Promise<void> | undefined;
         const requireCurrentSharedAccess = async (): Promise<void> => {
           if (
@@ -2716,10 +2712,9 @@ export class MeshengerVideoLibrary {
           ) {
             return;
           }
-          // The normal fallback is now actually needed. Remove its small
-          // hedge delay; it joins any already-running GroupManifest probe using
-          // the exact same eVault proof key.
-          deferredGroupManifestFallback?.startNow();
+          // The normal fallback is now actually needed. It starts only after
+          // the file-specific proof was inconclusive, avoiding a speculative
+          // GroupManifest request on the ordinary successful playback path.
           currentSharedAccessVerification ??= reportTimingOnFailure(
             measureMediaResolutionPhase(timing, 'sharedAccessVerificationMs', () =>
               this.requirePlayableStreamGrant(user, streamId, {
@@ -2839,8 +2834,17 @@ export class MeshengerVideoLibrary {
             'eVaultResolutionMs',
             () => vaultResolution,
           );
-          const resolveFromVault = async (vault: ResolvedVault): Promise<string> =>
-            this.resolveMediaUrlFromEVault(
+          const resolveFromVault = async (vault: ResolvedVault): Promise<string> => {
+            const platformToken = sharedFilePlatformToken
+              ? await measureMediaResolutionPhase(timing, 'platformTokenMs', () =>
+                  awaitBoundedMediaOptimization(
+                    sharedFilePlatformToken,
+                    sharedFilePlatformTokenWarmupBudgetMs,
+                    options?.signal,
+                  ),
+                )
+              : undefined;
+            return this.resolveMediaUrlFromEVault(
               vault,
               file.metaEnvelopeId,
               sourceReadPolicy,
@@ -2848,11 +2852,13 @@ export class MeshengerVideoLibrary {
               timing,
               {
                 boundInteractiveFallback: interactive && grant.accessScope === 'shared',
+                ...(platformToken ? { platformToken } : {}),
                 ...(options?.allowExtendedLegacyFileMetadataWait
                   ? { legacyMetadataTimeoutMs: initialRecordingLegacyFileMetadataTimeoutMs }
                   : {}),
               },
             );
+          };
           let mediaUrl: string;
           try {
             mediaUrl = await resolveFromVault(initialVault.vault);
@@ -2948,6 +2954,7 @@ export class MeshengerVideoLibrary {
     metaEnvelopeId: string,
     policy: SourceReadPolicy,
     signal?: AbortSignal,
+    platformToken?: string,
   ): Promise<string | undefined> {
     throwIfMediaResolutionAborted(signal);
     const endpointFallbackKey = `${vault.eVaultUri}\u0000endpoint`;
@@ -2975,6 +2982,12 @@ export class MeshengerVideoLibrary {
       });
     }
     const governedSignal = combineMediaResolutionSignals(signal, trafficLease.signal);
+    // eVault's File redirect intentionally remains compatible with older
+    // deployments that require only X-ENAME. When the normal W3DS platform
+    // credential is already warm, however, include it so newer eVaults can
+    // isolate this read by (platform, owner eName) rather than charging every
+    // Vidak File open to one shared platform-wide quota bucket.
+    const filePlatformToken = platformToken ?? this.cachedPlatformToken();
     let response: Response;
     try {
       response = await fetch(
@@ -2983,6 +2996,7 @@ export class MeshengerVideoLibrary {
           method: 'GET',
           headers: {
             'X-ENAME': vault.ownerEName,
+            ...(filePlatformToken ? { Authorization: `Bearer ${filePlatformToken}` } : {}),
           },
           cache: 'no-store',
           redirect: 'manual',
@@ -3059,14 +3073,25 @@ export class MeshengerVideoLibrary {
     policy: SourceReadPolicy,
     signal?: AbortSignal,
     timing?: MediaResolutionTiming,
-    options?: { boundInteractiveFallback?: boolean; legacyMetadataTimeoutMs?: number },
+    options?: {
+      boundInteractiveFallback?: boolean;
+      legacyMetadataTimeoutMs?: number;
+      platformToken?: string;
+    },
   ): Promise<string> {
     const directController = new AbortController();
     const directSignal = combineMediaResolutionSignals(signal, directController.signal);
     const direct: Promise<MediaUrlResolutionAttempt> = measureMediaResolutionPhase(
       timing,
       'directFileDereferenceMs',
-      () => this.tryDereferenceFileMediaUrl(vault, metaEnvelopeId, policy, directSignal),
+      () =>
+        this.tryDereferenceFileMediaUrl(
+          vault,
+          metaEnvelopeId,
+          policy,
+          directSignal,
+          options?.platformToken,
+        ),
     ).then(
       (mediaUrl): MediaUrlResolutionAttempt => ({ mediaUrl }),
       (error: unknown): MediaUrlResolutionAttempt => ({ error }),
@@ -3739,78 +3764,9 @@ export class MeshengerVideoLibrary {
   }
 
   /**
-   * Starts the established generic group-membership fallback while a fully
-   * addressed group CallSession is being checked. This is an interactive
-   * eVault/W3DS metadata read only: it neither returns a File redirect nor
-   * changes the exact CallSession's terminal-denial precedence. The normal
-   * fallback below joins this same coalesced proof only after the exact result
-   * has been evaluated.
-   */
-  private deferExactGroupManifestFallback(
-    user: ViewerIdentity,
-    grant: StreamGrant,
-    priority: MediaResolutionPriority,
-    signal?: AbortSignal,
-    timing?: MediaResolutionTiming,
-  ): DeferredGroupManifestFallback | undefined {
-    if (priority !== 'interactive' || !exactGroupCallProofContext(grant)) return undefined;
-    const groupSource = sharedStreamProbes(grant).find(
-      (source): source is Extract<SharedSpaceProbe, { kind: 'group' }> => source.kind === 'group',
-    );
-    if (!groupSource) return undefined;
-
-    // A fast exact CallSession should remain the cheapest path. Give it a
-    // small head start, then begin the existing fallback before an
-    // inconclusive exact read can add an entire second eVault round trip.
-    // Once source work begins, it may be coalesced with another request, so
-    // cancellation below is intentionally limited to the timer itself.
-    const delayController = new AbortController();
-    const delaySignal = combineMediaResolutionSignals(signal, delayController.signal);
-    let started = false;
-    let startNow: () => void = () => undefined;
-    const forceStart = new Promise<void>((resolve) => {
-      startNow = resolve;
-    });
-    const pending = (async () => {
-      try {
-        await Promise.race([
-          sleepForMediaResolution(interactiveGroupManifestHedgeDelayMs, delaySignal),
-          forceStart,
-        ]);
-        throwIfMediaResolutionAborted(delaySignal);
-        started = true;
-        // A GroupManifest proof needs the platform credential after it has
-        // resolved the source eVault. Start that cacheable, non-authorizing
-        // refresh at the same time so the fallback truly overlaps the exact
-        // CallSession read.
-        void this.getPlatformToken('interactive').catch(() => undefined);
-        await this.startSharedAccessProof(user, groupSource, {
-          priority: 'interactive',
-          ...(signal ? { signal } : {}),
-          ...(timing ? { timing } : {}),
-        });
-      } catch (error) {
-        // An ignored hedge must never become an unhandled rejection. A caller
-        // that needs the fallback joins the same coalesced proof below and
-        // preserves its ordinary retry/denial behavior there.
-        if (delaySignal.aborted || signal?.aborted) return;
-        throw error;
-      }
-    })();
-    void pending.catch(() => undefined);
-    return {
-      startNow,
-      cancelIfUnstarted: () => {
-        if (!started) delayController.abort();
-      },
-    };
-  }
-
-  /**
    * One coalesced current eVault proof for a generic shared-source context.
-   * Keeping this in one helper means a speculative GroupManifest fallback and
-   * the authoritative fallback path share the exact same priority, cache
-   * revision, deadline, and retry semantics.
+   * Keeping this in one helper means every authoritative source fallback
+   * shares the same priority, cache revision, deadline, and retry semantics.
    */
   private startSharedAccessProof(
     user: ViewerIdentity,
@@ -8161,15 +8117,21 @@ export class MeshengerVideoLibrary {
   }
 
   /** Registry-issued token used by the documented W3DS Web3 Adapter flow. */
+  private cachedPlatformToken(): string | undefined {
+    const cacheKey = `${this.config.registryBaseUrl}\u0000${this.config.platformName}`;
+    const cached = cachedPlatformTokens.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) return cached.token;
+    if (cached) cachedPlatformTokens.delete(cacheKey);
+    return undefined;
+  }
+
   private async getPlatformToken(
     rateLimit: SourceReadPolicy = 'fail-fast',
     signal?: AbortSignal,
   ): Promise<string> {
     const cacheKey = `${this.config.registryBaseUrl}\u0000${this.config.platformName}`;
-    const now = Date.now();
-    const cached = cachedPlatformTokens.get(cacheKey);
-    if (cached && cached.expiresAt > now) return cached.token;
-    if (cached) cachedPlatformTokens.delete(cacheKey);
+    const cached = this.cachedPlatformToken();
+    if (cached) return cached;
     const tokenPolicy: SourceReadPolicy =
       rateLimit === 'background-cancellable' || rateLimit === 'warmup-cancellable'
         ? 'backoff'
