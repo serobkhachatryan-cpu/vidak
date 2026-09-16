@@ -1280,6 +1280,53 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('obtains the W3DS platform credential before a cold canonical shared File redirect', async () => {
+    const library = configuredLibrary();
+    const playbackHeaders: Headers[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: URL, init?: RequestInit) => {
+        if (url.pathname === '/platforms/certification') {
+          return json({ token: 'registry-platform-token' });
+        }
+        if (url.pathname === '/resolve') {
+          return json({ ename: '@friend.w3id', uri: 'https://friend-vault.example' });
+        }
+        if (url.pathname === '/files/authenticated-shared-file') {
+          playbackHeaders.push(new Headers(init?.headers));
+          return new Response(null, {
+            status: 302,
+            headers: { location: 'https://media.example/authenticated-shared-file.mp4' },
+          });
+        }
+        throw new Error(`Unexpected request: ${url.pathname}`);
+      }),
+    );
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/authenticated-shared-file',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        sourceChatId: 'shared-file-chat',
+        sourceChatKind: 'direct',
+        accessBasis: 'history',
+      },
+      secret,
+    );
+
+    try {
+      await expect(library.resolveMediaUrl({ eName: grant.eName }, streamId)).resolves.toBe(
+        'https://media.example/authenticated-shared-file.mp4',
+      );
+      expect(playbackHeaders).toHaveLength(1);
+      expect(playbackHeaders[0]?.get('X-ENAME')).toBe('@friend.w3id');
+      expect(playbackHeaders[0]?.get('Authorization')).toBe('Bearer registry-platform-token');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('hedges a slow owner eVault File redirect with its canonical metadata read for shared Watch', async () => {
     let directStarted = false;
     let directAborted = false;
@@ -2342,7 +2389,7 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('hedges a slow exact group CallSession with GroupManifest without letting it override a denial', async () => {
+  it('does not fan out a GroupManifest while an exact group CallSession is pending', async () => {
     vi.useFakeTimers();
     const viewer = { eName: '@person.w3id' };
     const library = configuredLibrary();
@@ -2378,7 +2425,7 @@ describe('Meshenger video library', () => {
       );
       await vi.advanceTimersByTimeAsync(200);
       await Promise.resolve();
-      expect(groupManifest).toHaveBeenCalledOnce();
+      expect(groupManifest).not.toHaveBeenCalled();
 
       releaseExactVault?.({ ownerEName: '@group.w3id', eVaultUri: 'https://group-vault.example' });
       await expect(pending).rejects.toThrow(
@@ -2391,7 +2438,7 @@ describe('Meshenger video library', () => {
     }
   });
 
-  it('reuses a hedged GroupManifest proof when an exact group CallSession is retryable', async () => {
+  it('starts the GroupManifest fallback only after an exact group CallSession is retryable', async () => {
     vi.useFakeTimers();
     const viewer = { eName: '@person.w3id' };
     const library = configuredLibrary();
@@ -2422,14 +2469,14 @@ describe('Meshenger video library', () => {
       );
       await vi.advanceTimersByTimeAsync(200);
       await Promise.resolve();
-      expect(groupManifest).toHaveBeenCalledOnce();
+      expect(groupManifest).not.toHaveBeenCalled();
 
       rejectExactVault?.(
         new MeshengerVideoLibraryError('source unavailable', 'remote_unavailable', 503),
       );
       await expect(pending).resolves.toBe('https://media.example/hedged-group-retry.mp4');
-      // The fallback path joins the proof begun during the exact read rather
-      // than issuing a second GroupManifest request after it returns retry.
+      // The wider fallback begins only after the file-specific proof is
+      // inconclusive, avoiding an otherwise redundant eVault request.
       expect(groupManifest).toHaveBeenCalledOnce();
     } finally {
       vi.useRealTimers();
