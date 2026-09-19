@@ -54,18 +54,14 @@ export async function GET(request: NextRequest) {
     const items = await Promise.all(
       snapshot.items.map(async (item) => attachPreviewFields(item, session.user, previewService)),
     );
-    const personalPreviewItems = snapshot.items.filter(
-      (item) => item.accessScope === 'personal' && item.streamIds.length > 0,
-    );
-    if (previewService && personalPreviewItems.length > 0) {
-      // Owned previews are local to this service, so repairing them from the
-      // catalogue has no effect on a shared source. Shared posters are queued
-      // only by their viewport-driven image route: starting every remote
-      // source after each library response kept a large catalogue busy enough
-      // to contend with a viewer opening one of its videos. The card route
-      // still creates every shared preview as it becomes visible.
+    const previewItems = snapshot.items.filter((item) => item.streamIds.length > 0);
+    if (previewService && previewItems.length > 0) {
+      // The queue has the viewer-bound stream grants required to safely
+      // re-open shared sources. Queue every eligible card so historical
+      // shared failures repair when a viewer opens their catalogue; the
+      // service processes one low-priority job at a time and Watch preempts it.
       void previewService
-        .scheduleLibraryBackfill(session.user, personalPreviewItems)
+        .scheduleLibraryBackfill(session.user, previewItems)
         .catch(() => undefined);
     }
 

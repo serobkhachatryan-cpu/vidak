@@ -122,6 +122,10 @@ describe('eVault video library route', () => {
         id: 'w3ds-file:@person.w3id/video-1',
         streamIds: ['opaque-stream-id'],
       }),
+      expect.objectContaining({
+        id: 'w3ds-file:@group.w3id/video-2',
+        streamIds: ['shared-stream-id'],
+      }),
     ]);
   });
 
@@ -316,7 +320,7 @@ describe('eVault video library route', () => {
     );
   });
 
-  it('leaves shared preview work to the viewport-driven card route', async () => {
+  it('queues every eligible shared card for bounded preview repair', async () => {
     const sharedItems = Array.from({ length: 9 }, (_, index) => ({
       id: `w3ds-file:@owner.w3id/shared-${index}`,
       kind: 'file' as const,
@@ -366,7 +370,7 @@ describe('eVault video library route', () => {
       }),
     );
 
-    expect(scheduleLibraryBackfill).not.toHaveBeenCalled();
+    expect(scheduleLibraryBackfill).toHaveBeenCalledWith({ eName: '@person.w3id' }, sharedItems);
   });
 
   it('keeps the catalogue available when one card preview cannot be inspected', async () => {
