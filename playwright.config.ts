@@ -1,5 +1,8 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const e2ePort = Number(process.env.E2E_PORT ?? '3000');
+const e2eOrigin = `http://127.0.0.1:${e2ePort}`;
+
 /**
  * E2E boots the web app with a non-production W3DS stub:
  * in-memory auth store + local identity verifier (no wallet, registry, or DB).
@@ -7,7 +10,7 @@ import { defineConfig, devices } from '@playwright/test';
 const w3dsE2eEnv = {
   AUTH_PROVIDER: 'w3ds',
   NEXT_PUBLIC_AUTH_PROVIDER: 'w3ds',
-  APP_ORIGIN: 'http://127.0.0.1:3000',
+  APP_ORIGIN: e2eOrigin,
   W3DS_AUTH_PLATFORM_NAME: 'vidak',
   W3DS_REGISTRY_BASE_URL: 'http://127.0.0.1:9',
   W3DS_AUTH_JWT_SECRET: 'e2e-only-test-secret-at-least-32-chars',
@@ -21,15 +24,14 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 0,
   reporter: process.env.CI ? [['github'], ['html', { open: 'never' }]] : 'list',
   use: {
-    baseURL: 'http://127.0.0.1:3000',
+    baseURL: e2eOrigin,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure',
   },
   webServer: {
-    command:
-      'rm -rf apps/web/.next apps/web/.data/w3ds-e2e-auth-state.json && pnpm --filter @w3ds/web dev',
-    url: 'http://127.0.0.1:3000',
+    command: `rm -rf apps/web/.next apps/web/.data/w3ds-e2e-auth-state.json && pnpm --filter @w3ds/web dev --hostname 127.0.0.1 --port ${e2ePort}`,
+    url: e2eOrigin,
     // Stub env must win over a developer `next dev` already bound to :3000.
     reuseExistingServer: false,
     timeout: 120_000,

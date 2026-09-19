@@ -2,16 +2,19 @@ import type { Video } from '@w3ds/types';
 import { describe, expect, it } from 'vitest';
 import {
   canPlayLibraryVideo,
+  canWatchOwnedVidakVideo,
   evaultItemsForTab,
   isVideoSpaceEmpty,
   libraryCardDetails,
   libraryDiscoveryBanner,
   libraryProgressCopy,
+  librarySourceLabel,
   libraryUpdatingCopy,
+  libraryVideoCardPresentation,
   ownedItemsForTab,
+  ownedVideoCardPresentation,
   ownedVideoPoster,
   previewFallbackCopy,
-  shareChangeConfirmation,
   sharedInventoryBanner,
   type VideoSpaceLibraryItem,
   videoSpaceEmptyCopy,
@@ -71,10 +74,10 @@ describe('video space home model', () => {
     expect(videoSpaceEmptyCopy.description).not.toMatch(/messenger/i);
     expect(videoSpaceEmptyCopy.description).not.toMatch(/import from/i);
     expect(videoSpaceTabs.map((tab) => tab.label)).toEqual([
-      'All videos',
+      'All accessible',
       'My videos',
       'Shared with me',
-      'Public videos published in Vidak',
+      'Public catalogue',
     ]);
   });
 
@@ -104,20 +107,16 @@ describe('video space home model', () => {
     expect(guide).toContain('private');
     expect(guide).toContain('authorized');
     expect(guide).toContain('does not upload, copy, or change');
-    expect(guide).toContain('card actions explain your relationship');
-    expect(guide).toContain('resume draft');
-    expect(guide).toContain('watch video');
-    expect(guide).toContain('make private');
-    expect(guide).toContain('rechecks that authorization when playback starts');
-    expect(guide).toContain('their name is shown on the card');
-    expect(guide).toContain('first secure scan can take a moment');
-    expect(guide).not.toContain('shared videos remain unavailable');
+    expect(guide).toContain('prepare their audience before or after editing');
+    expect(guide).toContain('view-only videos');
+    expect(guide).toContain('watching never changes');
+    expect(guide).not.toContain('unpublish');
     expect(guide).not.toContain('messenger');
   });
 
   it('labels a verified direct share with the sharer’s chosen public name', () => {
     expect(
-      libraryCardDetails({
+      librarySourceLabel({
         ...sharedVideo,
         sharedVia: 'conversation',
         sharedBy: 'Ada Lovelace',
@@ -332,14 +331,86 @@ describe('video space home model', () => {
     ).toBeUndefined();
   });
 
-  it('explains that making a published video private returns it to a draft without deleting media', () => {
-    expect(shareChangeConfirmation('private')).toMatch(/remove.*public.*unlisted/i);
-    expect(shareChangeConfirmation('private')).toMatch(/private draft/i);
-    expect(shareChangeConfirmation('private')).toMatch(/media stays/i);
-    expect(shareChangeConfirmation('public')).toMatch(/Public/);
+  it('uses one explicit action contract for drafts, owned videos, and shared videos', () => {
+    const draft = ownedVideoCardPresentation({
+      status: 'draft',
+      visibility: 'private',
+    });
+    expect(draft.kind).toBe('owned-draft');
+    expect(draft.primaryAction).toMatchObject({
+      id: 'continue-editing',
+      label: 'Continue editing',
+    });
+    expect(draft.secondaryAction).toMatchObject({
+      id: 'manage-access',
+      label: 'Manage access',
+    });
+
+    const published = ownedVideoCardPresentation({
+      status: 'published',
+      visibility: 'public',
+      publicVideoId: 'published-talk',
+    });
+    expect(
+      canWatchOwnedVidakVideo({
+        status: 'published',
+        visibility: 'public',
+        publicVideoId: 'published-talk',
+      }),
+    ).toBe(true);
+    expect(published.kind).toBe('owned-playable');
+    expect(published.primaryAction).toMatchObject({ id: 'watch', label: 'Watch video' });
+    expect(published.secondaryAction).toMatchObject({
+      id: 'manage-access',
+      label: 'Manage access',
+    });
+
+    const linkOnly = ownedVideoCardPresentation({
+      status: 'published',
+      visibility: 'unlisted',
+      publicVideoId: 'link-only-talk',
+    });
+    expect(linkOnly.kind).toBe('owned-playable');
+    expect(linkOnly.relationshipDescription).toMatch(/anyone with the link/i);
+    expect(linkOnly.relationshipDescription).toMatch(/not listed in the public catalogue/i);
+
+    const privateOwned = ownedVideoCardPresentation({
+      status: 'published',
+      visibility: 'private',
+    });
+    expect(privateOwned.kind).toBe('owned-manage-access');
+    expect(privateOwned.primaryAction).toMatchObject({
+      id: 'manage-access',
+      label: 'Manage access',
+    });
+    expect(privateOwned.relationshipDescription).toMatch(/not in the public catalogue/i);
+    expect(privateOwned.relationshipDescription).toMatch(/specific people/i);
+    expect(privateOwned.relationshipDescription).not.toMatch(/before sharing/i);
+
+    const playableShare = libraryVideoCardPresentation({
+      ...sharedVideo,
+      streamIds: ['viewer-bound-grant'],
+      sharedBy: 'Ada Lovelace',
+    });
+    expect(playableShare.kind).toBe('shared-playable');
+    expect(playableShare.relationshipLabel).toBe('Shared by Ada Lovelace');
+    expect(playableShare.primaryAction).toMatchObject({ id: 'watch' });
+    expect(playableShare.secondaryAction).toBeUndefined();
+
+    const checkingShare = libraryVideoCardPresentation({
+      ...sharedVideo,
+      sourceAccess: 'checking',
+    });
+    expect(checkingShare.kind).toBe('shared-checking');
+    expect(checkingShare.primaryAction).toBeUndefined();
+    expect(checkingShare.unavailable).toMatchObject({ label: 'Checking access' });
+
+    const unavailablePersonal = libraryVideoCardPresentation(ownVideo);
+    expect(unavailablePersonal.kind).toBe('personal-unavailable');
+    expect(unavailablePersonal.unavailable).toMatchObject({ label: 'Playback unavailable' });
   });
 
-  it('keeps card metadata useful without repeating the privacy badge', () => {
+  it('keeps card metadata useful without repeating its source context', () => {
     expect(
       libraryCardDetails({
         durationSeconds: 95,
@@ -355,9 +426,9 @@ describe('video space home model', () => {
         visibility: 'shared-with-me',
         kind: 'video-message',
       }),
-    ).toBe('Shared with you through a W3DS conversation');
+    ).toBe('');
     expect(
-      libraryCardDetails({
+      librarySourceLabel({
         accessScope: 'personal',
         visibility: 'private',
         kind: 'call-recording',

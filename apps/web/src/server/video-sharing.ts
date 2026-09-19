@@ -49,8 +49,12 @@ export class VideoSharingError extends Error {
 }
 
 export interface ManagedVideoSharingPolicy extends VideoSharingPolicy {
+  /** Owner-only context for a clear management screen; never returned to recipients. */
+  video: Pick<Video, 'id' | 'title' | 'status' | 'visibility' | 'publicVideoId'>;
   /** The owner-only URL to send to a named recipient. */
   shareUrl?: string;
+  /** Canonical player URL for a published public or link-only video. */
+  watchUrl?: string;
   /** Exact eVault `_acl` payload prepared from the user-facing policy. */
   w3dsAcl: W3dsRecordAccessControl;
   /**
@@ -105,8 +109,11 @@ export class VideoSharingService {
     const video = await this.requireOwnedVideo(videoId, user.id);
     const stored = await this.options.policyStore.getByVideoId(video.id, user.id);
     return this.toManagedPolicy(
-      stored ?? defaultVideoSharingPolicy({ visibility: video.visibility }),
+      stored && policyMatchesVideoVisibility(stored, video)
+        ? stored
+        : defaultVideoSharingPolicy({ visibility: video.visibility }),
       user.eName,
+      video,
     );
   }
 
@@ -132,12 +139,14 @@ export class VideoSharingService {
     const readerENames = await this.resolveRecipients(normalized.readerENames, user.eName);
 
     const existing = await this.options.policyStore.getByVideoId(video.id, user.id);
+    const compatibleExisting =
+      existing && policyMatchesVideoVisibility(existing, video) ? existing : undefined;
     // A private URL is only a locator, but rotating it whenever the audience
     // narrows or otherwise changes prevents stale links from advertising a
     // current resource after a recipient is removed.
     const shareToken =
-      existing && samePolicyAudience(existing, { ...normalized, readerENames })
-        ? existing.shareToken
+      compatibleExisting && samePolicyAudience(compatibleExisting, { ...normalized, readerENames })
+        ? compatibleExisting.shareToken
         : this.createToken();
     const stored = await this.options.policyStore.upsert({
       videoId: video.id,
@@ -155,7 +164,7 @@ export class VideoSharingService {
       throw new VideoSharingError('Video was not found.', 'not_found', 404);
     }
     await this.syncVideoSafe(updatedVideo, user.eName);
-    return this.toManagedPolicy(stored, user.eName);
+    return this.toManagedPolicy(stored, user.eName, updatedVideo);
   }
 
   /** Resolves a published Vidak video only when this signed-in viewer may watch it. */
@@ -163,7 +172,12 @@ export class VideoSharingService {
     const user = await this.requireUser(accessToken);
     const policy = await this.requireSharedPolicy(shareToken);
     const record = await this.options.videoStore.getShareableVideo(policy.videoId);
-    if (!record || record.ownerId !== policy.ownerId || record.video.status !== 'published') {
+    if (
+      !record ||
+      record.ownerId !== policy.ownerId ||
+      record.video.status !== 'published' ||
+      !policyMatchesVideoVisibility(policy, record.video)
+    ) {
       throw new VideoSharingError('This shared video is not available.', 'not_found', 404);
     }
     if (!this.viewerMayRead(policy, user)) {
@@ -179,7 +193,7 @@ export class VideoSharingService {
       throw new VideoSharingError('This shared video is not available.', 'not_found', 404);
     }
     const policy = await this.options.policyStore.getByShareToken(token);
-    if (!policy || policy.audience === 'private') {
+    if (!policy || (policy.audience !== 'people' && policy.audience !== 'public')) {
       throw new VideoSharingError('This shared video is not available.', 'not_found', 404);
     }
     return policy;
@@ -252,13 +266,26 @@ export class VideoSharingService {
   private toManagedPolicy(
     policy: VideoSharingPolicy,
     ownerEName: string,
+    video: Pick<Video, 'id' | 'title' | 'status' | 'visibility' | 'publicVideoId'>,
   ): ManagedVideoSharingPolicy {
     return {
       ...policy,
       readerENames: [...policy.readerENames],
       groupENames: [...policy.groupENames],
-      ...(policy.shareToken && policy.audience !== 'private'
+      video: {
+        id: video.id,
+        title: video.title,
+        status: video.status,
+        visibility: video.visibility,
+        ...(video.publicVideoId ? { publicVideoId: video.publicVideoId } : {}),
+      },
+      ...(policy.shareToken && policy.audience === 'people' && video.status === 'published'
         ? { shareUrl: `/watch/shared/${encodeURIComponent(policy.shareToken)}` }
+        : {}),
+      ...(video.publicVideoId &&
+      video.status === 'published' &&
+      (video.visibility === 'public' || video.visibility === 'unlisted')
+        ? { watchUrl: `/watch/${encodeURIComponent(video.publicVideoId)}` }
         : {}),
       w3dsAcl: toW3dsRecordAccessControl(policy, ownerEName),
       enforcement: {
@@ -287,6 +314,17 @@ function samePolicyAudience(
     sameStrings(existing.readerENames, next.readerENames) &&
     sameStrings(existing.groupENames, next.groupENames)
   );
+}
+
+/**
+ * The editor can change routing visibility while a sharing policy is stored.
+ * Never let that stale policy describe or authorize a different access level.
+ */
+function policyMatchesVideoVisibility(
+  policy: Pick<VideoSharingPolicy, 'audience'>,
+  video: Pick<Video, 'visibility'>,
+): boolean {
+  return visibilityForVideoSharingPolicy(policy) === video.visibility;
 }
 
 function sameStrings(left: readonly string[], right: readonly string[]): boolean {

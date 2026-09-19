@@ -44,10 +44,10 @@ export { videoSpaceVisibilityLabels } from '../../server/video-space/visibility'
 export { completeInventory };
 
 export const videoSpaceTabs: ReadonlyArray<{ id: VideoSpaceTab; label: string }> = [
-  { id: 'all', label: 'All videos' },
+  { id: 'all', label: 'All accessible' },
   { id: 'yours', label: 'My videos' },
   { id: 'shared', label: 'Shared with me' },
-  { id: 'explore', label: 'Public videos published in Vidak' },
+  { id: 'explore', label: 'Public catalogue' },
 ];
 
 export const videoSpaceEmptyCopy = {
@@ -58,7 +58,7 @@ export const videoSpaceEmptyCopy = {
 
 /** Product copy deliberately describes the W3DS space, not a source app. */
 export const videoSpacePanelCopy = {
-  all: 'Every video you own or are authorized to view. My videos and Shared with me filter this same list.',
+  all: 'Your videos and videos shared with you are shown in separate groups, so each card makes its access and available actions clear.',
   mine: 'Every video you own in your W3DS space, including videos created in other W3DS apps. Finding them never changes their sharing rules.',
   shared:
     'Videos other people own that you are currently authorized to view. Finding them never changes their sharing rules.',
@@ -66,21 +66,185 @@ export const videoSpacePanelCopy = {
   emptyShared:
     'When someone authorizes you to view a video in their W3DS space, it will appear here.',
   emptyAll:
-    'Videos you own or are authorized to view will appear here. The Public videos tab contains Vidak-published videos.',
+    'Videos you own or are authorized to view will appear here. The Public catalogue contains Vidak-published videos.',
 } as const;
 
 /** Plain-language orientation for the private W3DS library. */
 export const videoSpaceGuideCopy = {
-  title: 'Start here',
-  summary: 'Choose what you want to do',
+  title: 'How this library works',
+  summary: 'Every card explains why it is here and what you can do with it.',
   points: [
-    'My videos contains videos owned by your eID. Shared with me contains only videos whose owner has explicitly authorized you to view them. When a direct sharer has chosen a public Vidak name, their name is shown on the card.',
-    'Watching never makes a video public or changes its sharing rules. A card marked Private stays private.',
-    'Vidak continues synchronizing your library automatically. Refresh checks for updates right away; it does not upload, copy, or change your original videos. The first secure scan can take a moment; returning to your library and opening a video reuse a warm private session.',
-    'Upload starts a new Vidak draft. You choose whether to publish it when it is ready.',
-    'Card actions explain your relationship to a video: Resume draft continues a Vidak upload, Watch video opens a video you can play, and Unpublish & make private returns only your published Vidak video to a private draft without deleting its media. Shared videos have Watch when the source currently authorizes you; Vidak rechecks that authorization when playback starts.',
+    'My videos contains videos you own in your private W3DS space. You can prepare their audience before or after editing. Videos from another W3DS app stay managed by that app.',
+    'Shared with me contains view-only videos whose owner has authorized you. Watching never changes their privacy or sharing rules.',
+    'Vidak synchronizes this library automatically. Refresh checks for updates right away; it does not upload, copy, or change your original videos.',
   ],
 } as const;
+
+export type VideoSpaceCardActionId = 'continue-editing' | 'watch' | 'manage-access';
+
+export interface VideoSpaceCardAction {
+  id: VideoSpaceCardActionId;
+  label: string;
+  description: string;
+}
+
+/**
+ * The user-facing contract for a card.  Rendering code must derive its
+ * primary action from this model rather than from which app discovered the
+ * video.  That prevents a shared card from ever looking like an owner card.
+ */
+export interface VideoSpaceCardPresentation {
+  kind:
+    | 'owned-draft'
+    | 'owned-playable'
+    | 'owned-manage-access'
+    | 'personal-playable'
+    | 'personal-unavailable'
+    | 'shared-playable'
+    | 'shared-checking'
+    | 'shared-unavailable';
+  relationshipLabel: string;
+  relationshipDescription: string;
+  primaryAction?: VideoSpaceCardAction;
+  secondaryAction?: VideoSpaceCardAction;
+  unavailable?: {
+    label: string;
+    description: string;
+  };
+}
+
+export function canWatchOwnedVidakVideo(
+  video: Pick<Video, 'status' | 'publicVideoId' | 'visibility'>,
+): boolean {
+  return (
+    video.status === 'published' &&
+    Boolean(video.publicVideoId) &&
+    (video.visibility === 'public' || video.visibility === 'unlisted')
+  );
+}
+
+export function ownedVideoCardPresentation(
+  video: Pick<Video, 'status' | 'publicVideoId' | 'visibility'>,
+): VideoSpaceCardPresentation {
+  if (video.status === 'draft') {
+    return {
+      kind: 'owned-draft',
+      relationshipLabel: 'You own this draft',
+      relationshipDescription: 'Finish editing now, or prepare its audience for publication.',
+      primaryAction: {
+        id: 'continue-editing',
+        label: 'Continue editing',
+        description: 'Open this draft in the Vidak editor.',
+      },
+      secondaryAction: {
+        id: 'manage-access',
+        label: 'Manage access',
+        description: 'Prepare who can watch after this draft is published.',
+      },
+    };
+  }
+
+  if (canWatchOwnedVidakVideo(video)) {
+    const isLinkOnly = video.visibility === 'unlisted';
+    return {
+      kind: 'owned-playable',
+      relationshipLabel: 'You own this Vidak video',
+      relationshipDescription: isLinkOnly
+        ? 'Anyone with the link can watch it. It is not listed in the public catalogue.'
+        : 'You can watch it and choose who can access it.',
+      primaryAction: {
+        id: 'watch',
+        label: 'Watch video',
+        description: 'Open the video player.',
+      },
+      secondaryAction: {
+        id: 'manage-access',
+        label: 'Manage access',
+        description: 'Choose who can watch this video.',
+      },
+    };
+  }
+
+  return {
+    kind: 'owned-manage-access',
+    relationshipLabel: 'You own this Vidak video',
+    relationshipDescription:
+      'It is not in the public catalogue. Manage access to review who can watch it or share it with specific people.',
+    primaryAction: {
+      id: 'manage-access',
+      label: 'Manage access',
+      description: 'Choose who can watch this video.',
+    },
+  };
+}
+
+export function libraryVideoCardPresentation(
+  video: Pick<
+    VideoSpaceLibraryItem,
+    'accessScope' | 'kind' | 'visibility' | 'sharedVia' | 'sharedBy' | 'sourceAccess' | 'streamIds'
+  >,
+): VideoSpaceCardPresentation {
+  const playable = canPlayLibraryVideo(video);
+  const source = librarySourceLabel(video);
+
+  if (video.accessScope === 'shared' || video.visibility === 'shared-with-me') {
+    if (playable) {
+      return {
+        kind: 'shared-playable',
+        relationshipLabel: video.sharedBy ? `Shared by ${video.sharedBy}` : 'Shared with you',
+        relationshipDescription: `${source}. View only — only the owner can change access.`,
+        primaryAction: {
+          id: 'watch',
+          label: 'Watch video',
+          description: 'Open this shared video.',
+        },
+      };
+    }
+    if (video.sourceAccess === 'checking') {
+      return {
+        kind: 'shared-checking',
+        relationshipLabel: video.sharedBy ? `Shared by ${video.sharedBy}` : 'Shared with you',
+        relationshipDescription: `${source}. View only — only the owner can change access.`,
+        unavailable: {
+          label: 'Checking access',
+          description: 'Vidak is confirming that the owner still authorizes playback.',
+        },
+      };
+    }
+    return {
+      kind: 'shared-unavailable',
+      relationshipLabel: video.sharedBy ? `Shared by ${video.sharedBy}` : 'Shared with you',
+      relationshipDescription: `${source}. View only — only the owner can change access.`,
+      unavailable: {
+        label: 'Playback unavailable',
+        description: 'The source does not currently provide a playable video for your account.',
+      },
+    };
+  }
+
+  if (playable) {
+    return {
+      kind: 'personal-playable',
+      relationshipLabel: 'Your W3DS video',
+      relationshipDescription: `${source}. Its sharing policy stays managed by the app that created it.`,
+      primaryAction: {
+        id: 'watch',
+        label: 'Watch video',
+        description: 'Open this video from your W3DS space.',
+      },
+    };
+  }
+
+  return {
+    kind: 'personal-unavailable',
+    relationshipLabel: 'Your W3DS video',
+    relationshipDescription: `${source}. Its sharing policy stays managed by the app that created it.`,
+    unavailable: {
+      label: 'Playback unavailable',
+      description: 'The source does not currently provide a playable video.',
+    },
+  };
+}
 
 export function evaultItemsForTab(
   items: readonly VideoSpaceLibraryItem[],
@@ -217,13 +381,6 @@ export function formatSpaceDuration(seconds: number): string {
     : `${minutes}:${String(remainder).padStart(2, '0')}`;
 }
 
-export function shareChangeConfirmation(next: VideoSpaceVisibility): string {
-  if (next === 'private') {
-    return 'This will remove the video from public or unlisted access and return it to a private draft. Its media stays in Vidak. Continue?';
-  }
-  return `This changes only this video’s visibility to ${videoSpaceVisibilityLabels[next]}. Continue?`;
-}
-
 export function librarySourceLabel(
   video: Pick<
     VideoSpaceLibraryItem,
@@ -256,7 +413,6 @@ export function libraryCardDetails(
   const values = [
     video.durationSeconds !== undefined ? formatSpaceDuration(video.durationSeconds) : undefined,
     video.createdAt ? new Date(video.createdAt).toLocaleDateString() : undefined,
-    librarySourceLabel(video),
   ].filter(Boolean);
   return values.join(' · ');
 }

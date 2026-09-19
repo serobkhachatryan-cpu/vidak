@@ -4,7 +4,7 @@ import type { Video } from '@w3ds/types';
 import { Button, VideoSpacePoster } from '@w3ds/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useRef } from 'react';
+import { type ComponentProps, useCallback, useEffect, useRef } from 'react';
 import { preloadContinuousRecordingTicket } from '../watch/recording-ticket-preload';
 import {
   cancelCancellableSharedVideoAuthorizationHoverWork,
@@ -13,89 +13,209 @@ import {
 } from './shared-video-authorization-warmup';
 import {
   canPlayLibraryVideo,
+  formatSpaceDuration,
   libraryCardDetails,
+  libraryVideoCardPresentation,
+  ownedVideoCardPresentation,
   ownedVideoPoster,
   ownedVideoSpaceVisibility,
+  type VideoSpaceCardPresentation,
   type VideoSpaceLibraryItem,
   videoSpaceVisibilityLabels,
 } from './video-space-model';
 
-export function OwnedVideoCard({
-  video,
-  isPending,
-  onWatch,
-  onContinueDraft,
-  onChangeVisibility,
-  onManageSharing,
+type CardLinkInteractionProps = Pick<
+  ComponentProps<typeof Link>,
+  | 'onPointerEnter'
+  | 'onPointerLeave'
+  | 'onFocus'
+  | 'onBlur'
+  | 'onPointerDown'
+  | 'onClick'
+  | 'onNavigate'
+>;
+
+function CardTitle({
+  id,
+  title,
+  href,
+  actionLabel,
+  linkInteractionProps,
 }: {
-  video: Video;
-  isPending: boolean;
-  onWatch: (video: Video) => void;
-  onContinueDraft: (video: Video) => void;
-  onChangeVisibility: (video: Video, next: 'private') => void;
-  onManageSharing: (video: Video) => void;
+  id: string;
+  title: string;
+  href?: string;
+  actionLabel?: string;
+  linkInteractionProps?: CardLinkInteractionProps;
 }) {
-  const visibility = ownedVideoSpaceVisibility(video);
-  const canWatch =
-    video.status === 'published' &&
-    Boolean(video.publicVideoId) &&
-    (video.visibility === 'public' || video.visibility === 'unlisted');
-  const poster = ownedVideoPoster(video);
+  return (
+    <h3 id={id} className="font-semibold text-foreground">
+      {href ? (
+        <Link
+          href={href}
+          prefetch={false}
+          aria-label={actionLabel ? `${actionLabel}: ${title}` : title}
+          className="rounded hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          {...linkInteractionProps}
+        >
+          {title}
+        </Link>
+      ) : (
+        title
+      )}
+    </h3>
+  );
+}
+
+function CardRelationship({
+  presentation,
+  details,
+}: {
+  presentation: VideoSpaceCardPresentation;
+  details?: string;
+}) {
+  return (
+    <div className="space-y-1">
+      <p className="text-xs font-semibold uppercase tracking-wide text-primary">
+        {presentation.relationshipLabel}
+      </p>
+      <p className="text-sm text-muted-foreground">{presentation.relationshipDescription}</p>
+      {details ? <p className="text-sm text-muted-foreground">{details}</p> : null}
+    </div>
+  );
+}
+
+function CardActions({
+  presentation,
+  onPrimaryAction,
+  onSecondaryAction,
+}: {
+  presentation: VideoSpaceCardPresentation;
+  onPrimaryAction?: () => void;
+  onSecondaryAction?: () => void;
+}) {
+  if (presentation.unavailable) {
+    return (
+      <div
+        className="rounded-lg border border-border bg-muted/30 p-3 text-sm"
+        role="status"
+        aria-live="polite"
+      >
+        <p className="font-medium text-foreground">{presentation.unavailable.label}</p>
+        <p className="mt-1 text-muted-foreground">{presentation.unavailable.description}</p>
+      </div>
+    );
+  }
 
   return (
-    <article className="overflow-hidden rounded-xl border border-border bg-surface-raised">
-      <VideoSpacePoster
-        title={video.title}
-        {...(poster.existingPoster
-          ? { posterUrl: poster.existingPoster, fallbackPosterUrl: poster.generatedPoster }
-          : { posterUrl: poster.generatedPoster })}
-        state={poster.state}
-        durationSeconds={video.durationSeconds}
-        visibilityLabel={visibility.label}
-        locked={visibility.id === 'private'}
-        loadWhenVisible
-      />
-      <div className="space-y-3 p-4">
+    <div className="space-y-2">
+      {presentation.primaryAction && onPrimaryAction ? (
         <div className="space-y-1">
-          <h3 className="font-semibold text-foreground">{video.title}</h3>
-          <p className="text-sm text-muted-foreground">
-            {video.status === 'draft' ? 'Your Vidak draft' : 'Your Vidak video'}
+          <Button size="sm" onClick={onPrimaryAction}>
+            {presentation.primaryAction.label}
+          </Button>
+          <p className="text-xs text-muted-foreground">{presentation.primaryAction.description}</p>
+        </div>
+      ) : null}
+      {presentation.secondaryAction && onSecondaryAction ? (
+        <div className="space-y-1 border-t border-border pt-2">
+          <p className="text-xs font-medium text-muted-foreground">More options</p>
+          <Button size="sm" variant="secondary" onClick={onSecondaryAction}>
+            {presentation.secondaryAction.label}
+          </Button>
+          <p className="text-xs text-muted-foreground">
+            {presentation.secondaryAction.description}
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          {video.status === 'draft' ? (
-            <>
-              <Button size="sm" onClick={() => onContinueDraft(video)}>
-                Resume draft
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => onManageSharing(video)}>
-                Share / manage access
-              </Button>
-            </>
-          ) : (
-            <>
-              {canWatch ? (
-                <Button size="sm" onClick={() => onWatch(video)}>
-                  Watch video
-                </Button>
-              ) : null}
-              {visibility.id === 'public' || visibility.id === 'shared-by-me' ? (
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  isLoading={isPending}
-                  loadingText="Making private"
-                  onClick={() => onChangeVisibility(video, 'private')}
-                >
-                  Unpublish &amp; make private
-                </Button>
-              ) : null}
-              <Button size="sm" variant="secondary" onClick={() => onManageSharing(video)}>
-                Share / manage access
-              </Button>
-            </>
-          )}
-        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ownedVideoDetails(video: Video): string | undefined {
+  const values = [
+    video.durationSeconds !== undefined ? formatSpaceDuration(video.durationSeconds) : undefined,
+    video.createdAt ? new Date(video.createdAt).toLocaleDateString() : undefined,
+  ].filter(Boolean);
+  return values.length ? values.join(' · ') : undefined;
+}
+
+export function OwnedVideoCard({ video }: { video: Video }) {
+  const router = useRouter();
+  const visibility = ownedVideoSpaceVisibility(video);
+  const presentation = ownedVideoCardPresentation(video);
+  const poster = ownedVideoPoster(video);
+  const watchHref = video.publicVideoId
+    ? `/watch/${encodeURIComponent(video.publicVideoId)}`
+    : undefined;
+  const draftHref = `/upload?draft=${encodeURIComponent(video.id)}`;
+  const sharingHref = `/videos/${encodeURIComponent(video.id)}/sharing`;
+  const details = ownedVideoDetails(video);
+  const primaryHref =
+    presentation.primaryAction?.id === 'continue-editing'
+      ? draftHref
+      : presentation.primaryAction?.id === 'watch'
+        ? watchHref
+        : presentation.primaryAction?.id === 'manage-access'
+          ? sharingHref
+          : undefined;
+  const titleId = `video-card-title-${encodeURIComponent(video.id)}`;
+
+  return (
+    <article
+      className="overflow-hidden rounded-xl border border-border bg-surface-raised"
+      aria-labelledby={titleId}
+      data-card-kind={presentation.kind}
+    >
+      {primaryHref ? (
+        <Link
+          href={primaryHref}
+          prefetch={false}
+          aria-label={`${presentation.primaryAction?.label}: ${video.title}`}
+          className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+        >
+          <VideoSpacePoster
+            title={video.title}
+            {...(poster.existingPoster
+              ? { posterUrl: poster.existingPoster, fallbackPosterUrl: poster.generatedPoster }
+              : { posterUrl: poster.generatedPoster })}
+            state={poster.state}
+            durationSeconds={video.durationSeconds}
+            visibilityLabel={visibility.label}
+            locked={visibility.id === 'private'}
+            loadWhenVisible
+          />
+        </Link>
+      ) : (
+        <VideoSpacePoster
+          title={video.title}
+          {...(poster.existingPoster
+            ? { posterUrl: poster.existingPoster, fallbackPosterUrl: poster.generatedPoster }
+            : { posterUrl: poster.generatedPoster })}
+          state={poster.state}
+          durationSeconds={video.durationSeconds}
+          visibilityLabel={visibility.label}
+          locked={visibility.id === 'private'}
+          loadWhenVisible
+        />
+      )}
+      <div className="space-y-3 p-4">
+        <CardTitle
+          id={titleId}
+          title={video.title}
+          {...(primaryHref ? { href: primaryHref } : {})}
+          {...(presentation.primaryAction?.label
+            ? { actionLabel: presentation.primaryAction.label }
+            : {})}
+        />
+        <CardRelationship presentation={presentation} {...(details ? { details } : {})} />
+        <CardActions
+          presentation={presentation}
+          {...(primaryHref ? { onPrimaryAction: () => router.push(primaryHref) } : {})}
+          {...(presentation.secondaryAction
+            ? { onSecondaryAction: () => router.push(sharingHref) }
+            : {})}
+        />
       </div>
     </article>
   );
@@ -107,9 +227,11 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   const visibilityLabel = videoSpaceVisibilityLabels[video.visibility];
   const watchHref = `/watch/space/${encodeURIComponent(video.id)}`;
   const canPlay = canPlayLibraryVideo(video);
+  const presentation = libraryVideoCardPresentation(video);
   const streamIds = video.streamIds ?? [];
   const streamId = streamIds[0];
   const isSharedContinuousRecording = video.accessScope === 'shared' && streamIds.length > 1;
+  const titleId = `video-card-title-${encodeURIComponent(video.id)}`;
   const cancelSharedAuthorizationWarmup = useCallback(() => {
     cancelScheduledAuthorization.current?.();
     cancelScheduledAuthorization.current = undefined;
@@ -158,6 +280,7 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
     },
     [cancelSharedAuthorizationWarmup],
   );
+
   const poster = (
     <VideoSpacePoster
       title={video.title}
@@ -174,31 +297,39 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
     />
   );
 
+  const watchLinkProps: CardLinkInteractionProps = {
+    onPointerLeave: cancelSharedAuthorizationWarmup,
+    onBlur: cancelSharedAuthorizationWarmup,
+    onPointerDown: isSharedContinuousRecording
+      ? cancelSharedAuthorizationWarmup
+      : warmSharedAuthorization,
+    ...(isSharedContinuousRecording
+      ? {
+          // Next only invokes this for a real same-document navigation. New
+          // tabs and modified clicks mint their own single-use ticket.
+          onNavigate: preloadContinuousTicket,
+        }
+      : {
+          onPointerEnter: scheduleSharedAuthorizationWarmup,
+          onFocus: scheduleSharedAuthorizationWarmup,
+          onPointerDown: warmSharedAuthorization,
+          onClick: warmSharedAuthorization,
+        }),
+  };
+
   return (
-    <article className="overflow-hidden rounded-xl border border-border bg-surface-raised">
+    <article
+      className="overflow-hidden rounded-xl border border-border bg-surface-raised"
+      aria-labelledby={titleId}
+      data-card-kind={presentation.kind}
+    >
       {canPlay ? (
         <Link
           href={watchHref}
           prefetch={false}
-          aria-label={`Watch ${video.title}`}
-          className="block"
-          onPointerEnter={
-            isSharedContinuousRecording ? undefined : scheduleSharedAuthorizationWarmup
-          }
-          onPointerLeave={cancelSharedAuthorizationWarmup}
-          onFocus={isSharedContinuousRecording ? undefined : scheduleSharedAuthorizationWarmup}
-          onBlur={cancelSharedAuthorizationWarmup}
-          onPointerDown={
-            isSharedContinuousRecording ? cancelSharedAuthorizationWarmup : warmSharedAuthorization
-          }
-          {...(isSharedContinuousRecording
-            ? {
-                // Next only invokes this for a real same-document navigation.
-                // New tabs and modified clicks have no in-memory handoff to
-                // join, so they mint their own single-use ticket.
-                onNavigate: preloadContinuousTicket,
-              }
-            : { onClick: warmSharedAuthorization })}
+          aria-label={`Watch video: ${video.title}`}
+          className="block rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary"
+          {...watchLinkProps}
         >
           {poster}
         </Link>
@@ -206,35 +337,24 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
         poster
       )}
       <div className="space-y-3 p-4">
-        <div className="space-y-1">
-          <h3 className="font-semibold text-foreground">{video.title}</h3>
-          <p className="text-sm text-muted-foreground">{libraryCardDetails(video)}</p>
-        </div>
-        {canPlay ? (
-          <Button
-            size="sm"
-            onPointerEnter={
-              isSharedContinuousRecording ? undefined : scheduleSharedAuthorizationWarmup
-            }
-            onPointerLeave={cancelSharedAuthorizationWarmup}
-            onFocus={isSharedContinuousRecording ? undefined : scheduleSharedAuthorizationWarmup}
-            onBlur={cancelSharedAuthorizationWarmup}
-            onPointerDown={
-              isSharedContinuousRecording
-                ? cancelSharedAuthorizationWarmup
-                : warmSharedAuthorization
-            }
-            onClick={prepareButtonWatch}
-          >
-            Watch video
-          </Button>
-        ) : (
-          <p className="text-sm text-muted-foreground">
-            {video.sourceAccess === 'checking'
-              ? 'Vidak is retrying this shared source. Playback will be available once its permission check completes.'
-              : 'Playback is unavailable until Vidak verifies the source permission.'}
-          </p>
-        )}
+        <CardTitle
+          id={titleId}
+          title={video.title}
+          {...(canPlay
+            ? {
+                href: watchHref,
+                ...(presentation.primaryAction?.label
+                  ? { actionLabel: presentation.primaryAction.label }
+                  : {}),
+                linkInteractionProps: watchLinkProps,
+              }
+            : {})}
+        />
+        <CardRelationship presentation={presentation} details={libraryCardDetails(video)} />
+        <CardActions
+          presentation={presentation}
+          {...(canPlay ? { onPrimaryAction: prepareButtonWatch } : {})}
+        />
       </div>
     </article>
   );

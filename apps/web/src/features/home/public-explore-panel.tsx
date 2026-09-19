@@ -3,6 +3,7 @@
 import { useInfinitePublicVideos } from '@w3ds/hooks';
 import type { Video } from '@w3ds/types';
 import {
+  Button,
   EmptyState,
   ErrorState,
   Grid,
@@ -17,8 +18,16 @@ import { videoApiClient } from '../../lib/video-api-client';
 /** Public catalogue shared by the anonymous home and signed-in Explore tab. */
 export function PublicExplorePanel() {
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  const { data, error, fetchNextPage, hasNextPage, isFetchingNextPage, isPending, refetch } =
-    useInfinitePublicVideos(videoApiClient, 20);
+  const {
+    data,
+    error,
+    fetchNextPage,
+    hasNextPage,
+    isFetching,
+    isFetchingNextPage,
+    isPending,
+    refetch,
+  } = useInfinitePublicVideos(videoApiClient, 20);
 
   useEffect(() => {
     const target = loadMoreRef.current;
@@ -59,16 +68,32 @@ export function PublicExplorePanel() {
     return (
       <EmptyState
         title="No public videos published in Vidak yet"
-        description="This list is videos people published in Vidak. It is not a catalogue of all public W3DS media."
+        description="This list contains videos people published publicly in Vidak. Link-only and private videos are not listed here."
+        action={
+          <Button variant="secondary" onClick={() => void refetch()}>
+            Refresh public catalogue
+          </Button>
+        }
       />
     );
   }
 
   return (
     <>
-      <Text size="sm" tone="muted" className="mb-4">
-        Public videos published in Vidak. This list is not a catalogue of all public W3DS media.
-      </Text>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <Text size="sm" tone="muted">
+          Public videos published in Vidak. Link-only and private videos are not listed here.
+        </Text>
+        <Button
+          size="sm"
+          variant="secondary"
+          isLoading={isFetching}
+          loadingText="Refreshing"
+          onClick={() => void refetch()}
+        >
+          Refresh public catalogue
+        </Button>
+      </div>
       <Grid columns={5} gap={6}>
         {videos.map((video) => (
           <PublicVideoCard key={video.publicVideoId ?? video.id} video={video} />

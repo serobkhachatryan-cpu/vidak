@@ -59,7 +59,7 @@ const secondShared = {
   previewState: 'processing',
 };
 
-test('All videos grows from a partial union to the complete result without a refresh', async ({
+test('All accessible videos grows from a partial union to the complete result without a refresh', async ({
   page,
 }) => {
   let allCalls = 0;
@@ -95,7 +95,7 @@ test('All videos grows from a partial union to the complete result without a ref
 
   await signInTo(page, '@viewer.w3id', '/');
   await expectNoVerifiedNameOverlay(page);
-  await expect(page.getByRole('heading', { name: 'All videos' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'All accessible videos' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Call recording · 2026-08-24' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'First authorised clip' })).toBeVisible({
     timeout: 4000,
@@ -142,7 +142,7 @@ test('My videos and Shared with me filter the same complete inventory', async ({
   });
 
   await signInTo(page, '@owner.w3id', '/');
-  await expect(page.getByRole('heading', { name: 'All videos' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'All accessible videos' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Call recording · 2026-08-24' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'First authorised clip' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Second authorised clip' })).toBeVisible();

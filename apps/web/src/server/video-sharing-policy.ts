@@ -11,7 +11,7 @@ export const W3DS_ACL_READ = 0x01;
 /** The record owner must retain every documented permission. */
 export const W3DS_ACL_FULL = 0x0f;
 
-export type VideoSharingAudience = 'private' | 'people' | 'groups' | 'public';
+export type VideoSharingAudience = 'private' | 'people' | 'groups' | 'public' | 'unlisted';
 
 export interface W3dsRecordAclGrant {
   ename: string;
@@ -43,7 +43,7 @@ export interface UpdateVideoSharingPolicyInput {
 }
 
 const eNamePattern = /^@[^\s@]{1,254}$/;
-const audiences = ['private', 'people', 'groups', 'public'] as const;
+const audiences = ['private', 'people', 'groups', 'public', 'unlisted'] as const;
 const MAX_POLICY_PARTIES = 50;
 
 export class VideoSharingPolicyError extends Error {
@@ -112,23 +112,29 @@ export function toW3dsRecordAccessControl(
     v: 1,
     grants,
     denials: { enames: [], conditions: [] },
-    default_perms: policy.audience === 'public' ? W3DS_ACL_READ : 0,
-    require: policy.audience === 'public' ? [[]] : [],
+    // eVault ACL has no discovery dimension. Both public and link-only
+    // records are readable by anyone who can resolve their record; Vidak
+    // keeps link-only videos out of its catalogue at the routing layer.
+    default_perms:
+      policy.audience === 'public' || policy.audience === 'unlisted' ? W3DS_ACL_READ : 0,
+    require: policy.audience === 'public' || policy.audience === 'unlisted' ? [[]] : [],
   };
 }
 
-/** The local product policy only makes a video public for the public audience. */
+/** Maps a user-facing sharing choice to Vidak's distinct routing visibility. */
 export function visibilityForVideoSharingPolicy(
   policy: Pick<VideoSharingPolicy, 'audience'>,
-): 'public' | 'private' {
-  return policy.audience === 'public' ? 'public' : 'private';
+): 'public' | 'unlisted' | 'private' {
+  if (policy.audience === 'public') return 'public';
+  if (policy.audience === 'unlisted') return 'unlisted';
+  return 'private';
 }
 
 export function defaultVideoSharingPolicy(input: {
   visibility: 'public' | 'unlisted' | 'private';
 }): VideoSharingPolicy {
   return {
-    audience: input.visibility === 'public' ? 'public' : 'private',
+    audience: input.visibility,
     readerENames: [],
     groupENames: [],
   };

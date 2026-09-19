@@ -49,17 +49,18 @@ describe('video space visibility', () => {
       'private',
     );
     expect(visibilityForOwnedVidakVideo({ status: 'published', visibility: 'unlisted' })).toBe(
-      'shared-by-me',
+      'unlisted',
     );
     expect(visibilityForOwnedVidakVideo({ status: 'published', visibility: 'public' })).toBe(
       'public',
     );
   });
 
-  it('uses the four product visibility labels', () => {
+  it('uses clear product visibility labels', () => {
     expect(videoSpaceVisibilityLabels.private).toBe('Private');
     expect(videoSpaceVisibilityLabels['shared-with-me']).toBe('Shared with me');
     expect(videoSpaceVisibilityLabels['shared-by-me']).toBe('Shared by me');
+    expect(videoSpaceVisibilityLabels.unlisted).toBe('Link only');
     expect(videoSpaceVisibilityLabels.public).toBe('Public');
   });
 });

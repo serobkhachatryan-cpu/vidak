@@ -6,13 +6,19 @@
  * stay Shared with me. Nothing becomes Public unless a Vidak publish record
  * or an explicit public ACL (`*`) says so.
  */
-export type VideoSpaceVisibility = 'private' | 'shared-with-me' | 'shared-by-me' | 'public';
+export type VideoSpaceVisibility =
+  | 'private'
+  | 'shared-with-me'
+  | 'shared-by-me'
+  | 'unlisted'
+  | 'public';
 export type VideoSpaceAccessScope = 'personal' | 'shared';
 
 export const videoSpaceVisibilityLabels: Record<VideoSpaceVisibility, string> = {
   private: 'Private',
   'shared-with-me': 'Shared with me',
   'shared-by-me': 'Shared by me',
+  unlisted: 'Link only',
   public: 'Public',
 };
 
@@ -38,6 +44,6 @@ export function visibilityForOwnedVidakVideo(input: {
 }): VideoSpaceVisibility {
   if (input.status !== 'published') return 'private';
   if (input.visibility === 'public') return 'public';
-  if (input.visibility === 'unlisted') return 'shared-by-me';
+  if (input.visibility === 'unlisted') return 'unlisted';
   return 'private';
 }

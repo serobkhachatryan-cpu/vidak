@@ -15,11 +15,13 @@ import { useAppearancePreference } from '../features/settings/appearance-prefere
 import { headerAccountCta, headerVerifiedNameCta } from '../lib/public-display-name';
 
 const signedInNavigation = [
-  // The landing page is the signed-in library, so call it what it is instead
-  // of duplicating it with a separate "Your videos" destination.
-  { label: 'Your video space', href: '/', icon: '⌂' },
+  // These are the same canonical destinations as the library selector.  Do
+  // not send people to a vague, separate "Sharing" page with different state.
+  { label: 'All accessible videos', href: '/', icon: '⌂' },
+  { label: 'My videos', href: '/?tab=yours', icon: '◉' },
+  { label: 'Shared with me', href: '/?tab=shared', icon: '↗' },
+  { label: 'Public catalogue', href: '/?tab=explore', icon: '▤' },
   { label: 'Upload a video', href: '/upload', icon: '⇪' },
-  { label: 'Sharing', href: '/?tab=yours&sharing=1', icon: '↗' },
   { label: 'Linked channels', href: '/library', icon: '▣' },
   { label: 'Settings', href: '/settings', icon: '⚙' },
   { label: 'Support', href: '/support', icon: '⚑' },

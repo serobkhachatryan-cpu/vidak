@@ -4,5 +4,5 @@ type PageProps = { params: Promise<{ videoId: string }> };
 
 export default async function Page({ params }: PageProps) {
   const { videoId } = await params;
-  return <VideoSharingSettingsPage videoId={videoId} />;
+  return <VideoSharingSettingsPage key={videoId} videoId={videoId} />;
 }

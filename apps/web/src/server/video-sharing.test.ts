@@ -122,6 +122,11 @@ describe('video sharing policy', () => {
       readerENames: [],
       groupENames: [],
     };
+    const linkOnlyPolicy: VideoSharingPolicy = {
+      audience: 'unlisted',
+      readerENames: [],
+      groupENames: [],
+    };
 
     expect(toW3dsRecordAccessControl(privatePolicy, owner.eName)).toEqual({
       v: 1,
@@ -146,6 +151,11 @@ describe('video sharing policy', () => {
       default_perms: 1,
       require: [[]],
     });
+    expect(toW3dsRecordAccessControl(linkOnlyPolicy, owner.eName)).toMatchObject({
+      grants: [{ ename: owner.eName, perms: W3DS_ACL_FULL }],
+      default_perms: 1,
+      require: [[]],
+    });
   });
 
   it('requires the named eID even when someone else has the private share URL', async () => {
@@ -157,6 +167,12 @@ describe('video sharing policy', () => {
 
     expect(policy.readerENames).toEqual(['@recipient.w3id']);
     expect(policy.shareUrl).toBe('/watch/shared/share_9f7c22fb-7ea3-419d-a618-98b8427c4753');
+    expect(policy.video).toMatchObject({
+      id: draft.id,
+      title: 'Private cut',
+      status: 'published',
+      visibility: 'private',
+    });
     expect((await videoStore.getOwnedVideo(draft.id, owner.id))?.visibility).toBe('private');
     await expect(
       service.getSharedVideo('recipient-token', 'share_9f7c22fb-7ea3-419d-a618-98b8427c4753'),
@@ -170,6 +186,12 @@ describe('video sharing policy', () => {
     const { service, draft } = await createContext();
 
     await expect(service.getOwnerPolicy('owner-token', draft.id)).resolves.toMatchObject({
+      video: {
+        id: draft.id,
+        title: 'Private cut',
+        status: 'published',
+        visibility: 'private',
+      },
       enforcement: {
         vidakHostedMedia: 'active',
         eVaultRecordAcl: 'not_configured',
@@ -188,6 +210,97 @@ describe('video sharing policy', () => {
     await expect(
       service.getSharedVideo('recipient-token', granted.shareToken ?? ''),
     ).rejects.toBeInstanceOf(VideoSharingError);
+  });
+
+  it('keeps a draft audience policy but does not expose a playback link before publication', async () => {
+    const { service, videoStore, draft } = await createContext();
+    await videoStore.unpublishOwnedVideo(draft.id, owner.id);
+
+    const policy = await service.updateOwnerPolicy('owner-token', draft.id, {
+      audience: 'people',
+      readerENames: ['@recipient.w3id'],
+    });
+
+    expect(policy.shareToken).toBeDefined();
+    expect(policy.shareUrl).toBeUndefined();
+    expect(policy.video).toMatchObject({ status: 'draft', visibility: 'private' });
+    const currentPolicy = await service.getOwnerPolicy('owner-token', draft.id);
+    expect(currentPolicy).not.toHaveProperty('shareUrl');
+    expect(currentPolicy).toMatchObject({ video: { status: 'draft' } });
+  });
+
+  it('represents an unlisted video as link-only and exposes its canonical player link', async () => {
+    const { service, videoStore, draft } = await createContext();
+    await videoStore.setOwnedVideoVisibility(draft.id, owner.id, 'unlisted');
+
+    const currentPolicy = await service.getOwnerPolicy('owner-token', draft.id);
+    expect(currentPolicy).not.toHaveProperty('shareUrl');
+    expect(currentPolicy).toMatchObject({
+      audience: 'unlisted',
+      watchUrl: '/watch/pub_video-1',
+      video: {
+        id: draft.id,
+        status: 'published',
+        visibility: 'unlisted',
+        publicVideoId: 'pub_video-1',
+      },
+    });
+
+    const saved = await service.updateOwnerPolicy('owner-token', draft.id, {
+      audience: 'unlisted',
+    });
+    expect(saved.shareToken).toBeDefined();
+    expect(saved.shareUrl).toBeUndefined();
+    await expect(
+      service.getSharedVideo('recipient-token', saved.shareToken ?? ''),
+    ).rejects.toMatchObject({
+      code: 'not_found',
+      status: 404,
+    });
+  });
+
+  it('does not let a stale private-sharing policy override a later editor visibility change', async () => {
+    const { service, videoStore, draft } = await createContext();
+    const granted = await service.updateOwnerPolicy('owner-token', draft.id, {
+      audience: 'people',
+      readerENames: ['@recipient.w3id'],
+    });
+    await videoStore.setOwnedVideoVisibility(draft.id, owner.id, 'unlisted');
+
+    const currentPolicy = await service.getOwnerPolicy('owner-token', draft.id);
+    expect(currentPolicy).not.toHaveProperty('shareUrl');
+    expect(currentPolicy).toMatchObject({
+      audience: 'unlisted',
+      watchUrl: '/watch/pub_video-1',
+      video: { visibility: 'unlisted' },
+    });
+    await expect(
+      service.getSharedVideo('recipient-token', granted.shareToken ?? ''),
+    ).rejects.toMatchObject({ code: 'not_found', status: 404 });
+  });
+
+  it('makes it explicit that an unpublish only pauses the current audience', async () => {
+    const { service, videoStore, draft } = await createContext();
+    const granted = await service.updateOwnerPolicy('owner-token', draft.id, {
+      audience: 'people',
+      readerENames: ['@recipient.w3id'],
+    });
+
+    await videoStore.unpublishOwnedVideo(draft.id, owner.id);
+    const pausedPolicy = await service.getOwnerPolicy('owner-token', draft.id);
+    expect(pausedPolicy).not.toHaveProperty('shareUrl');
+    expect(pausedPolicy).toMatchObject({
+      audience: 'people',
+      video: { status: 'draft', visibility: 'private' },
+    });
+
+    await videoStore.publishOwnedVideo(draft.id, owner.id, 'unused-public-id');
+    await expect(service.getOwnerPolicy('owner-token', draft.id)).resolves.toMatchObject({
+      audience: 'people',
+      shareToken: granted.shareToken,
+      shareUrl: `/watch/shared/${granted.shareToken}`,
+      video: { status: 'published', visibility: 'private' },
+    });
   });
 
   it('rotates the locator when the recipient set changes', async () => {

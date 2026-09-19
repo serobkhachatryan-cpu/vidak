@@ -20,7 +20,6 @@ import {
   isVideoSpaceEmpty,
   libraryDiscoveryBanner,
   ownedItemsForTab,
-  shareChangeConfirmation,
   type VideoSpaceLibraryItem,
   type VideoSpaceTab,
   videoSpaceEmptyCopy,
@@ -74,13 +73,12 @@ function tabFromSearch(value: string | null): VideoSpaceTab {
   return 'all';
 }
 
-export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) {
+export function VideoSpacePage() {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const user = useCurrentUser();
   const tab = tabFromSearch(searchParams.get('tab'));
-  const sharingRequested = tab === 'yours' && searchParams.get('sharing') === '1';
   const [initialMemory] = useState<VideoSpaceMemorySnapshot | undefined>(() => {
     const cached = user ? videoSpaceMemory.get(user.id) : undefined;
     return cached ? cloneVideoSpaceMemory(cached) : undefined;
@@ -89,8 +87,6 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
     initialMemory?.library ?? { status: 'idle', items: [] },
   );
   const [owned, setOwned] = useState<OwnedState>(initialMemory?.owned ?? { status: 'loading' });
-  const [pendingVideoId, setPendingVideoId] = useState<string | undefined>();
-  const [actionError, setActionError] = useState<string | undefined>();
   const libraryRequest = useRef(createLatestRequestTracker());
   const ownedRequest = useRef(createLatestRequestTracker());
   const libraryAbort = useRef<AbortController | undefined>(undefined);
@@ -155,7 +151,6 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
 
   const load = useCallback(
     async (refresh = false) => {
-      setActionError(undefined);
       setOwned((current) => (current.status === 'ready' ? current : { status: 'loading' }));
       const request = ownedRequest.current.next();
       void videoApiClient
@@ -228,15 +223,21 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   }, [library.completeness, library.discovery, loadEvault]);
 
   const setTab = (next: VideoSpaceTab) => {
+    if (next === tab) return;
     const params = new URLSearchParams(searchParams.toString());
     if (next === 'all') params.delete('tab');
     else params.set('tab', next);
+    if (next !== 'yours') params.delete('sharing');
     const query = params.toString();
-    router.replace(query ? `${pathname}?${query}` : pathname);
+    // Library destinations are real places: browser Back/Forward must restore
+    // the selected scope instead of silently replacing navigation history.
+    router.push(query ? `${pathname}?${query}` : pathname);
   };
 
   const libraryItems = library.items;
   const ownedItems = owned.status === 'ready' ? owned.items : [];
+  const activeTab = videoSpaceTabs.find((option) => option.id === tab) ?? videoSpaceTabs[0];
+  const isPublicCatalogue = tab === 'explore';
   const empty =
     library.status === 'ready' &&
     library.discovery !== 'refreshing' &&
@@ -245,59 +246,45 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
     isVideoSpaceEmpty(libraryItems, ownedItems);
 
   return (
-    <ApplicationShell currentHref={currentHref}>
+    <ApplicationShell currentHref={tab === 'all' ? '/' : `/?tab=${tab}`}>
       <Page
-        title="Your video space"
-        description="Every video you own or are authorized to view in your W3DS space — not only videos uploaded in Vidak."
+        title={isPublicCatalogue ? 'Public catalogue' : 'Your video space'}
+        description={
+          isPublicCatalogue
+            ? 'Videos published publicly in Vidak. Link-only and private videos are not listed here.'
+            : 'Every video you own or are authorized to view in your W3DS space — not only videos uploaded in Vidak.'
+        }
         containerSize="full"
         actions={
           <div className="flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={() => router.push('/?tab=yours&sharing=1')}>
-              Sharing
-            </Button>
-            <Button variant="secondary" onClick={() => void load(true)}>
-              Refresh your video space
-            </Button>
+            {!isPublicCatalogue ? (
+              <Button variant="secondary" onClick={() => void load(true)}>
+                Refresh your video space
+              </Button>
+            ) : null}
             <Button onClick={() => router.push('/upload')}>Upload</Button>
           </div>
         }
       >
         <div className="space-y-8">
-          <VideoSpaceGuide onSelectTab={setTab} onUpload={() => router.push('/upload')} />
+          {!isPublicCatalogue ? <VideoSpaceOrientation /> : null}
 
-          <fieldset className="flex flex-wrap gap-2">
-            <legend className="sr-only">Video space sections</legend>
+          <nav className="flex flex-wrap gap-2" aria-label="Choose a video collection">
             {videoSpaceTabs.map((option) => (
               <Button
                 key={option.id}
                 size="sm"
                 variant={tab === option.id ? 'primary' : 'secondary'}
+                aria-pressed={tab === option.id}
                 onClick={() => setTab(option.id)}
               >
                 {option.label}
               </Button>
             ))}
-          </fieldset>
-
-          {sharingRequested ? (
-            <aside
-              className="rounded-xl border border-primary/30 bg-primary/5 p-4"
-              aria-labelledby="sharing-controls-heading"
-            >
-              <h2 id="sharing-controls-heading" className="font-semibold text-foreground">
-                Share your Vidak videos
-              </h2>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Choose <strong className="text-foreground">Share / manage access</strong> on the
-                video you own below. You can keep it private, allow specific signed-in eIDs, or
-                publish it for anyone to watch.
-              </p>
-              <p className="mt-2 text-sm text-muted-foreground">
-                These controls apply to videos hosted in Vidak. Videos from other W3DS apps keep the
-                access policy set by their source.
-              </p>
-            </aside>
-          ) : null}
+          </nav>
+          <p className="sr-only" aria-live="polite">
+            Viewing {activeTab?.label ?? 'All accessible'} videos.
+          </p>
 
           {tab === 'explore' ? (
             <PublicExplorePanel />
@@ -322,38 +309,7 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
               tab={tab}
               library={library}
               owned={owned}
-              {...(actionError ? { actionError } : {})}
-              {...(pendingVideoId ? { pendingVideoId } : {})}
               onRetry={() => void load(true)}
-              onWatch={(video) => {
-                if (video.publicVideoId)
-                  router.push(`/watch/${encodeURIComponent(video.publicVideoId)}`);
-              }}
-              onContinueDraft={(video) =>
-                router.push(`/upload?draft=${encodeURIComponent(video.id)}`)
-              }
-              onManageSharing={(video) =>
-                router.push(`/videos/${encodeURIComponent(video.id)}/sharing`)
-              }
-              onChangeVisibility={(video, next) => {
-                if (!window.confirm(shareChangeConfirmation(next))) return;
-                void (async () => {
-                  setPendingVideoId(video.id);
-                  setActionError(undefined);
-                  try {
-                    if (next === 'private') {
-                      await videoApiClient.unpublishVideo(video.id);
-                      await load(true);
-                      return;
-                    }
-                    router.push(`/upload?draft=${encodeURIComponent(video.id)}`);
-                  } catch {
-                    setActionError('Could not change this video’s visibility. Try again.');
-                  } finally {
-                    setPendingVideoId(undefined);
-                  }
-                })();
-              }}
             />
           )}
         </div>
@@ -362,40 +318,21 @@ export function VideoSpacePage({ currentHref = '/' }: { currentHref?: string }) 
   );
 }
 
-function VideoSpaceGuide({
-  onSelectTab,
-  onUpload,
-}: {
-  onSelectTab: (tab: VideoSpaceTab) => void;
-  onUpload: () => void;
-}) {
+function VideoSpaceOrientation() {
   return (
     <aside
       className="rounded-xl border border-primary/20 bg-primary/5 p-4"
-      aria-label="Video space guide"
+      aria-labelledby="video-space-orientation-heading"
     >
-      <details open>
-        <summary className="cursor-pointer font-medium text-foreground">
-          {videoSpaceGuideCopy.title}
-          <span className="ml-2 text-sm font-normal text-muted-foreground">
-            — {videoSpaceGuideCopy.summary}
-          </span>
+      <h2 id="video-space-orientation-heading" className="font-semibold text-foreground">
+        {videoSpaceGuideCopy.title}
+      </h2>
+      <p className="mt-1 text-sm text-muted-foreground">{videoSpaceGuideCopy.summary}</p>
+      <details className="mt-3">
+        <summary className="cursor-pointer text-sm font-medium text-foreground">
+          Understand access and sharing
         </summary>
-        <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <Button size="sm" variant="secondary" onClick={() => onSelectTab('yours')}>
-            Find my videos
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => onSelectTab('shared')}>
-            Open shared videos
-          </Button>
-          <Button size="sm" variant="secondary" onClick={() => onSelectTab('explore')}>
-            Browse public videos
-          </Button>
-          <Button size="sm" onClick={onUpload}>
-            Upload a video
-          </Button>
-        </div>
-        <div className="mt-3 grid gap-3 text-sm text-muted-foreground md:grid-cols-2">
+        <div className="mt-3 grid gap-3 text-sm text-muted-foreground md:grid-cols-3">
           {videoSpaceGuideCopy.points.map((point) => (
             <p key={point}>{point}</p>
           ))}
@@ -412,31 +349,70 @@ function VideoSpaceGuide({
   );
 }
 
+function VideoCardsGrid({
+  ownedItems,
+  libraryItems,
+}: {
+  ownedItems: readonly Video[];
+  libraryItems: readonly VideoSpaceLibraryItem[];
+}) {
+  return (
+    <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
+      {ownedItems.map((video) => (
+        <OwnedVideoCard key={`vidak-${video.id}`} video={video} />
+      ))}
+      {libraryItems.map((video) => (
+        <LibraryVideoCard key={`w3ds-${video.id}`} video={video} />
+      ))}
+    </div>
+  );
+}
+
+function VideoLibrarySection({
+  id,
+  title,
+  description,
+  ownedItems = [],
+  libraryItems = [],
+}: {
+  id: string;
+  title: string;
+  description: string;
+  ownedItems?: readonly Video[];
+  libraryItems?: readonly VideoSpaceLibraryItem[];
+}) {
+  if (ownedItems.length + libraryItems.length === 0) return null;
+  return (
+    <section className="space-y-4" aria-labelledby={id}>
+      <div className="space-y-1">
+        <h3 id={id} className="text-lg font-semibold text-foreground">
+          {title}
+        </h3>
+        <Text size="sm" tone="muted">
+          {description}
+        </Text>
+      </div>
+      <VideoCardsGrid ownedItems={ownedItems} libraryItems={libraryItems} />
+    </section>
+  );
+}
+
 function PrivateLibraryPanel({
   tab,
   library,
   owned,
-  actionError,
-  pendingVideoId,
   onRetry,
-  onWatch,
-  onContinueDraft,
-  onChangeVisibility,
-  onManageSharing,
 }: {
   tab: Exclude<VideoSpaceTab, 'explore'>;
   library: LibraryState;
   owned: OwnedState;
-  actionError?: string;
-  pendingVideoId?: string;
   onRetry: () => void;
-  onWatch: (video: Video) => void;
-  onContinueDraft: (video: Video) => void;
-  onChangeVisibility: (video: Video, next: 'private') => void;
-  onManageSharing: (video: Video) => void;
 }) {
   const libraryItems = evaultItemsForTab(library.items, tab);
   const ownedItems = owned.status === 'ready' ? ownedItemsForTab(owned.items, tab) : [];
+  const personalLibraryItems = libraryItems.filter((item) => item.accessScope === 'personal');
+  const sharedLibraryItems = libraryItems.filter((item) => item.accessScope === 'shared');
+  const ownedLoadFailed = owned.status === 'error' && tab !== 'shared';
   const completenessBanner = libraryDiscoveryBanner({
     ...(library.discovery ? { discovery: library.discovery } : {}),
     ...(library.completeness ? { completeness: library.completeness } : {}),
@@ -455,6 +431,11 @@ function PrivateLibraryPanel({
           Finding your videos securely. Vidak is checking titles and access permissions, not copying
           your media. Your first scan can take a moment; later visits stay warm.
         </Text>
+        {ownedLoadFailed ? (
+          <Text size="sm" tone="danger" role="alert">
+            Could not load your Vidak videos yet. Vidak is still checking your W3DS library.
+          </Text>
+        ) : null}
         <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 6 }, (_, index) => (
             <VideoCardSkeleton key={index} />
@@ -464,16 +445,33 @@ function PrivateLibraryPanel({
     );
   }
 
+  const noVisibleVideos = libraryItems.length === 0 && ownedItems.length === 0;
+  const libraryLoadFailed = library.status === 'error';
+
   if (
-    library.status === 'error' &&
-    libraryItems.length === 0 &&
-    ownedItems.length === 0 &&
-    (tab === 'shared' || owned.status !== 'ready')
+    noVisibleVideos &&
+    !completenessBanner &&
+    library.discovery !== 'refreshing' &&
+    library.discovery !== 'partial' &&
+    library.status !== 'loading' &&
+    (libraryLoadFailed || ownedLoadFailed)
   ) {
+    const title =
+      libraryLoadFailed && ownedLoadFailed
+        ? 'Could not load your video space'
+        : ownedLoadFailed
+          ? 'Could not load your Vidak videos'
+          : 'Could not load your W3DS videos';
+    const description =
+      libraryLoadFailed && ownedLoadFailed
+        ? 'Your private video lists could not be refreshed. Try again.'
+        : ownedLoadFailed
+          ? 'Vidak could not load the videos you own here. Refresh to try again.'
+          : 'Your W3DS library could not be refreshed. Try again.';
     return (
       <ErrorState
-        title="Could not load your video space"
-        description="Your library is private. Refresh to try the request again."
+        title={title}
+        description={description}
         retry={onRetry}
         retryLabel="Refresh your video space"
       />
@@ -481,8 +479,7 @@ function PrivateLibraryPanel({
   }
 
   if (
-    libraryItems.length === 0 &&
-    ownedItems.length === 0 &&
+    noVisibleVideos &&
     !completenessBanner &&
     library.discovery !== 'refreshing' &&
     library.discovery !== 'partial' &&
@@ -510,14 +507,6 @@ function PrivateLibraryPanel({
 
   return (
     <div className="space-y-10">
-      {actionError ? (
-        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3" role="alert">
-          <Text size="sm" tone="danger">
-            {actionError}
-          </Text>
-        </div>
-      ) : null}
-
       {library.status === 'error' ? (
         <ErrorState
           title="Could not load eVault videos"
@@ -526,11 +515,23 @@ function PrivateLibraryPanel({
           retryLabel="Refresh your video space"
         />
       ) : null}
+      {ownedLoadFailed ? (
+        <ErrorState
+          title="Could not load your Vidak videos"
+          description="Videos already on this page stay available. Refresh to try your owned-video list again."
+          retry={onRetry}
+          retryLabel="Refresh your video space"
+        />
+      ) : null}
 
-      <section className="space-y-4" aria-labelledby="video-space-library-heading">
+      <section className="space-y-6" aria-labelledby="video-space-library-heading">
         <div className="space-y-1">
           <h2 id="video-space-library-heading" className="text-xl font-semibold text-foreground">
-            {tab === 'shared' ? 'Shared with me' : tab === 'yours' ? 'My videos' : 'All videos'}
+            {tab === 'shared'
+              ? 'Shared with me'
+              : tab === 'yours'
+                ? 'My videos'
+                : 'All accessible videos'}
           </h2>
           <Text size="sm" tone="muted">
             {tab === 'shared'
@@ -552,22 +553,25 @@ function PrivateLibraryPanel({
             </div>
           ) : null}
         </div>
-        <div className="grid gap-6 sm:grid-cols-2 xl:grid-cols-3">
-          {ownedItems.map((video) => (
-            <OwnedVideoCard
-              key={video.id}
-              video={video}
-              isPending={pendingVideoId === video.id}
-              onWatch={onWatch}
-              onContinueDraft={onContinueDraft}
-              onChangeVisibility={onChangeVisibility}
-              onManageSharing={onManageSharing}
+        {tab === 'all' ? (
+          <div className="space-y-10">
+            <VideoLibrarySection
+              id="my-videos-overview-heading"
+              title="My videos"
+              description="Videos you own. Cards say whether Vidak can manage access or the source app keeps that control."
+              ownedItems={ownedItems}
+              libraryItems={personalLibraryItems}
             />
-          ))}
-          {libraryItems.map((video) => (
-            <LibraryVideoCard key={video.id} video={video} />
-          ))}
-        </div>
+            <VideoLibrarySection
+              id="shared-videos-overview-heading"
+              title="Shared with me"
+              description="View-only videos that their owner has authorized for you. Owner controls never appear here."
+              libraryItems={sharedLibraryItems}
+            />
+          </div>
+        ) : (
+          <VideoCardsGrid ownedItems={ownedItems} libraryItems={libraryItems} />
+        )}
       </section>
     </div>
   );

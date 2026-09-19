@@ -108,7 +108,7 @@ test('signed-in cards show authorized posters, useful titles, and compact fallba
   await expect(page.getByRole('heading', { name: 'Launch recap' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Road update' })).toBeVisible();
   await expect(page.getByText('Shared with you')).toBeVisible();
-  await expect(page.getByText('Your video', { exact: true })).toBeVisible();
+  await expect(page.getByText('Your W3DS video', { exact: true })).toBeVisible();
 
   const html = await page.content();
   expect(html).not.toMatch(/w3ds:\/\//);

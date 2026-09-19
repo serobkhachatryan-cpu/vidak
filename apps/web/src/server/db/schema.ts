@@ -158,7 +158,9 @@ export const videoSharingPolicies = pgTable(
     ownerId: text('owner_id')
       .notNull()
       .references(() => w3dsPlatformUsers.id),
-    audience: text('audience').$type<'private' | 'people' | 'groups' | 'public'>().notNull(),
+    audience: text('audience')
+      .$type<'private' | 'people' | 'groups' | 'public' | 'unlisted'>()
+      .notNull(),
     readerENames: jsonb('reader_e_names').$type<string[]>().notNull(),
     groupENames: jsonb('group_e_names').$type<string[]>().notNull(),
     shareToken: text('share_token').notNull().unique(),
