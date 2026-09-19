@@ -4,6 +4,10 @@
  */
 
 const blackLumaThreshold = 18;
+// Each candidate can involve an authorized remote read and a bounded ffmpeg
+// decode. Keep the rescue path finite so one malformed historical file cannot
+// hold the single background worker indefinitely.
+const maxPreviewCaptureCandidates = 6;
 
 /** Same early-scene rule as the upload-page browser thumbnail helper. */
 export function previewCaptureTime(durationSeconds: number): number {
@@ -18,16 +22,25 @@ export function previewCaptureTime(durationSeconds: number): number {
 /** Ordered candidates: useful scene first, then later non-black fallbacks. */
 export function previewCaptureCandidates(durationSeconds: number): number[] {
   if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-    return [1, 2, 3];
+    // A successful decode without a duration is still often a long recording.
+    // Give a late-joining call or fade-in a few bounded early-scene chances
+    // before calling its poster unavailable.
+    return [1, 2, 3, 5, 10];
   }
 
   const lastSafe = Math.max(0, durationSeconds - 0.2);
   const primary = previewCaptureTime(durationSeconds);
   const candidates = [
     primary,
+    // Conference recordings commonly start with several seconds of black or
+    // a connecting screen. Prefer nearby useful scenes before seeking across
+    // a large remote file.
+    Math.min(lastSafe, 5),
+    Math.min(lastSafe, 10),
     Math.min(lastSafe, durationSeconds * 0.25),
     Math.min(lastSafe, durationSeconds * 0.5),
-    Math.min(lastSafe, 5),
+    Math.min(lastSafe, durationSeconds * 0.75),
+    Math.min(lastSafe, durationSeconds * 0.9),
     Math.min(lastSafe, 1),
   ];
 
@@ -39,7 +52,7 @@ export function previewCaptureCandidates(durationSeconds: number): number[] {
       unique.push(rounded);
     }
   }
-  return unique.length > 0 ? unique : [0];
+  return unique.length > 0 ? unique.slice(0, maxPreviewCaptureCandidates) : [0];
 }
 
 /** True when a packed RGB24 frame is too dark to use as a poster. */

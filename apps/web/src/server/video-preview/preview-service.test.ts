@@ -583,6 +583,84 @@ describe('VideoPreviewService', () => {
     ).rejects.toMatchObject({ status: 403 });
   });
 
+  it('renews an expired retained grant before serving its ready eVault poster', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    const storage = new MemoryMediaStorage();
+    const storageKey = storage.createStorageKey();
+    const fileUri = 'w3ds://file?id=@owner.w3id/retained-file';
+    await storage.write(storageKey, jpeg);
+    await store.create({
+      id: 'renewed-cached-preview',
+      sourceKind: 'evault-file',
+      sourceKey: fileUri,
+      storageKey,
+      status: 'ready',
+      contentType: 'image/jpeg',
+      byteSize: jpeg.byteLength,
+    });
+    const inspectPlayableStream = vi.fn().mockResolvedValue({ fileUri });
+    const evault = {
+      renewCalls: 0,
+      inspectBoundStream: (_user: { eName: string }, streamId: string) => {
+        if (streamId === 'expired-stream') {
+          throw Object.assign(new Error('expired'), { code: 'stream_expired', status: 401 });
+        }
+        return { fileUri };
+      },
+      inspectPlayableStream,
+      resolveMediaUrl: async () => 'https://media.example/private.mp4',
+      // Keep the mock receiver-dependent: production renewal is an instance
+      // method and a detached call would silently reintroduce the same bug.
+      renewPlayableStream(_user: { eName: string }, streamId: string): Promise<string> {
+        this.renewCalls += 1;
+        expect(streamId).toBe('expired-stream');
+        return Promise.resolve('renewed-stream');
+      },
+    };
+    const service = new VideoPreviewService({
+      store,
+      storage,
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      evault,
+    });
+
+    await expect(
+      service.openEVaultPreview({ eName: '@viewer.w3id' }, 'expired-stream'),
+    ).resolves.toMatchObject({ status: 'ready', contentType: 'image/jpeg', body: jpeg });
+    expect(evault.renewCalls).toBe(1);
+    expect(inspectPlayableStream).toHaveBeenCalledWith(
+      { eName: '@viewer.w3id' },
+      'renewed-stream',
+      expect.objectContaining({ priority: 'preview', signal: expect.anything() }),
+    );
+  });
+
+  it('never renews an invalid or foreign eVault grant', async () => {
+    const renewPlayableStream = vi.fn();
+    const service = new VideoPreviewService({
+      store: new InMemoryVideoPreviewStore(),
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      evault: {
+        inspectBoundStream: () => {
+          throw Object.assign(new Error('invalid'), { code: 'invalid_stream', status: 401 });
+        },
+        inspectPlayableStream: async () => ({
+          fileUri: 'w3ds://file?id=@owner.w3id/never-reached',
+        }),
+        resolveMediaUrl: async () => 'https://media.example/private.mp4',
+        renewPlayableStream,
+      },
+    });
+
+    await expect(
+      service.openEVaultPreview({ eName: '@viewer.w3id' }, 'invalid-stream'),
+    ).rejects.toMatchObject({ code: 'invalid_stream', status: 401 });
+    expect(renewPlayableStream).not.toHaveBeenCalled();
+  });
+
   it('does not serve a cached eVault poster after its live source access is revoked', async () => {
     const store = new InMemoryVideoPreviewStore();
     const storage = new MemoryMediaStorage();

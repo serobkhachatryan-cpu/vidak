@@ -17,6 +17,12 @@ describe('preview capture time', () => {
     expect(previewCaptureCandidates(20)).toContain(5);
   });
 
+  it('covers a late-starting recording before declaring every frame unusable', () => {
+    expect(previewCaptureCandidates(20)).toEqual([3, 5, 10, 15, 18, 1]);
+    expect(previewCaptureCandidates(100)).toEqual([3, 5, 10, 25, 50, 75]);
+    expect(previewCaptureCandidates(0)).toEqual([1, 2, 3, 5, 10]);
+  });
+
   it('treats a dark RGB frame as unusable', () => {
     const black = new Uint8Array(2 * 2 * 3);
     expect(isMostlyBlackFrame(black, 2, 2)).toBe(true);

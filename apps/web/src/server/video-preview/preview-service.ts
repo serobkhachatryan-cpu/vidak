@@ -407,7 +407,14 @@ export class VideoPreviewService {
     // Reading the sealed viewer-bound grant is local. It lets this ordinary
     // image request join the same preemptible background lane as frame
     // extraction before it starts a remote shared-source authorization.
-    const bound = evault.inspectBoundStream(user, streamId);
+    // Historical catalogue cards retain their original stream grants. Unlike
+    // their local poster cache key, those grants are deliberately short-lived.
+    // Renew an expired, still viewer-bound grant *inside this request* rather
+    // than making an otherwise-ready card wait for a full catalogue refresh.
+    // `inspectPlayableStream` below still performs the current source-access
+    // check before any cached private image is returned.
+    const bound = await this.boundPreviewStream(evault, user, streamId);
+    const activeStreamId = bound.streamId;
     const backgroundLease = beginBackgroundWork(parseW3dsFileUri(bound.fileUri)?.ownerEName);
     const signal = options?.signal
       ? AbortSignal.any([options.signal, backgroundLease.signal])
@@ -422,7 +429,7 @@ export class VideoPreviewService {
       // reaches its first remote read. Do not make that request wait for an
       // unnecessary poster authorization; the client retries this 202 later.
       if (backgroundLease.signal.aborted) return { status: 'processing' };
-      const { fileUri } = await evault.inspectPlayableStream(user, streamId, {
+      const { fileUri } = await evault.inspectPlayableStream(user, activeStreamId, {
         priority: 'preview',
         signal,
       });
@@ -455,7 +462,7 @@ export class VideoPreviewService {
       // A preview route serves an image request, not a user-selected playback
       // action. Never keep it open while it resolves a private source or runs
       // ffmpeg; enqueue one resumable job and let the card poll the local state.
-      this.enqueueEVaultBackfill(user, streamId);
+      this.enqueueEVaultBackfill(user, activeStreamId);
       return { status: 'processing' };
     } catch (error) {
       // Preemption is not a source failure. Keep the card's state retryable;
@@ -465,6 +472,32 @@ export class VideoPreviewService {
       throw error;
     } finally {
       backgroundLease.release();
+    }
+  }
+
+  /**
+   * Gets a local source key for a poster request. A normal, unexpired grant
+   * takes no renewal path. Only the library's exact `stream_expired` result
+   * may use the retained-grant renewal capability; bad signatures, a grant
+   * for another viewer, and revoked source access remain ordinary errors.
+   */
+  private async boundPreviewStream(
+    evault: AuthorizedEVaultPreviewSource,
+    user: Pick<AuthUser, 'eName'>,
+    streamId: string,
+  ): Promise<{ streamId: string; fileUri: string }> {
+    try {
+      return { streamId, ...evault.inspectBoundStream(user, streamId) };
+    } catch (error) {
+      const renew = evault.renewPlayableStream;
+      if (!isExpiredEVaultStreamError(error) || !renew) throw error;
+      // This is an instance method in MeshengerVideoLibrary. Retaining the
+      // receiver is required for the same reason as durable repair renewal.
+      const renewedStreamId = await renew.call(evault, user, streamId);
+      return {
+        streamId: renewedStreamId,
+        ...evault.inspectBoundStream(user, renewedStreamId),
+      };
     }
   }
 
@@ -755,6 +788,14 @@ function isRetryablePreviewSourceError(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false;
   const status = (error as { status?: unknown }).status;
   return typeof status === 'number' && (status === 429 || status >= 500);
+}
+
+function isExpiredEVaultStreamError(error: unknown): boolean {
+  return (
+    Boolean(error) &&
+    typeof error === 'object' &&
+    (error as { code?: unknown }).code === 'stream_expired'
+  );
 }
 
 function statusToState(status: VideoPreviewStatus | undefined): VideoPreviewState {
