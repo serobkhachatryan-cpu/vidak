@@ -615,6 +615,47 @@ describe('VideoPreviewService', () => {
     );
   });
 
+  it('repairs a ready eVault preview when its cached media blob is missing', async () => {
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
+    const { service, store, storage } = createService();
+    const staleStorageKey = storage.createStorageKey();
+    await storage.write(staleStorageKey, jpeg);
+    await store.create({
+      id: 'missing-cached-preview',
+      sourceKind: 'evault-file',
+      sourceKey: 'w3ds://file?id=@owner.w3id/missing-cached-stream',
+      storageKey: staleStorageKey,
+      status: 'ready',
+      contentType: 'image/jpeg',
+      byteSize: jpeg.byteLength,
+    });
+    await storage.delete(staleStorageKey);
+
+    await expect(
+      service.openEVaultPreview({ eName: '@viewer.w3id' }, 'missing-cached-stream'),
+    ).resolves.toEqual({ status: 'processing' });
+
+    await vi.waitFor(async () => {
+      const repaired = await store.getBySource(
+        'evault-file',
+        'w3ds://file?id=@owner.w3id/missing-cached-stream',
+      );
+      expect(repaired).toMatchObject({ status: 'ready' });
+      expect(repaired?.storageKey).toBeDefined();
+      expect(repaired?.storageKey).not.toBe(staleStorageKey);
+    });
+    expect(logs).toContainEqual(expect.stringContaining('"code":"preview_cached_blob_missing"'));
+    expect(logs.join('\n')).not.toContain(staleStorageKey);
+
+    const download = await service.openEVaultPreview(
+      { eName: '@viewer.w3id' },
+      'missing-cached-stream',
+    );
+    expect(download).toMatchObject({ status: 'ready', contentType: 'image/jpeg' });
+    if (download.status === 'ready') expect(download.body).toEqual(jpeg);
+  });
+
   it('uses a neutral poster when a queued eVault preview has no decodable frame', async () => {
     const { service, store } = createService({ extract: async () => undefined });
 

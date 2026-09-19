@@ -24,6 +24,26 @@ export function shouldRetryPreviewResponse(status: number): boolean {
   return status === 202 || status === 422 || status >= 500;
 }
 
+/**
+ * The poster route is allowed one repair attempt after the browser rejects a
+ * supposedly ready image. Owned cards keep their existing static fallback
+ * behavior instead of needlessly polling the generated-preview route.
+ */
+export function shouldRecoverPreviewAfterImageError(input: {
+  source?: string | undefined;
+  posterUrl?: string | undefined;
+  fallbackPosterUrl?: string | undefined;
+  retriedPreviewImage: boolean;
+}): boolean {
+  return Boolean(
+    input.source &&
+      input.posterUrl &&
+      input.source === input.posterUrl &&
+      !input.retriedPreviewImage &&
+      (!input.fallbackPosterUrl || input.fallbackPosterUrl === input.source),
+  );
+}
+
 function formatDuration(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
   const minutes = Math.floor((seconds % 3600) / 60);
@@ -50,6 +70,11 @@ export function VideoSpacePoster({
   );
   const [failed, setFailed] = useState(state === 'unavailable');
   const [usedFallback, setUsedFallback] = useState(false);
+  // A preview route can briefly advertise a ready asset whose bytes have just
+  // been regenerated. Give that route one opportunity to repair itself after
+  // the browser reports a broken image, without re-fetching healthy posters.
+  const [recoveringPreview, setRecoveringPreview] = useState(false);
+  const [retriedPreviewImage, setRetriedPreviewImage] = useState(false);
 
   useEffect(() => {
     if (!loadWhenVisible || visible) return;
@@ -71,13 +96,25 @@ export function VideoSpacePoster({
   useEffect(() => {
     setFailed(state === 'unavailable');
     setUsedFallback(false);
+    setRecoveringPreview(false);
+    setRetriedPreviewImage(false);
     if (state === 'ready' && posterUrl && isRenderableThumbnailUrl(posterUrl)) {
       setSource(posterUrl);
       return;
     }
     setSource(undefined);
+  }, [posterUrl, state]);
+
+  useEffect(() => {
     if (!visible) return;
-    if (state !== 'processing' || !posterUrl || !isRenderableThumbnailUrl(posterUrl)) return;
+    if (
+      source ||
+      (!recoveringPreview && state !== 'processing') ||
+      !posterUrl ||
+      !isRenderableThumbnailUrl(posterUrl)
+    ) {
+      return;
+    }
 
     let cancelled = false;
     let activeRequest: AbortController | undefined;
@@ -90,6 +127,8 @@ export function VideoSpacePoster({
         const type = response.headers.get('content-type') ?? '';
         if (response.ok && type.startsWith('image/')) {
           setSource(posterUrl);
+          setFailed(false);
+          setRecoveringPreview(false);
           return;
         }
         if (shouldRetryPreviewResponse(response.status)) {
@@ -102,6 +141,7 @@ export function VideoSpacePoster({
           return;
         }
         if (response.status === 404) {
+          setRecoveringPreview(false);
           if (fallbackPosterUrl && fallbackPosterUrl !== posterUrl) {
             setUsedFallback(true);
             setSource(fallbackPosterUrl);
@@ -110,6 +150,7 @@ export function VideoSpacePoster({
           setFailed(true);
           return;
         }
+        setRecoveringPreview(false);
         if (fallbackPosterUrl && fallbackPosterUrl !== posterUrl) {
           setUsedFallback(true);
           setSource(fallbackPosterUrl);
@@ -131,10 +172,10 @@ export function VideoSpacePoster({
       activeRequest?.abort();
       cancelQueue();
     };
-  }, [fallbackPosterUrl, posterUrl, state, visible]);
+  }, [fallbackPosterUrl, posterUrl, recoveringPreview, source, state, visible]);
 
   const showImage = Boolean(source) && !failed;
-  const showProcessing = !showImage && !failed && state === 'processing';
+  const showProcessing = !showImage && !failed && (state === 'processing' || recoveringPreview);
   const showRestricted = !showImage && state === 'restricted';
 
   return (
@@ -151,6 +192,21 @@ export function VideoSpacePoster({
               setSource(fallbackPosterUrl);
               return;
             }
+            if (
+              shouldRecoverPreviewAfterImageError({
+                source,
+                posterUrl,
+                fallbackPosterUrl,
+                retriedPreviewImage,
+              })
+            ) {
+              setRetriedPreviewImage(true);
+              setFailed(false);
+              setSource(undefined);
+              setRecoveringPreview(true);
+              return;
+            }
+            setRecoveringPreview(false);
             setFailed(true);
           }}
         />
@@ -230,10 +286,10 @@ export function VideoSpaceUnavailablePoster({
     <div
       className="relative flex aspect-video w-full flex-col items-center justify-center gap-2 border border-border/60 bg-muted/70 px-4 text-center"
       role="img"
-      aria-label={`${title} Video ready to watch`}
+      aria-label={`${title} Preview unavailable`}
     >
       <VideoIcon />
-      <p className="font-sans text-[11px] text-muted-foreground">Video ready to watch</p>
+      <p className="font-sans text-[11px] text-muted-foreground">Preview unavailable</p>
       <VideoSpacePosterBadges
         {...(durationSeconds !== undefined ? { durationSeconds } : {})}
         {...(visibilityLabel ? { visibilityLabel } : {})}

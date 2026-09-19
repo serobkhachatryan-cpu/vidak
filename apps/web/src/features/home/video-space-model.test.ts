@@ -92,7 +92,7 @@ describe('video space home model', () => {
   it('keeps processing copy off error language and failure copy secondary', () => {
     expect(previewFallbackCopy('processing').label).toBe('Preparing preview');
     expect(previewFallbackCopy('processing').description).toBe('');
-    expect(previewFallbackCopy('unavailable').label).toBe('Video ready to watch');
+    expect(previewFallbackCopy('unavailable').label).toBe('Preview unavailable');
     expect(previewFallbackCopy('unsupported').description).toBe('');
   });
 

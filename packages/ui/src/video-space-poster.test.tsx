@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import {
+  shouldRecoverPreviewAfterImageError,
   shouldRetryPreviewResponse,
   VideoSpacePoster,
   VideoSpaceProcessingPoster,
@@ -70,7 +71,7 @@ describe('VideoSpacePoster', () => {
     expect(markup).toContain('aspect-video');
   });
 
-  it('uses a compact playable-video placeholder instead of a broken image', () => {
+  it('uses an accurate unavailable-preview placeholder instead of a broken image', () => {
     const markup = renderToStaticMarkup(
       <VideoSpaceUnavailablePoster
         title="friends with hats"
@@ -79,11 +80,11 @@ describe('VideoSpacePoster', () => {
         locked
       />,
     );
-    expect(markup).toContain('Video ready to watch');
+    expect(markup).toContain('Preview unavailable');
     expect(markup).toContain('0:12');
     expect(markup).not.toContain('<img');
     expect(markup).not.toContain('<video');
-    expect(markup).not.toContain('Preview unavailable');
+    expect(markup).not.toContain('Video ready to watch');
   });
 
   it('labels unverified shared references without rendering or fetching their preview', () => {
@@ -142,5 +143,30 @@ describe('VideoSpacePoster', () => {
     expect(shouldRetryPreviewResponse(422)).toBe(true);
     expect(shouldRetryPreviewResponse(500)).toBe(true);
     expect(shouldRetryPreviewResponse(404)).toBe(false);
+  });
+
+  it('retries one broken ready preview endpoint without bypassing an owned fallback', () => {
+    expect(
+      shouldRecoverPreviewAfterImageError({
+        source: '/api/evault/videos/grant/preview',
+        posterUrl: '/api/evault/videos/grant/preview',
+        retriedPreviewImage: false,
+      }),
+    ).toBe(true);
+    expect(
+      shouldRecoverPreviewAfterImageError({
+        source: '/api/evault/videos/grant/preview',
+        posterUrl: '/api/evault/videos/grant/preview',
+        retriedPreviewImage: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldRecoverPreviewAfterImageError({
+        source: 'https://cdn.example/old-poster.jpg',
+        posterUrl: 'https://cdn.example/old-poster.jpg',
+        fallbackPosterUrl: '/api/videos/owned/video_1/preview',
+        retriedPreviewImage: false,
+      }),
+    ).toBe(false);
   });
 });

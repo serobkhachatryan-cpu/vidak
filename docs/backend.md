@@ -93,7 +93,7 @@ Configure the flow with the root `.env.example` values:
 - `CHANNEL_IMPORT_TOKEN_ENCRYPTION_KEY` (optional, base64-encoded 32-byte key; encrypts provider credentials at rest)
 - `YOUTUBE_OAUTH_CLIENT_ID` / `YOUTUBE_OAUTH_CLIENT_SECRET` (optional pair; enables the YouTube source-channel connection)
 - `VIMEO_OAUTH_CLIENT_ID` / `VIMEO_OAUTH_CLIENT_SECRET` (optional pair; enables the Vimeo source-channel connection)
-- `MEDIA_STORAGE_ROOT` (optional; local-disk MediaStorage root, defaults to `.data/media`)
+- `MEDIA_STORAGE_ROOT` (required for durable production media; local-disk MediaStorage root, development defaults to `.data/media`)
 - `MEDIA_MAX_UPLOAD_BYTES` (optional; raw upload body limit, defaults to `104857600` / 100 MiB)
 - `MEDIA_ALLOWED_CONTENT_TYPES` (optional; comma-separated MIME allowlist, defaults to `video/mp4,video/webm,video/quicktime`)
 
@@ -713,7 +713,7 @@ user eVault remains the sole cross-app media path.
 | `W3DS_AUTH_JWT_SECRET` | required (≥ 32 chars) | Server-only; never `NEXT_PUBLIC_*` |
 | `APP_ORIGIN` | required | Cookie mutation origin trust |
 | `TRUSTED_ORIGINS` | optional | Extra browser origins |
-| `MEDIA_STORAGE_ROOT` | recommended | Private blob root for LocalDiskMediaStorage |
+| `MEDIA_STORAGE_ROOT` | required for durable media | Private blob root for LocalDiskMediaStorage; do not use the container filesystem in production |
 | `MEDIA_MAX_UPLOAD_BYTES` / `MEDIA_ALLOWED_CONTENT_TYPES` | optional | Upload limits |
 | `CHANNEL_IMPORT_STATE_SECRET` / `CHANNEL_IMPORT_TOKEN_ENCRYPTION_KEY` | optional pair | Server-only OAuth state + credential encryption; no partial activation |
 | `YOUTUBE_OAUTH_*` / `VIMEO_OAUTH_*` | optional pair | Provider-specific client credentials; each source stays unavailable until its full pair and the import secrets are present |
@@ -743,6 +743,10 @@ pnpm db:migrate
 - Create a private, non-public filesystem (or volume) for media blobs.
 - Set `MEDIA_STORAGE_ROOT` to that location on every app instance that serves
   upload/download routes.
+- On Railway, attach a private Volume to the **Vidak** service at `/data` and
+  set `MEDIA_STORAGE_ROOT=/data/media`. The service must stay at one replica
+  while it uses that volume; move to a private object-storage adapter before
+  scaling horizontally.
 - LocalDiskMediaStorage is the current adapter (development-oriented). Objects
   are opaque keys under the root; never expose the root path or storage keys on
   the public API.

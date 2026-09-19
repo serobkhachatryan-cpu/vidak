@@ -44,7 +44,20 @@ const tinyJpeg = Buffer.from(
 test('signed-in cards show authorized posters, useful titles, and compact fallbacks', async ({
   page,
 }) => {
+  let readyPosterRequests = 0;
   await page.route('**/api/evault/videos/ready-stream/preview', async (route) => {
+    readyPosterRequests += 1;
+    // A redeploy can leave a `ready` database record whose preview blob must
+    // be regenerated. The browser's first image request gets the repair
+    // response; the component should poll once and then render the JPEG.
+    if (readyPosterRequests === 1) {
+      await route.fulfill({
+        status: 202,
+        contentType: 'application/json',
+        body: JSON.stringify({ status: 'processing' }),
+      });
+      return;
+    }
     await route.fulfill({
       status: 200,
       contentType: 'image/jpeg',
@@ -115,7 +128,12 @@ test('signed-in cards show authorized posters, useful titles, and compact fallba
 
   await expect(
     page.locator('article img[src$="/api/evault/videos/ready-stream/preview"]'),
-  ).toHaveCount(1);
+  ).toBeVisible();
+  await expect.poll(() => readyPosterRequests).toBeGreaterThanOrEqual(3);
+  const repairedCard = page.locator('article').filter({
+    has: page.getByRole('heading', { name: 'Launch recap' }),
+  });
+  await expect(repairedCard.getByText('Preview unavailable')).toHaveCount(0);
   await expect(page.getByText('Preparing preview')).toHaveCount(1);
   await expect(page.getByText('Preview unavailable')).toHaveCount(1);
   const detailLines = await page

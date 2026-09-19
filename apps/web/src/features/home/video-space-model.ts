@@ -367,7 +367,7 @@ export function previewFallbackCopy(state: 'processing' | 'unavailable' | 'unsup
     };
   }
   return {
-    label: 'Video ready to watch',
+    label: 'Preview unavailable',
     description: '',
   };
 }

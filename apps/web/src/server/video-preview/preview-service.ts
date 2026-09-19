@@ -8,6 +8,7 @@ import { type MediaAssetStore, PostgresMediaAssetStore } from '../media-asset-st
 import {
   LocalDiskMediaStorage,
   type MediaStorage,
+  MediaStorageError,
   resolveLocalMediaStorageRoot,
 } from '../media-storage';
 import { reportOperationalEvent } from '../ops-observability';
@@ -368,7 +369,22 @@ export class VideoPreviewService {
       if (backgroundLease.signal.aborted) return { status: 'processing' };
       const existing = await this.store.getBySource('evault-file', fileUri);
       if (existing?.status === 'ready' && existing.storageKey) {
-        return this.openRecord(existing);
+        try {
+          return await this.openRecord(existing);
+        } catch (error) {
+          // The preview row can outlive the storage object when a deployment
+          // replaces an ephemeral media volume. Treat that exact condition as
+          // a cache miss: retain the live access check above, mark the stale
+          // row retryable, and rebuild through the bounded background queue.
+          if (!(error instanceof MediaStorageError && error.code === 'not_found')) {
+            throw error;
+          }
+          reportOperationalEvent({
+            category: 'video_preview',
+            code: 'preview_cached_blob_missing',
+          });
+          await this.store.update(existing.id, { status: 'failed' });
+        }
       }
       if (existing?.status === 'failed' && !isStaleFailed(existing)) {
         return unavailableEVaultPosterDownload();
