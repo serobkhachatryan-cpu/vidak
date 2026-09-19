@@ -16,7 +16,7 @@ import {
   reserveInteractivePlayback,
   resetBackgroundWorkPriorityForTests,
 } from '../video-space/background-work-priority';
-import type { PreviewFrameSource } from './frame-extractor';
+import { type PreviewFrameSource, VideoFrameExtractorError } from './frame-extractor';
 import { sanitizeOwnedVideoForLibrary, VideoPreviewService } from './preview-service';
 import { InMemoryVideoPreviewStore } from './preview-store';
 
@@ -180,7 +180,11 @@ describe('VideoPreviewService', () => {
     let resolutionSignal: AbortSignal | undefined;
     const inspectPlayableStream = vi.fn();
     const resolveMediaUrl = vi.fn(
-      async (_user, _streamId, options?: { priority?: 'background'; signal?: AbortSignal }) => {
+      async (
+        _user,
+        _streamId,
+        options?: { priority?: 'preview' | 'background'; signal?: AbortSignal },
+      ) => {
         resolutionSignal = options?.signal;
         markResolutionStarted();
         await new Promise<void>((_resolve, reject) => {
@@ -220,7 +224,7 @@ describe('VideoPreviewService', () => {
     expect(resolveMediaUrl).toHaveBeenCalledWith(
       { eName: '@viewer.w3id' },
       'shared-stream',
-      expect.objectContaining({ priority: 'background' }),
+      expect.objectContaining({ priority: 'preview' }),
     );
     expect(resolutionSignal?.aborted).toBe(true);
   });
@@ -232,7 +236,11 @@ describe('VideoPreviewService', () => {
     });
     let authorizationSignal: AbortSignal | undefined;
     const inspectPlayableStream = vi.fn(
-      async (_user, _streamId, options?: { priority?: 'background'; signal?: AbortSignal }) => {
+      async (
+        _user,
+        _streamId,
+        options?: { priority?: 'preview' | 'background'; signal?: AbortSignal },
+      ) => {
         authorizationSignal = options?.signal;
         markStarted();
         return new Promise<{ fileUri: string }>((_resolve, reject) => {
@@ -267,7 +275,7 @@ describe('VideoPreviewService', () => {
     expect(inspectPlayableStream).toHaveBeenCalledWith(
       { eName: '@viewer.w3id' },
       'shared-stream',
-      expect.objectContaining({ priority: 'background' }),
+      expect.objectContaining({ priority: 'preview' }),
     );
   });
 
@@ -611,7 +619,7 @@ describe('VideoPreviewService', () => {
     expect(inspectPlayableStream).toHaveBeenCalledWith(
       { eName: '@owner.w3id' },
       'cached-stream',
-      expect.objectContaining({ priority: 'background', signal: expect.anything() }),
+      expect.objectContaining({ priority: 'preview', signal: expect.anything() }),
     );
   });
 
@@ -845,6 +853,41 @@ describe('VideoPreviewService', () => {
     await expect(
       store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/grant-rate-limit'),
     ).resolves.toMatchObject({ status: 'pending' });
+  });
+
+  it('keeps a retryable ffmpeg read pending instead of marking its preview unavailable', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    const service = new VideoPreviewService({
+      store,
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      extractor: {
+        extractUsefulFrame: async () => {
+          throw new VideoFrameExtractorError('temporary source read failure', 'retryable');
+        },
+      },
+      evault: {
+        inspectBoundStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        inspectPlayableStream: async (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        resolveMediaUrl: async () => 'https://media.example/private.mp4',
+      },
+      backfillRetryDelayMs: 60_000,
+    });
+
+    await service.scheduleLibraryBackfill({ eName: '@owner.w3id' }, [
+      { streamIds: ['retryable-frame'] },
+    ]);
+
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/retryable-frame'),
+      ).resolves.toMatchObject({ status: 'pending' });
+    });
   });
 
   it('retries a retryable scheduled preview once without a second library request', async () => {

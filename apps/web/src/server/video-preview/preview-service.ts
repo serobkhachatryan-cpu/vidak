@@ -11,6 +11,7 @@ import {
   MediaStorageError,
   resolveLocalMediaStorageRoot,
 } from '../media-storage';
+import { isMediaResolutionAbortedError } from '../meshenger-video-library';
 import { reportOperationalEvent } from '../ops-observability';
 import {
   backgroundWorkDelayMs,
@@ -20,6 +21,7 @@ import { parseW3dsFileUri } from '../w3ds-official-file-client';
 import { evaultVideoPreviewPath, ownedVideoPreviewPath } from './capture-time';
 import {
   FfmpegVideoFrameExtractor,
+  isRetryableVideoFrameExtractorError,
   type PreviewFrameSource,
   type VideoFrameExtractor,
 } from './frame-extractor';
@@ -74,12 +76,12 @@ export interface AuthorizedEVaultPreviewSource {
   inspectPlayableStream(
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
-    options?: { priority?: 'background' | 'interactive'; signal?: AbortSignal },
+    options?: { priority?: 'preview' | 'background' | 'interactive'; signal?: AbortSignal },
   ): Promise<{ fileUri: string }>;
   resolveMediaUrl(
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
-    options?: { priority?: 'background' | 'interactive'; signal?: AbortSignal },
+    options?: { priority?: 'preview' | 'background' | 'interactive'; signal?: AbortSignal },
   ): Promise<string>;
 }
 
@@ -363,7 +365,7 @@ export class VideoPreviewService {
       // unnecessary poster authorization; the client retries this 202 later.
       if (backgroundLease.signal.aborted) return { status: 'processing' };
       const { fileUri } = await evault.inspectPlayableStream(user, streamId, {
-        priority: 'background',
+        priority: 'preview',
         signal,
       });
       if (backgroundLease.signal.aborted) return { status: 'processing' };
@@ -514,7 +516,7 @@ export class VideoPreviewService {
         // Do not issue a second remote shared-source authorization here: that
         // redundant read competes with a viewer opening the same eVault.
         const mediaUrl = await evault.resolveMediaUrl(user, streamId, {
-          priority: 'background',
+          priority: 'preview',
           ...(signal ? { signal } : {}),
         });
         return { kind: 'url', url: mediaUrl };
@@ -653,6 +655,8 @@ export class VideoPreviewService {
 }
 
 function isRetryablePreviewSourceError(error: unknown): boolean {
+  if (isRetryableVideoFrameExtractorError(error)) return true;
+  if (isMediaResolutionAbortedError(error)) return true;
   if (!error || typeof error !== 'object') return false;
   const status = (error as { status?: unknown }).status;
   return typeof status === 'number' && (status === 429 || status >= 500);

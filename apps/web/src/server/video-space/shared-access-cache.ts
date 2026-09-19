@@ -18,7 +18,7 @@ interface VerifiedAccess {
  * the pending operation that an interactive playback authorization inherits.
  * Positive completed proofs remain shared across both scopes.
  */
-export type SharedAccessProbePriority = 'background' | 'warmup' | 'interactive';
+export type SharedAccessProbePriority = 'background' | 'preview' | 'warmup' | 'interactive';
 
 const verifiedAccess = new Map<string, VerifiedAccess>();
 const inflightProbes = new Map<string, Promise<SharedSpaceAccess>>();

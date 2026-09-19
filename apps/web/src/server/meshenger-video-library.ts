@@ -146,6 +146,12 @@ const requestTimeoutMs = 12_000;
 // retried with backoff, while an interactive source read retains its own
 // bounded timeout below.
 const backgroundSourceRequestTimeoutMs = 2_500;
+// Poster generation is deliberately serial and remains in the background
+// eVault lane, but a usable frame still needs one complete File/metadata
+// resolution. Real shared eVaults routinely take longer than the catalogue's
+// 2.5-second checkpoint budget. Keep this distinct from both inventory and a
+// viewer-confirmed Watch so increasing poster reliability cannot slow either.
+const previewSourceRequestTimeoutMs = 8_000;
 // A shared Watch authorization can otherwise spend one 12-second request on
 // the indexed Chat query and another 12 seconds on each legacy-history page.
 // Bound one interactive proof as a whole so a slow, inconclusive remote source
@@ -480,6 +486,7 @@ type SourceReadPolicy =
   | 'interactive'
   | 'warmup-cancellable'
   | 'background-cancellable'
+  | 'preview-cancellable'
   // Durable inventory must be able to stop an in-flight eVault read for an
   // explicit Watch request. Keep its pending source work separate from both
   // foreground fail-fast work and interactive playback, while retaining the
@@ -487,7 +494,21 @@ type SourceReadPolicy =
   | 'inventory-cancellable';
 type DeferredMediaMode = 'resolve' | 'prewarm';
 type ViewerIdentity = Pick<AuthUser, 'eName'> & Partial<Pick<AuthUser, 'eVaultUri'>>;
-export type MediaResolutionPriority = 'background' | 'warmup' | 'interactive';
+export type MediaResolutionPriority = 'background' | 'preview' | 'warmup' | 'interactive';
+
+function isBackgroundMediaPriority(priority: MediaResolutionPriority): boolean {
+  return priority === 'background' || priority === 'preview';
+}
+
+function sourceReadPolicyForMediaPriority(
+  priority: MediaResolutionPriority,
+  signal: AbortSignal | undefined,
+): SourceReadPolicy {
+  if (priority === 'interactive') return 'interactive';
+  if (priority === 'warmup') return 'warmup-cancellable';
+  if (priority === 'preview') return 'preview-cancellable';
+  return signal ? 'background-cancellable' : 'backoff';
+}
 
 declare const forcedSourceRefreshProofBrand: unique symbol;
 
@@ -892,6 +913,15 @@ class MediaResolutionAbortedError extends Error {
 }
 
 /**
+ * Preview work is resumable. A scheduler or foreground Watch cancellation is
+ * therefore a retryable preview outcome, never evidence that its source is
+ * permanently unavailable.
+ */
+export function isMediaResolutionAbortedError(error: unknown): boolean {
+  return error instanceof MediaResolutionAbortedError;
+}
+
+/**
  * Durable inventory uses a separately keyed cancellable source policy. It is
  * deliberately selected only when the pump supplied a lease signal, so normal
  * HTTP catalogue hydration keeps its existing fail-fast behavior.
@@ -1005,9 +1035,17 @@ function sourceRequestSignal(timeoutMs: number, signal?: AbortSignal): AbortSign
 }
 
 function sourceRequestTimeoutForPolicy(rateLimit: SourceReadPolicy): number {
-  return rateLimit === 'background-cancellable' || rateLimit === 'inventory-cancellable'
-    ? backgroundSourceRequestTimeoutMs
-    : requestTimeoutMs;
+  if (rateLimit === 'background-cancellable' || rateLimit === 'inventory-cancellable') {
+    return backgroundSourceRequestTimeoutMs;
+  }
+  if (rateLimit === 'preview-cancellable') return previewSourceRequestTimeoutMs;
+  return requestTimeoutMs;
+}
+
+function directFileDereferenceTimeoutForPolicy(policy: SourceReadPolicy): number {
+  return policy === 'preview-cancellable'
+    ? previewSourceRequestTimeoutMs
+    : directFileDereferenceTimeoutMs;
 }
 
 /** Combines a caller cancellation with a branch-local best-effort cancellation. */
@@ -1767,7 +1805,7 @@ export class MeshengerVideoLibrary {
     // Group CallSession reads are an exact, foreground admission path. A
     // catalogue/poster sweep remains on the established broad GroupManifest
     // path so it cannot turn every group card into a named remote-call read.
-    if (!proof || priority === 'background') return 'not_eligible';
+    if (!proof || isBackgroundMediaPriority(priority)) return 'not_eligible';
     const rateLimit: SourceReadPolicy =
       priority === 'interactive'
         ? 'interactive'
@@ -2183,7 +2221,7 @@ export class MeshengerVideoLibrary {
     signal?: AbortSignal,
   ): Promise<ExactSharedCallProofOutcome> {
     const context = exactSharedCallProofContext(grant);
-    if (!context || priority === 'background') return 'not_eligible';
+    if (!context || isBackgroundMediaPriority(priority)) return 'not_eligible';
     if (hasVerifiedSharedAccess(user.eName, context.source, this.now())) return 'verified';
 
     const rateLimit: SourceReadPolicy =
@@ -2569,14 +2607,7 @@ export class MeshengerVideoLibrary {
           grant.accessScope === 'shared' && options?.hasRecentSharedAuthorizationReceipt === true;
         reportMediaAuthorizationContext(options, mediaAuthorizationTimingContext(grant, priority));
         const interactive = priority === 'interactive';
-        const sourceReadPolicy: SourceReadPolicy =
-          priority === 'interactive'
-            ? 'interactive'
-            : priority === 'warmup'
-              ? 'warmup-cancellable'
-              : options?.signal
-                ? 'background-cancellable'
-                : 'backoff';
+        const sourceReadPolicy = sourceReadPolicyForMediaPriority(priority, options?.signal);
         // The documented `/files/:id` redirect is itself a W3DS eVault read.
         // Start the reusable platform credential before any shared File reaches
         // that endpoint so a current eVault can apply its tenant-scoped read
@@ -2589,12 +2620,7 @@ export class MeshengerVideoLibrary {
             ? this.getPlatformToken(sourceReadPolicy, options?.signal).catch(() => undefined)
             : undefined;
         const sharedProbeOptions = {
-          priority:
-            priority === 'interactive'
-              ? ('interactive' as const)
-              : priority === 'warmup'
-                ? ('warmup' as const)
-                : ('background' as const),
+          priority,
           ...(options?.signal ? { signal: options.signal } : {}),
         };
         const timing = createMediaResolutionTiming();
@@ -2903,7 +2929,7 @@ export class MeshengerVideoLibrary {
               // Interactive Watch and hover authorization, however, can spend a
               // tiny bounded budget establishing the handoff that makes the
               // next browser request fast even if it reaches another replica.
-              if (priority === 'background') {
+              if (isBackgroundMediaPriority(priority)) {
                 void durableWrite;
               } else {
                 await awaitEVaultMediaUrlHandoff(durableWrite);
@@ -3000,7 +3026,10 @@ export class MeshengerVideoLibrary {
           },
           cache: 'no-store',
           redirect: 'manual',
-          signal: sourceRequestSignal(directFileDereferenceTimeoutMs, governedSignal),
+          signal: sourceRequestSignal(
+            directFileDereferenceTimeoutForPolicy(policy),
+            governedSignal,
+          ),
         },
       );
     } catch {
@@ -3779,14 +3808,7 @@ export class MeshengerVideoLibrary {
     },
   ): Promise<SharedSpaceAccess> {
     const { priority, signal } = options;
-    const sourceReadPolicy: SourceReadPolicy =
-      priority === 'interactive'
-        ? 'interactive'
-        : priority === 'warmup'
-          ? 'warmup-cancellable'
-          : signal
-            ? 'background-cancellable'
-            : 'backoff';
+    const sourceReadPolicy = sourceReadPolicyForMediaPriority(priority, signal);
     return coalesceSharedAccessProbe(
       user.eName,
       source,
@@ -3877,14 +3899,7 @@ export class MeshengerVideoLibrary {
         return bound;
       }
 
-      const sourceReadPolicy: SourceReadPolicy =
-        priority === 'interactive'
-          ? 'interactive'
-          : priority === 'warmup'
-            ? 'warmup-cancellable'
-            : options?.signal
-              ? 'background-cancellable'
-              : 'backoff';
+      const sourceReadPolicy = sourceReadPolicyForMediaPriority(priority, options?.signal);
       if (probes.length && priority === 'interactive') {
         // Every remote shared-access proof below needs the platform credential,
         // but a GroupManifest proof cannot request it until the source eVault
@@ -8133,12 +8148,15 @@ export class MeshengerVideoLibrary {
     const cached = this.cachedPlatformToken();
     if (cached) return cached;
     const tokenPolicy: SourceReadPolicy =
-      rateLimit === 'background-cancellable' || rateLimit === 'warmup-cancellable'
+      rateLimit === 'background-cancellable' ||
+      rateLimit === 'preview-cancellable' ||
+      rateLimit === 'warmup-cancellable'
         ? 'backoff'
         : rateLimit;
     const callerOwnsCancellableToken =
       Boolean(signal) &&
       (rateLimit === 'background-cancellable' ||
+        rateLimit === 'preview-cancellable' ||
         rateLimit === 'warmup-cancellable' ||
         rateLimit === 'inventory-cancellable');
     if (callerOwnsCancellableToken) {

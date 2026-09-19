@@ -148,7 +148,7 @@ type ExactCallProofInternals = {
   resolveExactSharedCallAuthorization: (
     user: { eName: string; eVaultUri?: string },
     grant: unknown,
-    priority: 'interactive' | 'warmup' | 'background',
+    priority: 'interactive' | 'warmup' | 'preview' | 'background',
     signal?: AbortSignal,
   ) => Promise<'not_eligible' | 'verified' | 'denied' | 'retry'>;
   resolveViewerEVault: (
@@ -5432,6 +5432,113 @@ describe('Meshenger video library', () => {
     }
   });
 
+  it('uses the dedicated eight-second budget for preview resolution and File redirects', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout');
+    const fetcher = vi.fn(async (url: URL) => {
+      if (url.pathname === '/resolve') {
+        return json({ ename: '@person.w3id', uri: 'https://person-vault.example' });
+      }
+      if (url.hostname === 'person-vault.example' && url.pathname === '/files/preview-budget') {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://media.example/preview-budget.mp4' },
+        });
+      }
+      throw new Error(`Unexpected request: ${url.hostname}${url.pathname}`);
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const controller = new AbortController();
+
+    try {
+      await expect(
+        configuredLibrary().resolveMediaUrl(
+          { eName: '@person.w3id' },
+          createMeshengerVideoStreamId(
+            { ...grant, fileUri: 'w3ds://file?id=@person.w3id/preview-budget' },
+            secret,
+          ),
+          { priority: 'preview', signal: controller.signal },
+        ),
+      ).resolves.toBe('https://media.example/preview-budget.mp4');
+
+      expect(timeout.mock.calls.filter(([milliseconds]) => milliseconds === 8_000)).toHaveLength(2);
+      expect(timeout).not.toHaveBeenCalledWith(2_500);
+      expect(timeout).not.toHaveBeenCalledWith(2_000);
+    } finally {
+      timeout.mockRestore();
+      controller.abort();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not let preview proof work inherit a pending 2.5-second background proof', async () => {
+    const library = configuredLibrary();
+    let releaseBackground: (result: SharedAccessResult) => void = () => undefined;
+    let markBackgroundStarted: () => void = () => undefined;
+    const backgroundStarted = new Promise<void>((resolve) => {
+      markBackgroundStarted = resolve;
+    });
+    const pendingBackground = new Promise<SharedAccessResult>((resolve) => {
+      releaseBackground = resolve;
+    });
+    const probe = vi
+      .spyOn(library, 'probeSharedSpaceAccess')
+      .mockImplementation(async (_user, _source, rateLimit) => {
+        if (rateLimit === 'background-cancellable') {
+          markBackgroundStarted();
+          return pendingBackground;
+        }
+        if (rateLimit === 'preview-cancellable') return { access: 'ok', member: true };
+        throw new Error(`Unexpected source policy: ${String(rateLimit)}`);
+      });
+    const streamId = createMeshengerVideoStreamId(
+      {
+        ...grant,
+        fileUri: 'w3ds://file?id=@friend.w3id/separate-preview-proof',
+        accessScope: 'shared',
+        sourceSpaceKey: '@friend.w3id',
+        accessBasis: 'membership',
+      },
+      secret,
+    );
+    const backgroundController = new AbortController();
+
+    try {
+      const background = library.inspectPlayableStream({ eName: grant.eName }, streamId, {
+        priority: 'background',
+        signal: backgroundController.signal,
+      });
+      await backgroundStarted;
+
+      await expect(
+        library.inspectPlayableStream({ eName: grant.eName }, streamId, {
+          priority: 'preview',
+          signal: new AbortController().signal,
+        }),
+      ).resolves.toEqual({ fileUri: 'w3ds://file?id=@friend.w3id/separate-preview-proof' });
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        { eName: '@friend.w3id', kind: 'group' },
+        'background-cancellable',
+        expect.anything(),
+      );
+      expect(probe).toHaveBeenCalledWith(
+        { eName: grant.eName },
+        { eName: '@friend.w3id', kind: 'group' },
+        'preview-cancellable',
+        expect.anything(),
+      );
+
+      releaseBackground({ access: 'retry', member: false });
+      await expect(background).rejects.toThrow(
+        expect.objectContaining({ code: 'remote_unavailable', status: 503 }),
+      );
+    } finally {
+      releaseBackground({ access: 'retry', member: false });
+      backgroundController.abort();
+    }
+  });
+
   it('does not let a cancellable shared preview block an interactive Watch request', async () => {
     const library = configuredLibrary();
     const controller = new AbortController();
@@ -5442,7 +5549,7 @@ describe('Meshenger video library', () => {
     const probe = vi
       .spyOn(library, 'probeSharedSpaceAccess')
       .mockImplementation(async (_user, _space, rateLimit, options) => {
-        if (rateLimit === 'background-cancellable') {
+        if (rateLimit === 'preview-cancellable') {
           markBackgroundStarted();
           return new Promise<{ access: 'retry'; member: false }>((resolve) => {
             options?.signal?.addEventListener(
@@ -5482,7 +5589,7 @@ describe('Meshenger video library', () => {
 
     try {
       const preview = library.resolveMediaUrl({ eName: grant.eName }, streamId, {
-        priority: 'background',
+        priority: 'preview',
         signal: controller.signal,
       });
       await backgroundStarted;
@@ -5493,7 +5600,7 @@ describe('Meshenger video library', () => {
       expect(probe).toHaveBeenCalledWith(
         { eName: grant.eName },
         { eName: '@friend.w3id', kind: 'group' },
-        'background-cancellable',
+        'preview-cancellable',
         expect.objectContaining({ signal: controller.signal }),
       );
       expect(probe).toHaveBeenCalledWith(
@@ -5992,7 +6099,7 @@ describe('Meshenger video library', () => {
 
     try {
       const preview = configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
-        priority: 'background',
+        priority: 'preview',
         signal: controller.signal,
       });
       await directRequestStarted;
@@ -6029,7 +6136,7 @@ describe('Meshenger video library', () => {
 
     try {
       const preview = configuredLibrary().resolveMediaUrl({ eName: '@person.w3id' }, streamId, {
-        priority: 'background',
+        priority: 'preview',
         signal: controller.signal,
       });
       await vi.waitFor(() => expect(resolveAttempts).toBe(1));

@@ -36,11 +36,24 @@ export interface VideoFrameExtractor {
 export class VideoFrameExtractorError extends Error {
   constructor(
     message: string,
-    public readonly code: 'unavailable' | 'failed',
+    /**
+     * `retryable` means ffmpeg could not complete a read of the source. It is
+     * deliberately distinct from a completed decode that produced no useful
+     * frame: a short-lived eVault redirect, a connection timeout, or a
+     * transient child-process failure deserves one bounded retry.
+     */
+    public readonly code: 'unavailable' | 'retryable' | 'failed',
   ) {
     super(message);
     this.name = 'VideoFrameExtractorError';
   }
+}
+
+/** Lets the preview queue retry only source-read failures, never bad frames. */
+export function isRetryableVideoFrameExtractorError(
+  error: unknown,
+): error is VideoFrameExtractorError {
+  return error instanceof VideoFrameExtractorError && error.code === 'retryable';
 }
 
 /**
@@ -63,6 +76,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
       const duration = await this.probeDurationForInput(input, options?.signal);
       if (options?.signal?.aborted) return undefined;
       const candidates = previewCaptureCandidates(duration ?? 0);
+      let sawRetryableReadFailure = false;
       for (const captureSeconds of candidates) {
         const sample = await this.extractRgbSample(
           input,
@@ -71,16 +85,57 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
           options?.signal,
         );
         if (options?.signal?.aborted) return undefined;
-        if (!sample || isMostlyBlackFrame(sample, sampleWidth, sampleHeight)) continue;
+        if (sample.kind === 'unavailable') {
+          throw new VideoFrameExtractorError('Frame extraction is unavailable.', 'unavailable');
+        }
+        if (sample.kind === 'retryable') {
+          if (sample.immediate) {
+            throw new VideoFrameExtractorError(
+              'Frame extraction could not read the source.',
+              'retryable',
+            );
+          }
+          sawRetryableReadFailure = true;
+          continue;
+        }
+        if (
+          sample.kind !== 'frame' ||
+          isMostlyBlackFrame(sample.bytes, sampleWidth, sampleHeight)
+        ) {
+          continue;
+        }
         const jpeg = await this.extractJpeg(input, captureSeconds, workspace, options?.signal);
         if (options?.signal?.aborted) return undefined;
-        if (jpeg?.byteLength) {
+        if (jpeg.kind === 'unavailable') {
+          throw new VideoFrameExtractorError('Frame extraction is unavailable.', 'unavailable');
+        }
+        if (jpeg.kind === 'retryable') {
+          if (jpeg.immediate) {
+            throw new VideoFrameExtractorError(
+              'Frame extraction could not read the source.',
+              'retryable',
+            );
+          }
+          sawRetryableReadFailure = true;
+          continue;
+        }
+        if (jpeg.kind === 'frame' && jpeg.bytes.byteLength) {
           return {
-            jpeg,
+            jpeg: jpeg.bytes,
             captureSeconds,
             ...(duration !== undefined ? { durationSeconds: duration } : {}),
           };
         }
+        // A successful RGB sample followed by no JPEG output is not evidence
+        // that the video has no useful frame. Treat it like a transient local
+        // write/decode failure and let the service make one bounded retry.
+        sawRetryableReadFailure = true;
+      }
+      if (sawRetryableReadFailure) {
+        throw new VideoFrameExtractorError(
+          'Frame extraction could not read the source.',
+          'retryable',
+        );
       }
       return undefined;
     } finally {
@@ -129,9 +184,9 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     captureSeconds: number,
     workspace: string,
     signal?: AbortSignal,
-  ): Promise<Uint8Array | undefined> {
+  ): Promise<FrameAttempt> {
     const output = join(workspace, `sample-${captureSeconds}.rgb`);
-    const ok = await runProcessExit(
+    const result = await runProcessExit(
       this.ffmpegPath,
       [
         '-hide_banner',
@@ -155,12 +210,15 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
       extractTimeoutMs,
       signal,
     );
-    if (!ok) return undefined;
+    if (result.kind !== 'ok') return result;
     try {
       const bytes = await readFile(output);
-      return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      return {
+        kind: 'frame',
+        bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      };
     } catch {
-      return undefined;
+      return { kind: 'empty' };
     }
   }
 
@@ -169,9 +227,9 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     captureSeconds: number,
     workspace: string,
     signal?: AbortSignal,
-  ): Promise<Uint8Array | undefined> {
+  ): Promise<FrameAttempt> {
     const output = join(workspace, `poster-${captureSeconds}.jpg`);
-    const ok = await runProcessExit(
+    const result = await runProcessExit(
       this.ffmpegPath,
       [
         '-hide_banner',
@@ -193,13 +251,16 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
       extractTimeoutMs,
       signal,
     );
-    if (!ok) return undefined;
+    if (result.kind !== 'ok') return result;
     try {
       const bytes = await readFile(output);
-      if (bytes.byteLength < 32) return undefined;
-      return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (bytes.byteLength < 32) return { kind: 'empty' };
+      return {
+        kind: 'frame',
+        bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+      };
     } catch {
-      return undefined;
+      return { kind: 'empty' };
     }
   }
 }
@@ -249,39 +310,82 @@ function runProcess(
   });
 }
 
+type ProcessExitResult =
+  | { kind: 'ok' }
+  | { kind: 'retryable'; immediate: boolean }
+  | { kind: 'unavailable' }
+  | { kind: 'aborted' };
+
+type FrameAttempt =
+  | { kind: 'frame'; bytes: Uint8Array }
+  | { kind: 'empty' }
+  | Exclude<ProcessExitResult, { kind: 'ok' }>;
+
 function runProcessExit(
   command: string,
   args: string[],
   timeoutMs: number,
   signal?: AbortSignal,
-): Promise<boolean> {
+): Promise<ProcessExitResult> {
   return new Promise((resolve) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let abort: () => void = () => undefined;
+    const cleanup = () => signal?.removeEventListener('abort', abort);
+    const finish = (result: ProcessExitResult) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      cleanup();
+      resolve(result);
+    };
     if (signal?.aborted) {
-      resolve(false);
+      resolve({ kind: 'aborted' });
       return;
     }
-    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'ignore'] });
-    const cleanup = () => signal?.removeEventListener('abort', abort);
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL');
-      cleanup();
-      resolve(false);
-    }, timeoutMs);
-    const abort = () => {
-      clearTimeout(timer);
-      child.kill('SIGKILL');
-      resolve(false);
+    let child: ReturnType<typeof spawn>;
+    try {
+      child = spawn(command, args, { stdio: ['ignore', 'ignore', 'ignore'] });
+    } catch (error) {
+      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+      if (isUnavailableProcessError(code)) resolve({ kind: 'unavailable' });
+      else resolve({ kind: 'retryable', immediate: true });
+      return;
+    }
+    abort = () => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // The child can exit between the signal and this cancellation.
+      }
+      finish({ kind: 'aborted' });
     };
+    timer = setTimeout(() => {
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        // The close handler still settles this attempt when the child won the race.
+      }
+      finish({ kind: 'retryable', immediate: true });
+    }, timeoutMs);
     signal?.addEventListener('abort', abort, { once: true });
-    child.on('error', () => {
-      clearTimeout(timer);
-      cleanup();
-      resolve(false);
+    child.on('error', (error) => {
+      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+      if (isUnavailableProcessError(code)) {
+        finish({ kind: 'unavailable' });
+        return;
+      }
+      finish({ kind: 'retryable', immediate: true });
     });
     child.on('close', (code) => {
-      clearTimeout(timer);
-      cleanup();
-      resolve(code === 0);
+      // A non-zero ffmpeg exit can come from an expired redirect, a transient
+      // upstream transport failure, or a bad seek. Try every capture point
+      // first, then surface a retryable read failure if none can succeed.
+      finish(code === 0 ? { kind: 'ok' } : { kind: 'retryable', immediate: false });
     });
   });
+}
+
+function isUnavailableProcessError(code: string | undefined): boolean {
+  return code === 'ENOENT' || code === 'EACCES';
 }
