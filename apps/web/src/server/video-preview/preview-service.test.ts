@@ -812,6 +812,69 @@ describe('VideoPreviewService', () => {
     expect(highestActive).toBe(1);
   });
 
+  it('renews a durable shared stream only when its queued task starts', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    let markFirstStarted: () => void = () => undefined;
+    const firstStarted = new Promise<void>((resolve) => {
+      markFirstStarted = resolve;
+    });
+    let releaseFirst: () => void = () => undefined;
+    const release = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let extractions = 0;
+    const renewPlayableStream = vi.fn().mockResolvedValue('fresh-stream');
+    const service = new VideoPreviewService({
+      store,
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      extractor: {
+        extractUsefulFrame: async () => {
+          extractions += 1;
+          if (extractions === 1) {
+            markFirstStarted();
+            await release;
+          }
+          return { jpeg, captureSeconds: 3 };
+        },
+      },
+      evault: {
+        inspectBoundStream: (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        inspectPlayableStream: async (_user, streamId) => ({
+          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+        }),
+        resolveMediaUrl: async () => 'https://media.example/private.mp4',
+        renewPlayableStream,
+      },
+    });
+
+    await service.scheduleLibraryBackfill({ eName: '@viewer.w3id' }, [
+      { streamIds: ['blocking-stream'] },
+    ]);
+    await firstStarted;
+
+    await service.scheduleDurableLibraryBackfill(
+      { eName: '@viewer.w3id' },
+      [{ streamIds: ['retained-expired-stream'] }],
+      { retryFailed: true },
+    );
+    expect(renewPlayableStream).not.toHaveBeenCalled();
+
+    releaseFirst();
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/fresh-stream'),
+      ).resolves.toMatchObject({ status: 'ready' });
+    });
+    expect(renewPlayableStream).toHaveBeenCalledWith(
+      { eName: '@viewer.w3id' },
+      'retained-expired-stream',
+    );
+  });
+
   it('uses a fallback poster until scheduled retry can repair a rate-limited eVault preview', async () => {
     const store = new InMemoryVideoPreviewStore();
     const service = new VideoPreviewService({

@@ -83,6 +83,11 @@ export interface AuthorizedEVaultPreviewSource {
     streamId: string,
     options?: { priority?: 'preview' | 'background' | 'interactive'; signal?: AbortSignal },
   ): Promise<string>;
+  /**
+   * Reissues a retained, viewer-bound stream just before low-priority durable
+   * work starts. The following File resolution still rechecks current access.
+   */
+  renewPlayableStream?(user: Pick<AuthUser, 'eName'>, streamId: string): Promise<string>;
 }
 
 export interface VideoPreviewServiceOptions {
@@ -244,6 +249,23 @@ export class VideoPreviewService {
   }
 
   /**
+   * Queues a retained catalogue card without freezing a short-lived stream
+   * token into a potentially long backfill. Each task renews the original
+   * signed stream immediately before it performs the live source check.
+   */
+  async scheduleDurableLibraryBackfill(
+    user: Pick<AuthUser, 'eName'>,
+    items: ReadonlyArray<{ streamIds?: readonly string[] }>,
+    options?: { retryFailed?: boolean },
+  ): Promise<void> {
+    for (const item of items) {
+      const streamId = item.streamIds?.[0];
+      if (!streamId) continue;
+      this.enqueueDurableEVaultBackfill(user, streamId, options);
+    }
+  }
+
+  /**
    * Library requests enqueue preview work rather than starting one extractor
    * per card. A small shared worker pool keeps a large private catalogue from
    * saturating ffmpeg, storage, or the authorized eVault media endpoint.
@@ -266,6 +288,22 @@ export class VideoPreviewService {
       run: () => this.ensureEVaultPreview(user, streamId, { retryFailed: true }),
       retryPending: () =>
         this.ensureEVaultPreview(user, streamId, { retryFailed: true, retryPending: true }),
+    });
+  }
+
+  private enqueueDurableEVaultBackfill(
+    user: Pick<AuthUser, 'eName'>,
+    streamId: string,
+    options?: { retryFailed?: boolean },
+  ): void {
+    this.enqueueBackfill({
+      key: `durable-evault:${user.eName}:${streamId}`,
+      run: () => this.ensureRenewedEVaultPreview(user, streamId, options),
+      retryPending: () =>
+        this.ensureRenewedEVaultPreview(user, streamId, {
+          retryPending: true,
+          ...(options?.retryFailed === true ? { retryFailed: true } : {}),
+        }),
     });
   }
 
@@ -523,6 +561,28 @@ export class VideoPreviewService {
       },
       options,
     );
+  }
+
+  private async ensureRenewedEVaultPreview(
+    user: Pick<AuthUser, 'eName'>,
+    retainedStreamId: string,
+    options?: { retryFailed?: boolean; retryPending?: boolean },
+  ): Promise<VideoPreviewRecord> {
+    const evault = this.requireEVaultSource();
+    const renew = evault.renewPlayableStream;
+    if (!renew) {
+      throw new VideoPreviewError(
+        'Durable eVault preview repair is not configured.',
+        'internal_error',
+        503,
+      );
+    }
+    // This executes inside the one-at-a-time background queue. A retained
+    // grant can be expired; renewal validates its signature and viewer before
+    // creating a fresh short-lived stream for the immediately following live
+    // eVault/File access check.
+    const freshStreamId = await renew(user, retainedStreamId);
+    return this.ensureEVaultPreview(user, freshStreamId, options);
   }
 
   private async generate(

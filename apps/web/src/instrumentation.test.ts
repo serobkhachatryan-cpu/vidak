@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   validate: vi.fn(),
   startPump: vi.fn(),
+  startDurablePreviewRepairPump: vi.fn(),
 }));
 
 vi.mock('./server/server-config', () => ({
@@ -11,6 +12,10 @@ vi.mock('./server/server-config', () => ({
 
 vi.mock('./server/video-space/inventory-pump', () => ({
   startInventoryJobPump: mocks.startPump,
+}));
+
+vi.mock('./server/video-preview/durable-repair-pump', () => ({
+  startDurablePreviewRepairPump: mocks.startDurablePreviewRepairPump,
 }));
 
 import { register } from './instrumentation';
@@ -22,6 +27,7 @@ describe('server instrumentation', () => {
   beforeEach(() => {
     mocks.validate.mockReset();
     mocks.startPump.mockReset();
+    mocks.startDurablePreviewRepairPump.mockReset();
     mocks.validate.mockReturnValue({ w3ds: null });
     delete process.env.NEXT_PHASE;
   });
@@ -40,6 +46,7 @@ describe('server instrumentation', () => {
 
     expect(mocks.validate).toHaveBeenCalledTimes(1);
     expect(mocks.startPump).toHaveBeenCalledTimes(1);
+    expect(mocks.startDurablePreviewRepairPump).toHaveBeenCalledTimes(1);
   });
 
   it('does not run server instrumentation in an explicit Edge runtime', async () => {
@@ -49,5 +56,6 @@ describe('server instrumentation', () => {
 
     expect(mocks.validate).not.toHaveBeenCalled();
     expect(mocks.startPump).not.toHaveBeenCalled();
+    expect(mocks.startDurablePreviewRepairPump).not.toHaveBeenCalled();
   });
 });

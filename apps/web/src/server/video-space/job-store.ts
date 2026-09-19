@@ -85,6 +85,12 @@ export interface InventoryJobStore {
    */
   getItemByOwner(ownerEName: string, itemKey: string): Promise<MeshengerVideo | undefined>;
   listRunning(): Promise<InventoryJobRecord[]>;
+  /**
+   * Lists retained catalogue owners without hydrating every card. This is for
+   * server-only maintenance that must revalidate a viewer-bound capability;
+   * it is deliberately not exposed through an HTTP route.
+   */
+  listStored?(): Promise<InventoryJobRecord[]>;
   createJob(input: {
     ownerEName: string;
     ownerEVaultUri: string;
@@ -262,6 +268,9 @@ export function createMemoryInventoryJobStore(): InventoryJobStore {
       return [...jobs.values()]
         .filter((job) => inventoryJobNeedsDrain(job) || isStaleCatalogueVersion(job.ledger))
         .map(cloneJob);
+    },
+    async listStored() {
+      return [...jobs.values()].map(cloneJob);
     },
     async createJob(input) {
       const existing = jobs.get(input.ownerEName);
@@ -575,6 +584,12 @@ export function createDrizzleInventoryJobStore(): InventoryJobStore {
         if (inventoryJobNeedsDrain(job) || isStaleCatalogueVersion(job.ledger)) jobs.push(job);
       }
       return jobs;
+    },
+    async listStored() {
+      const rows = await db().select().from(videoSpaceInventoryJobs);
+      return rows.map((row) =>
+        asJobRecord(row, [], [], [], sourceCountsFromLedger(row.ledger as Record<string, unknown>)),
+      );
     },
     async createJob(input) {
       const existing = await this.getByOwner(input.ownerEName);
