@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { AuthUser } from '@w3ds/auth';
 import type { MeshengerVideo } from '../meshenger-video-library';
-import { reportOperationalEvent } from '../ops-observability';
+import { reportDurablePreviewRepairSweep, reportOperationalEvent } from '../ops-observability';
 import { getInventoryJobStore, type InventoryJobRecord } from '../video-space/job-store';
 import { getVideoPreviewService } from './preview-runtime';
 
@@ -22,8 +22,14 @@ type DurablePreviewRepairDependencies = {
 
 let started = false;
 let activeRepair: Promise<void> | undefined;
-let startupTimer: ReturnType<typeof setTimeout> | undefined;
 let repairInterval: ReturnType<typeof setInterval> | undefined;
+
+type DurablePreviewRepairSweep = {
+  storedJobs: number;
+  loadedJobs: number;
+  queuedSharedCards: number;
+  skippedJobs: number;
+};
 
 /**
  * Schedules server-only repair sweeps after a process starts.
@@ -38,24 +44,27 @@ let repairInterval: ReturnType<typeof setInterval> | undefined;
 export function startDurablePreviewRepairPump(): void {
   if (started || process.env.NEXT_PHASE === 'phase-production-build') return;
   started = true;
-  startupTimer = setTimeout(() => {
-    startupTimer = undefined;
-    void runDurablePreviewRepairOnce(undefined, { retryFailed: true }).catch(() => undefined);
-  }, 1_000);
-  startupTimer.unref?.();
+  // This used to wait behind an unreferenced startup timer. In a managed
+  // Next runtime that made the only repair sweep easy to lose before it had
+  // performed its first durable database read. Start it now, without awaiting
+  // it in instrumentation: the first await is the bounded local job lookup,
+  // and the actual source reads remain in the single-file background queue.
+  reportOperationalEvent({
+    category: 'video_preview',
+    code: 'durable_preview_repair_pump_started',
+  });
+  launchDurablePreviewRepair({ retryFailed: true });
   repairInterval = setInterval(() => {
     // A later sweep retries stale pending records. Recent terminal failures
     // were already given one recovery attempt at startup, so they do not turn
     // into a five-minute source-read loop.
-    void runDurablePreviewRepairOnce().catch(() => undefined);
+    launchDurablePreviewRepair();
   }, repairIntervalMs);
   repairInterval.unref?.();
 }
 
 export function stopDurablePreviewRepairPumpForTests(): void {
-  if (startupTimer) clearTimeout(startupTimer);
   if (repairInterval) clearInterval(repairInterval);
-  startupTimer = undefined;
   repairInterval = undefined;
   started = false;
   activeRepair = undefined;
@@ -71,9 +80,15 @@ export async function runDurablePreviewRepairOnce(
   options?: { retryFailed?: boolean },
 ): Promise<void> {
   if (activeRepair) return activeRepair;
-  const resolvedDependencies = dependencies ?? productionDependencies();
   let current: Promise<void>;
-  current = repairStoredSharedPreviews(resolvedDependencies, options)
+  // Construct production dependencies inside the guarded chain. A malformed
+  // runtime configuration used to reject before the catch below and then get
+  // silently discarded by the fire-and-forget pump launcher.
+  current = Promise.resolve()
+    .then(() => repairStoredSharedPreviews(dependencies ?? productionDependencies(), options))
+    .then((sweep) => {
+      emitDurablePreviewRepairSweep(sweep);
+    })
     .catch(() => {
       // Do not disclose a viewer, stream ID, source, or eVault endpoint in
       // logs. A later process start still retries every retained card.
@@ -89,35 +104,100 @@ export async function runDurablePreviewRepairOnce(
 async function repairStoredSharedPreviews(
   dependencies: DurablePreviewRepairDependencies,
   options?: { retryFailed?: boolean },
-): Promise<void> {
+): Promise<DurablePreviewRepairSweep> {
   const stored = await dependencies.listStoredJobs();
+  const sweep: DurablePreviewRepairSweep = {
+    storedJobs: stored.length,
+    loadedJobs: 0,
+    queuedSharedCards: 0,
+    skippedJobs: 0,
+  };
   for (const summary of stored) {
+    let job: InventoryJobRecord | undefined;
     try {
-      const job = await dependencies.loadJob(summary.ownerEName);
-      if (
-        !job ||
-        job.ownerEName !== summary.ownerEName ||
-        job.ownerEVaultUri !== summary.ownerEVaultUri
-      )
-        continue;
-
-      const retainedItems: Array<{ streamIds: readonly string[] }> = [];
-      for (const item of job.items) {
-        const streamId = firstRetainedSharedStream(item);
-        if (!streamId) continue;
-        retainedItems.push({ streamIds: [streamId] });
-      }
-      if (retainedItems.length > 0) {
-        await dependencies.scheduleDurableLibraryBackfill(
-          { eName: job.ownerEName },
-          retainedItems,
-          options,
-        );
-      }
+      job = await dependencies.loadJob(summary.ownerEName);
     } catch {
       // A corrupt or unavailable historical job cannot block a different
       // viewer's retained cards. The next startup sweep will try it again.
+      sweep.skippedJobs += 1;
+      reportOperationalEvent({
+        category: 'video_preview',
+        code: 'durable_preview_job_load_failed',
+      });
+      continue;
     }
+    if (
+      !job ||
+      job.ownerEName !== summary.ownerEName ||
+      job.ownerEVaultUri !== summary.ownerEVaultUri
+    ) {
+      sweep.skippedJobs += 1;
+      continue;
+    }
+    sweep.loadedJobs += 1;
+
+    const retainedItems: Array<{ streamIds: readonly string[] }> = [];
+    for (const item of job.items) {
+      const streamId = firstRetainedSharedStream(item);
+      if (!streamId) continue;
+      retainedItems.push({ streamIds: [streamId] });
+    }
+    if (retainedItems.length === 0) continue;
+    try {
+      await dependencies.scheduleDurableLibraryBackfill(
+        { eName: job.ownerEName },
+        retainedItems,
+        options,
+      );
+      sweep.queuedSharedCards += retainedItems.length;
+    } catch {
+      // If the in-process preview service cannot accept this batch, retain a
+      // safe aggregate signal instead of making the next job invisible.
+      sweep.skippedJobs += 1;
+      reportOperationalEvent({
+        category: 'video_preview',
+        code: 'durable_preview_queue_schedule_failed',
+      });
+    }
+  }
+  return sweep;
+}
+
+function launchDurablePreviewRepair(options?: { retryFailed?: boolean }): void {
+  void runDurablePreviewRepairOnce(undefined, options).catch(() => undefined);
+}
+
+/**
+ * Emits a fixed set of aggregate-only signals. Counts help distinguish a
+ * missing hook from an empty or rejected durable inventory, while avoiding
+ * eNames, grants, File URIs, source URLs, and error text.
+ */
+function emitDurablePreviewRepairSweep(sweep: DurablePreviewRepairSweep): void {
+  reportDurablePreviewRepairSweep(sweep);
+  reportOperationalEvent({
+    category: 'video_preview',
+    code: 'durable_preview_repair_sweep_completed',
+  });
+  if (sweep.storedJobs === 0) {
+    reportOperationalEvent({
+      category: 'video_preview',
+      code: 'durable_preview_repair_no_stored_jobs',
+    });
+    return;
+  }
+  if (sweep.queuedSharedCards === 0) {
+    reportOperationalEvent({
+      category: 'video_preview',
+      code: 'durable_preview_repair_no_shared_cards',
+    });
+    return;
+  }
+  reportOperationalEvent({ category: 'video_preview', code: 'durable_preview_repair_queued' });
+  if (sweep.skippedJobs > 0) {
+    reportOperationalEvent({
+      category: 'video_preview',
+      code: 'durable_preview_repair_jobs_skipped',
+    });
   }
 }
 

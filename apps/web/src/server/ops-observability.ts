@@ -43,6 +43,23 @@ export interface OperationalEventReport {
 }
 
 /**
+ * Fixed, aggregate-only state for the server-side retained-preview repair
+ * sweep. It has no user, stream, File, source URL, credential, or error
+ * field, so an operational log can prove repair coverage without expanding
+ * the sensitive-data surface.
+ */
+export interface DurablePreviewRepairSweepReport extends OperationalEventReport {
+  category: 'video_preview';
+  code: 'durable_preview_repair_sweep';
+  repair: {
+    storedJobs: number;
+    loadedJobs: number;
+    queuedSharedCards: number;
+    skippedJobs: number;
+  };
+}
+
+/**
  * Fixed-schema playback timings used to diagnose the private media proxy.
  *
  * The schema deliberately has no free-form fields: it can never carry a
@@ -338,6 +355,32 @@ export function reportOperationalEvent(input: {
     category: input.category,
     correlationId: input.correlationId ?? createCorrelationId(),
     code: input.code,
+  };
+
+  const line = JSON.stringify(report);
+  assertNoSensitiveLeak(line);
+  logSink(line);
+  return report;
+}
+
+/** Emits bounded, non-sensitive coverage counters for one retained-preview sweep. */
+export function reportDurablePreviewRepairSweep(input: {
+  storedJobs: number;
+  loadedJobs: number;
+  queuedSharedCards: number;
+  skippedJobs: number;
+}): DurablePreviewRepairSweepReport {
+  const report: DurablePreviewRepairSweepReport = {
+    level: 'info',
+    category: 'video_preview',
+    correlationId: createCorrelationId(),
+    code: 'durable_preview_repair_sweep',
+    repair: {
+      storedJobs: normalizeTimingCount(input.storedJobs),
+      loadedJobs: normalizeTimingCount(input.loadedJobs),
+      queuedSharedCards: normalizeTimingCount(input.queuedSharedCards),
+      skippedJobs: normalizeTimingCount(input.skippedJobs),
+    },
   };
 
   const line = JSON.stringify(report);

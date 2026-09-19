@@ -146,6 +146,12 @@ export class VideoPreviewService {
   private readonly pendingBackfillRetries = new Map<string, number>();
   private activeBackfills = 0;
   private delayedBackfillDrain: ReturnType<typeof setTimeout> | undefined;
+  // Repairing a historical library can enqueue hundreds of retained grants.
+  // Keep operational signals bounded: they identify the failed stage without
+  // turning a single bad eVault source into hundreds of log lines.
+  private durablePreviewTaskStartReported = false;
+  private durablePreviewRenewalFailureReported = false;
+  private backfillQueueDeferredReported = false;
 
   constructor(options: VideoPreviewServiceOptions) {
     this.store = options.store;
@@ -310,6 +316,16 @@ export class VideoPreviewService {
   private drainBackfillQueue(): void {
     const delay = backgroundWorkDelayMs();
     if (delay > 0) {
+      if (
+        !this.backfillQueueDeferredReported &&
+        this.backfillQueue.some((task) => task.key.startsWith('durable-evault:'))
+      ) {
+        this.backfillQueueDeferredReported = true;
+        reportOperationalEvent({
+          category: 'video_preview',
+          code: 'durable_preview_queue_deferred',
+        });
+      }
       if (!this.delayedBackfillDrain) {
         this.delayedBackfillDrain = setTimeout(() => {
           this.delayedBackfillDrain = undefined;
@@ -322,6 +338,10 @@ export class VideoPreviewService {
     while (this.activeBackfills < maxConcurrentBackfillPreviews && this.backfillQueue.length > 0) {
       const next = this.backfillQueue.shift();
       if (!next) return;
+      if (next.key.startsWith('durable-evault:') && !this.durablePreviewTaskStartReported) {
+        this.durablePreviewTaskStartReported = true;
+        reportOperationalEvent({ category: 'video_preview', code: 'durable_preview_task_started' });
+      }
       this.activeBackfills += 1;
       void next
         .run()
@@ -581,7 +601,19 @@ export class VideoPreviewService {
     // grant can be expired; renewal validates its signature and viewer before
     // creating a fresh short-lived stream for the immediately following live
     // eVault/File access check.
-    const freshStreamId = await renew(user, retainedStreamId);
+    let freshStreamId: string;
+    try {
+      freshStreamId = await renew(user, retainedStreamId);
+    } catch (error) {
+      if (!this.durablePreviewRenewalFailureReported) {
+        this.durablePreviewRenewalFailureReported = true;
+        reportOperationalEvent({
+          category: 'video_preview',
+          code: 'durable_preview_stream_renewal_failed',
+        });
+      }
+      throw error;
+    }
     return this.ensureEVaultPreview(user, freshStreamId, options);
   }
 
