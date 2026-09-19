@@ -823,7 +823,22 @@ describe('VideoPreviewService', () => {
       releaseFirst = resolve;
     });
     let extractions = 0;
-    const renewPlayableStream = vi.fn().mockResolvedValue('fresh-stream');
+    const evault = {
+      renewCalls: 0,
+      inspectBoundStream: (_user: { eName: string }, streamId: string) => ({
+        fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+      }),
+      inspectPlayableStream: async (_user: { eName: string }, streamId: string) => ({
+        fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
+      }),
+      resolveMediaUrl: async () => 'https://media.example/private.mp4',
+      // Keep this deliberately `this`-dependent. The production eVault
+      // library method is too, and this catches any accidental detachment.
+      renewPlayableStream(_user: { eName: string }, _retainedStreamId: string): Promise<string> {
+        this.renewCalls += 1;
+        return Promise.resolve('fresh-stream');
+      },
+    };
     const service = new VideoPreviewService({
       store,
       storage: new MemoryMediaStorage(),
@@ -839,16 +854,7 @@ describe('VideoPreviewService', () => {
           return { jpeg, captureSeconds: 3 };
         },
       },
-      evault: {
-        inspectBoundStream: (_user, streamId) => ({
-          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
-        }),
-        inspectPlayableStream: async (_user, streamId) => ({
-          fileUri: `w3ds://file?id=@owner.w3id/${streamId}`,
-        }),
-        resolveMediaUrl: async () => 'https://media.example/private.mp4',
-        renewPlayableStream,
-      },
+      evault,
     });
 
     await service.scheduleLibraryBackfill({ eName: '@viewer.w3id' }, [
@@ -861,7 +867,7 @@ describe('VideoPreviewService', () => {
       [{ streamIds: ['retained-expired-stream'] }],
       { retryFailed: true },
     );
-    expect(renewPlayableStream).not.toHaveBeenCalled();
+    expect(evault.renewCalls).toBe(0);
 
     releaseFirst();
     await vi.waitFor(async () => {
@@ -869,10 +875,7 @@ describe('VideoPreviewService', () => {
         store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/fresh-stream'),
       ).resolves.toMatchObject({ status: 'ready' });
     });
-    expect(renewPlayableStream).toHaveBeenCalledWith(
-      { eName: '@viewer.w3id' },
-      'retained-expired-stream',
-    );
+    expect(evault.renewCalls).toBe(1);
   });
 
   it('uses a fallback poster until scheduled retry can repair a rate-limited eVault preview', async () => {

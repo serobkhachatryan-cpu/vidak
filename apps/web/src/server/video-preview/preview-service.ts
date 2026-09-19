@@ -603,7 +603,10 @@ export class VideoPreviewService {
     // eVault/File access check.
     let freshStreamId: string;
     try {
-      freshStreamId = await renew(user, retainedStreamId);
+      // `renewPlayableStream` is a MeshengerVideoLibrary instance method.
+      // Calling a detached reference loses its `this` binding, which made
+      // every retained historical grant fail before its live eVault check.
+      freshStreamId = await renew.call(evault, user, retainedStreamId);
     } catch (error) {
       if (!this.durablePreviewRenewalFailureReported) {
         this.durablePreviewRenewalFailureReported = true;
