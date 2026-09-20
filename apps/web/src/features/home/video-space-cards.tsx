@@ -4,11 +4,10 @@ import type { Video } from '@w3ds/types';
 import { Button, VideoSpacePoster } from '@w3ds/ui';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { type ComponentProps, useCallback, useEffect, useRef } from 'react';
+import { type ComponentProps, useCallback } from 'react';
 import { preloadContinuousRecordingTicket } from '../watch/recording-ticket-preload';
 import {
   cancelCancellableSharedVideoAuthorizationHoverWork,
-  scheduleSharedVideoAuthorizationWarmup,
   warmSharedVideoAuthorization,
 } from './shared-video-authorization-warmup';
 import {
@@ -223,7 +222,6 @@ export function OwnedVideoCard({ video }: { video: Video }) {
 
 export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   const router = useRouter();
-  const cancelScheduledAuthorization = useRef<(() => void) | undefined>(undefined);
   const visibilityLabel = videoSpaceVisibilityLabels[video.visibility];
   const watchHref = `/watch/space/${encodeURIComponent(video.id)}`;
   const canPlay = canPlayLibraryVideo(video);
@@ -232,37 +230,23 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   const streamId = streamIds[0];
   const isSharedContinuousRecording = video.accessScope === 'shared' && streamIds.length > 1;
   const titleId = `video-card-title-${encodeURIComponent(video.id)}`;
-  const cancelSharedAuthorizationWarmup = useCallback(() => {
-    cancelScheduledAuthorization.current?.();
-    cancelScheduledAuthorization.current = undefined;
-  }, []);
   const preloadContinuousTicket = useCallback(() => {
-    cancelSharedAuthorizationWarmup();
     if (!isSharedContinuousRecording) return;
-    // A hover from another card is speculative work with a distinct server
-    // pending key. Stop it before the selected recording performs the one
-    // real source-zero ticket preflight.
+    // Stop any work scheduled by an older client before the selected
+    // recording performs its single source-zero ticket preflight.
     cancelCancellableSharedVideoAuthorizationHoverWork();
     // A long shared recording has a single source-zero handoff: start the
     // actual opaque ticket only for a confirmed in-app navigation. The Watch
     // page joins this promise instead of issuing a second authorization path.
     preloadContinuousRecordingTicket(streamIds);
-  }, [cancelSharedAuthorizationWarmup, isSharedContinuousRecording, streamIds]);
+  }, [isSharedContinuousRecording, streamIds]);
   const warmSharedAuthorization = useCallback(() => {
-    cancelSharedAuthorizationWarmup();
     if (isSharedContinuousRecording || video.accessScope !== 'shared' || !streamId) return;
-    // Pointer-down/click remains the immediate, authoritative warmup path.
+    // Only a confirmed Watch gesture may contact the owner's eVault. Hovering
+    // a dense shared grid used to create background authorization work that
+    // competed with the video the viewer actually selected.
     warmSharedVideoAuthorization(`/api/evault/videos/${encodeURIComponent(streamId)}/authorize`);
-  }, [cancelSharedAuthorizationWarmup, isSharedContinuousRecording, streamId, video.accessScope]);
-  const scheduleSharedAuthorizationWarmup = useCallback(() => {
-    if (isSharedContinuousRecording || video.accessScope !== 'shared' || !streamId) return;
-    cancelSharedAuthorizationWarmup();
-    // A short dwell offers a likely Watch click a head start without starting
-    // authorization for every visible card or building a hover-request burst.
-    cancelScheduledAuthorization.current = scheduleSharedVideoAuthorizationWarmup(
-      `/api/evault/videos/${encodeURIComponent(streamId)}/authorize`,
-    );
-  }, [cancelSharedAuthorizationWarmup, isSharedContinuousRecording, streamId, video.accessScope]);
+  }, [isSharedContinuousRecording, streamId, video.accessScope]);
   const prepareButtonWatch = useCallback(() => {
     if (isSharedContinuousRecording) preloadContinuousTicket();
     else warmSharedAuthorization();
@@ -274,13 +258,6 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
     warmSharedAuthorization,
     watchHref,
   ]);
-  useEffect(
-    () => () => {
-      cancelSharedAuthorizationWarmup();
-    },
-    [cancelSharedAuthorizationWarmup],
-  );
-
   const poster = (
     <VideoSpacePoster
       title={video.title}
@@ -297,25 +274,13 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
     />
   );
 
-  const watchLinkProps: CardLinkInteractionProps = {
-    onPointerLeave: cancelSharedAuthorizationWarmup,
-    onBlur: cancelSharedAuthorizationWarmup,
-    onPointerDown: isSharedContinuousRecording
-      ? cancelSharedAuthorizationWarmup
-      : warmSharedAuthorization,
-    ...(isSharedContinuousRecording
-      ? {
-          // Next only invokes this for a real same-document navigation. New
-          // tabs and modified clicks mint their own single-use ticket.
-          onNavigate: preloadContinuousTicket,
-        }
-      : {
-          onPointerEnter: scheduleSharedAuthorizationWarmup,
-          onFocus: scheduleSharedAuthorizationWarmup,
-          onPointerDown: warmSharedAuthorization,
-          onClick: warmSharedAuthorization,
-        }),
-  };
+  const watchLinkProps: CardLinkInteractionProps = isSharedContinuousRecording
+    ? {
+        // Next only invokes this for a real same-document navigation. New
+        // tabs and modified clicks mint their own single-use ticket.
+        onNavigate: preloadContinuousTicket,
+      }
+    : { onPointerDown: warmSharedAuthorization, onClick: warmSharedAuthorization };
 
   return (
     <article
