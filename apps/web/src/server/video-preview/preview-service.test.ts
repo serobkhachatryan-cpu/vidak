@@ -636,6 +636,49 @@ describe('VideoPreviewService', () => {
     );
   });
 
+  it('renews an expired retained grant before reporting its cached preview state', async () => {
+    const store = new InMemoryVideoPreviewStore();
+    const fileUri = 'w3ds://file?id=@owner.w3id/retained-file';
+    await store.create({
+      id: 'renewed-cached-preview-state',
+      sourceKind: 'evault-file',
+      sourceKey: fileUri,
+      storageKey: 'cached-poster',
+      status: 'ready',
+      contentType: 'image/jpeg',
+      byteSize: jpeg.byteLength,
+    });
+    const evault = {
+      renewCalls: 0,
+      inspectBoundStream: (_user: { eName: string }, streamId: string) => {
+        if (streamId === 'expired-stream') {
+          throw Object.assign(new Error('expired'), { code: 'stream_expired', status: 401 });
+        }
+        return { fileUri };
+      },
+      inspectPlayableStream: vi.fn(),
+      resolveMediaUrl: async () => 'https://media.example/private.mp4',
+      renewPlayableStream(_user: { eName: string }, streamId: string): Promise<string> {
+        this.renewCalls += 1;
+        expect(streamId).toBe('expired-stream');
+        return Promise.resolve('renewed-stream');
+      },
+    };
+    const service = new VideoPreviewService({
+      store,
+      storage: new MemoryMediaStorage(),
+      videos: new InMemoryCreatorVideoStore(),
+      media: new InMemoryMediaAssetStore(),
+      evault,
+    });
+
+    await expect(
+      service.peekCachedLibraryPreview({ eName: '@viewer.w3id' }, 'expired-stream'),
+    ).resolves.toBe('ready');
+    expect(evault.renewCalls).toBe(1);
+    expect(evault.inspectPlayableStream).not.toHaveBeenCalled();
+  });
+
   it('never renews an invalid or foreign eVault grant', async () => {
     const renewPlayableStream = vi.fn();
     const service = new VideoPreviewService({
@@ -790,7 +833,7 @@ describe('VideoPreviewService', () => {
     expect(download.status).toBe('unavailable');
     expect(logs).toHaveLength(1);
     expect(logs[0]).toContain('"category":"video_preview"');
-    expect(logs[0]).toContain('"code":"preview_frame_unavailable"');
+    expect(logs[0]).toContain('"code":"preview_no_decodable_frame"');
     expect(logs[0]).not.toContain(video.id);
     expect(logs[0]).not.toContain(storageKey);
   });

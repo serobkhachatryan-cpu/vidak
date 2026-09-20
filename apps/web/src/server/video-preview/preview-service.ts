@@ -206,7 +206,13 @@ export class VideoPreviewService {
     user: Pick<AuthUser, 'eName'>,
     streamId: string,
   ): Promise<VideoPreviewState> {
-    const { fileUri } = this.requireEVaultSource().inspectBoundStream(user, streamId);
+    // Catalogue cards can outlive their short-lived sealed stream grant. A
+    // local renewal restores the same viewer/file binding so already-cached
+    // posters are reported as ready instead of being unnecessarily funnelled
+    // through the browser's serialized "processing" queue. This method still
+    // makes no source request; openEVaultPreview performs the authoritative
+    // current-access check before it returns image bytes.
+    const { fileUri } = await this.boundPreviewStream(this.requireEVaultSource(), user, streamId);
     const record = await this.store.getBySource('evault-file', fileUri);
     if (record?.status === 'failed') return 'ready';
     return statusToState(record?.status);
@@ -718,9 +724,15 @@ export class VideoPreviewService {
       );
       if (backgroundLease?.signal.aborted) return this.leavePending(record);
       if (!extracted) {
-        reportOperationalEvent({ category: 'video_preview', code: 'preview_frame_unavailable' });
+        // The extractor now retains an actually decoded dark frame. Reaching
+        // this branch means no decodable source frame was available at all;
+        // keep this distinct from a valid dark poster in aggregate telemetry.
+        reportOperationalEvent({ category: 'video_preview', code: 'preview_no_decodable_frame' });
         const failed = await this.store.update(record.id, { status: 'failed' });
         return failed ?? { ...record, status: 'failed' };
+      }
+      if (extracted.kind === 'dark-fallback') {
+        reportOperationalEvent({ category: 'video_preview', code: 'preview_dark_frame_fallback' });
       }
       const storageKey = this.storage.createStorageKey();
       await this.storage.write(storageKey, extracted.jpeg);

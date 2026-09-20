@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isMostlyBlackFrame, previewCaptureCandidates } from './capture-time';
+import { averageFrameLuma, isMostlyBlackFrame, previewCaptureCandidates } from './capture-time';
 
 const sampleWidth = 160;
 const sampleHeight = 90;
@@ -19,6 +19,11 @@ export interface ExtractedPreviewFrame {
   captureSeconds: number;
   /** Duration observed while probing the same source, when available. */
   durationSeconds?: number;
+  /**
+   * A genuine decoded frame that was too dark for the normal usefulness
+   * threshold, but was retained as the best available source-derived poster.
+   */
+  kind?: 'dark-fallback';
 }
 
 export interface VideoFrameExtractor {
@@ -77,6 +82,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
       if (options?.signal?.aborted) return undefined;
       const candidates = previewCaptureCandidates(duration ?? 0);
       let sawRetryableReadFailure = false;
+      let brightestDarkCandidate: { captureSeconds: number; luma: number } | undefined;
       for (const captureSeconds of candidates) {
         const sample = await this.extractRgbSample(
           input,
@@ -98,10 +104,15 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
           sawRetryableReadFailure = true;
           continue;
         }
-        if (
-          sample.kind !== 'frame' ||
-          isMostlyBlackFrame(sample.bytes, sampleWidth, sampleHeight)
-        ) {
+        if (sample.kind !== 'frame') {
+          continue;
+        }
+        const luma = averageFrameLuma(sample.bytes, sampleWidth, sampleHeight);
+        if (luma === undefined) continue;
+        if (isMostlyBlackFrame(sample.bytes, sampleWidth, sampleHeight)) {
+          if (!brightestDarkCandidate || luma > brightestDarkCandidate.luma) {
+            brightestDarkCandidate = { captureSeconds, luma };
+          }
           continue;
         }
         const jpeg = await this.extractJpeg(input, captureSeconds, workspace, options?.signal);
@@ -130,6 +141,44 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
         // that the video has no useful frame. Treat it like a transient local
         // write/decode failure and let the service make one bounded retry.
         sawRetryableReadFailure = true;
+      }
+      // A fully dark call/clip is still a real, decoded video frame. Keep the
+      // brightest sample instead of collapsing it into the same unavailable
+      // state as a source from which ffmpeg could not decode any frame at all.
+      // This is deliberately after the useful-frame loop so a normal scene is
+      // always preferred when one exists.
+      if (brightestDarkCandidate) {
+        const jpeg = await this.extractJpeg(
+          input,
+          brightestDarkCandidate.captureSeconds,
+          workspace,
+          options?.signal,
+        );
+        if (options?.signal?.aborted) return undefined;
+        if (jpeg.kind === 'unavailable') {
+          throw new VideoFrameExtractorError('Frame extraction is unavailable.', 'unavailable');
+        }
+        if (jpeg.kind === 'retryable') {
+          if (jpeg.immediate) {
+            throw new VideoFrameExtractorError(
+              'Frame extraction could not read the source.',
+              'retryable',
+            );
+          }
+          sawRetryableReadFailure = true;
+        } else if (jpeg.kind === 'frame' && jpeg.bytes.byteLength) {
+          return {
+            jpeg: jpeg.bytes,
+            captureSeconds: brightestDarkCandidate.captureSeconds,
+            kind: 'dark-fallback',
+            ...(duration !== undefined ? { durationSeconds: duration } : {}),
+          };
+        } else {
+          // RGB was decoded but JPEG emission failed. That is a transient
+          // local/write failure, not proof that the original source has no
+          // decodable video frame.
+          sawRetryableReadFailure = true;
+        }
       }
       if (sawRetryableReadFailure) {
         throw new VideoFrameExtractorError(

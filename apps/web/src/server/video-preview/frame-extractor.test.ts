@@ -62,16 +62,17 @@ describe('FfmpegVideoFrameExtractor failures', () => {
     ).rejects.toSatisfy((error: unknown) => isRetryableVideoFrameExtractorError(error));
   });
 
-  unixOnly('returns undefined for a completed black-frame decode', async () => {
+  unixOnly('keeps the brightest completed dark frame as a source-derived fallback', async () => {
     const blackFrame = await createExecutable(
       'ffmpeg-black-frame',
-      '#!/bin/sh\nlast=""\nfor argument in "$@"; do last="$argument"; done\ncase "$*" in\n  *rawvideo*) dd if=/dev/zero of="$last" bs=43200 count=1 2>/dev/null ;;\nesac\nexit 0\n',
+      '#!/bin/sh\nlast=""\nfor argument in "$@"; do last="$argument"; done\ncase "$*" in\n  *rawvideo*) dd if=/dev/zero of="$last" bs=43200 count=1 2>/dev/null ;;\n  *) dd if=/dev/zero of="$last" bs=64 count=1 2>/dev/null ;;\nesac\nexit 0\n',
     );
-    const extractor = new FfmpegVideoFrameExtractor(blackFrame, blackFrame);
+    const duration = await createExecutable('ffprobe-duration', '#!/bin/sh\necho 20\n');
+    const extractor = new FfmpegVideoFrameExtractor(blackFrame, duration);
 
     await expect(
       extractor.extractUsefulFrame({ kind: 'bytes', bytes: new Uint8Array([1, 2, 3]) }),
-    ).resolves.toBeUndefined();
+    ).resolves.toMatchObject({ captureSeconds: 3, kind: 'dark-fallback', durationSeconds: 20 });
   });
 
   unixOnly('returns undefined when a completed decode produces no frame', async () => {

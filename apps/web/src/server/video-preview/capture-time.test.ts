@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  averageFrameLuma,
   evaultVideoPreviewPath,
   isMostlyBlackFrame,
   ownedVideoPreviewPath,
@@ -26,8 +27,11 @@ describe('preview capture time', () => {
   it('treats a dark RGB frame as unusable', () => {
     const black = new Uint8Array(2 * 2 * 3);
     expect(isMostlyBlackFrame(black, 2, 2)).toBe(true);
+    expect(averageFrameLuma(black, 2, 2)).toBe(0);
     const bright = new Uint8Array([200, 180, 160, 210, 190, 170, 190, 200, 180, 220, 210, 200]);
     expect(isMostlyBlackFrame(bright, 2, 2)).toBe(false);
+    expect(averageFrameLuma(bright, 2, 2)).toBeGreaterThan(18);
+    expect(averageFrameLuma(new Uint8Array([1]), 2, 2)).toBeUndefined();
   });
 
   it('keeps preview URLs on the existing authorized API trees', () => {

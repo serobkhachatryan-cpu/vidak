@@ -55,15 +55,18 @@ export function previewCaptureCandidates(durationSeconds: number): number[] {
   return unique.length > 0 ? unique.slice(0, maxPreviewCaptureCandidates) : [0];
 }
 
-/** True when a packed RGB24 frame is too dark to use as a poster. */
-export function isMostlyBlackFrame(
+/**
+ * Returns the average luma of a packed RGB24 frame. Invalid or incomplete
+ * buffers are intentionally distinct from a genuinely dark decoded frame:
+ * callers can only use the latter as a source-derived fallback poster.
+ */
+export function averageFrameLuma(
   pixels: Uint8Array,
   width: number,
   height: number,
-  threshold = blackLumaThreshold,
-): boolean {
+): number | undefined {
   const expected = width * height * 3;
-  if (width <= 0 || height <= 0 || pixels.byteLength < expected) return true;
+  if (width <= 0 || height <= 0 || pixels.byteLength < expected) return undefined;
 
   let lumaSum = 0;
   for (let index = 0; index < expected; index += 3) {
@@ -72,7 +75,18 @@ export function isMostlyBlackFrame(
     const blue = pixels[index + 2] ?? 0;
     lumaSum += 0.2126 * red + 0.7152 * green + 0.0722 * blue;
   }
-  return lumaSum / (width * height) < threshold;
+  return lumaSum / (width * height);
+}
+
+/** True when a packed RGB24 frame is too dark to use as a primary poster. */
+export function isMostlyBlackFrame(
+  pixels: Uint8Array,
+  width: number,
+  height: number,
+  threshold = blackLumaThreshold,
+): boolean {
+  const luma = averageFrameLuma(pixels, width, height);
+  return luma === undefined || luma < threshold;
 }
 
 export function ownedVideoPreviewPath(videoId: string): string {
