@@ -53,11 +53,15 @@ export function startDurablePreviewRepairPump(): void {
     category: 'video_preview',
     code: 'durable_preview_repair_pump_started',
   });
-  launchDurablePreviewRepair({ retryFailed: true });
+  // A restart must not turn every terminal preview failure into an immediate
+  // eVault retry storm. Failed records already have a durable backoff in the
+  // preview service; stale pending records still resume here, ahead of a
+  // source that has recently proved unavailable.
+  launchDurablePreviewRepair();
   repairInterval = setInterval(() => {
-    // A later sweep retries stale pending records. Recent terminal failures
-    // were already given one recovery attempt at startup, so they do not turn
-    // into a five-minute source-read loop.
+    // A later sweep retries stale pending records and failures only after the
+    // preview service's durable failure backoff. This keeps an unavailable
+    // eVault from monopolizing the one-worker recovery lane.
     launchDurablePreviewRepair();
   }, repairIntervalMs);
   repairInterval.unref?.();
