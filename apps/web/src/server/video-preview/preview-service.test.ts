@@ -838,6 +838,26 @@ describe('VideoPreviewService', () => {
     expect(logs[0]).not.toContain(storageKey);
   });
 
+  it('records an accurate-seek recovery without exposing source details', async () => {
+    const logs: string[] = [];
+    setOperationalLogSinkForTests((line) => logs.push(line));
+    const { service, store } = createService({
+      extract: async () => ({ jpeg, captureSeconds: 3, captureStrategy: 'accurate-seek' }),
+    });
+
+    await service.scheduleLibraryBackfill({ eName: '@viewer.w3id' }, [
+      { streamIds: ['accurate-seek-source'] },
+    ]);
+    await vi.waitFor(async () => {
+      await expect(
+        store.getBySource('evault-file', 'w3ds://file?id=@owner.w3id/accurate-seek-source'),
+      ).resolves.toMatchObject({ status: 'ready' });
+    });
+
+    expect(logs).toContainEqual(expect.stringContaining('"code":"preview_accurate_seek_fallback"'));
+    expect(logs.join('\n')).not.toContain('accurate-seek-source');
+  });
+
   it('keeps library poster URLs on the authorized evault preview path', () => {
     const { service } = createService();
     expect(

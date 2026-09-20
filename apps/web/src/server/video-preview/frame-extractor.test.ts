@@ -75,6 +75,19 @@ describe('FfmpegVideoFrameExtractor failures', () => {
     ).resolves.toMatchObject({ captureSeconds: 3, kind: 'dark-fallback', durationSeconds: 20 });
   });
 
+  unixOnly('uses one bounded accurate seek when every fast seek emits no frame', async () => {
+    const seekSensitiveFrame = await createExecutable(
+      'ffmpeg-seek-sensitive',
+      '#!/bin/sh\nlast=""\nfor argument in "$@"; do last="$argument"; done\nif printf "%s\\n" "$*" | grep -q -- "-i .* -ss "; then\n  case "$*" in\n    *rawvideo*) dd if=/dev/zero bs=43200 count=1 2>/dev/null | tr "\\000" "\\377" > "$last" ;;\n    *) dd if=/dev/zero of="$last" bs=64 count=1 2>/dev/null ;;\n  esac\nfi\nexit 0\n',
+    );
+    const duration = await createExecutable('ffprobe-duration', '#!/bin/sh\necho 20\n');
+    const extractor = new FfmpegVideoFrameExtractor(seekSensitiveFrame, duration);
+
+    await expect(
+      extractor.extractUsefulFrame({ kind: 'bytes', bytes: new Uint8Array([1, 2, 3]) }),
+    ).resolves.toMatchObject({ captureSeconds: 3, captureStrategy: 'accurate-seek' });
+  });
+
   unixOnly('returns undefined when a completed decode produces no frame', async () => {
     const producesNoFrame = await createExecutable('ffmpeg-empty-frame', '#!/bin/sh\nexit 0\n');
     const extractor = new FfmpegVideoFrameExtractor(producesNoFrame, producesNoFrame);

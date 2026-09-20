@@ -734,6 +734,12 @@ export class VideoPreviewService {
       if (extracted.kind === 'dark-fallback') {
         reportOperationalEvent({ category: 'video_preview', code: 'preview_dark_frame_fallback' });
       }
+      if (extracted.captureStrategy === 'accurate-seek') {
+        reportOperationalEvent({
+          category: 'video_preview',
+          code: 'preview_accurate_seek_fallback',
+        });
+      }
       const storageKey = this.storage.createStorageKey();
       await this.storage.write(storageKey, extracted.jpeg);
       const ready = await this.store.update(record.id, {

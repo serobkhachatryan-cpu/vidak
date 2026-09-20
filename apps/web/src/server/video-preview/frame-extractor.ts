@@ -24,6 +24,12 @@ export interface ExtractedPreviewFrame {
    * threshold, but was retained as the best available source-derived poster.
    */
   kind?: 'dark-fallback';
+  /**
+   * The normal fast seek returned no frame, but one bounded accurate seek
+   * decoded a frame. This is useful aggregate evidence for files whose
+   * container/index does not support a fast remote seek.
+   */
+  captureStrategy?: 'accurate-seek';
 }
 
 export interface VideoFrameExtractor {
@@ -180,6 +186,73 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
           sawRetryableReadFailure = true;
         }
       }
+      // Input-side `-ss` is deliberately fast: it avoids reading a long
+      // private recording before its first poster can be cached. Some valid
+      // historical containers, however, complete that seek without emitting
+      // a frame. Distinguish that narrow case from an upstream read failure
+      // and make exactly one output-side (accurate) seek before declaring the
+      // source undecodable. Never run this rescue path after a retryable
+      // transport/decode failure; the bounded queue should retry that source
+      // rather than add another competing remote read.
+      if (!brightestDarkCandidate && !sawRetryableReadFailure) {
+        const captureSeconds = candidates[0] ?? 0;
+        const sample = await this.extractRgbSample(
+          input,
+          captureSeconds,
+          workspace,
+          options?.signal,
+          'accurate',
+        );
+        if (options?.signal?.aborted) return undefined;
+        if (sample.kind === 'unavailable') {
+          throw new VideoFrameExtractorError('Frame extraction is unavailable.', 'unavailable');
+        }
+        if (sample.kind === 'retryable') {
+          if (sample.immediate) {
+            throw new VideoFrameExtractorError(
+              'Frame extraction could not read the source.',
+              'retryable',
+            );
+          }
+          sawRetryableReadFailure = true;
+        } else if (sample.kind === 'frame') {
+          const luma = averageFrameLuma(sample.bytes, sampleWidth, sampleHeight);
+          if (luma !== undefined) {
+            const jpeg = await this.extractJpeg(
+              input,
+              captureSeconds,
+              workspace,
+              options?.signal,
+              'accurate',
+            );
+            if (options?.signal?.aborted) return undefined;
+            if (jpeg.kind === 'unavailable') {
+              throw new VideoFrameExtractorError('Frame extraction is unavailable.', 'unavailable');
+            }
+            if (jpeg.kind === 'retryable') {
+              if (jpeg.immediate) {
+                throw new VideoFrameExtractorError(
+                  'Frame extraction could not read the source.',
+                  'retryable',
+                );
+              }
+              sawRetryableReadFailure = true;
+            } else if (jpeg.kind === 'frame' && jpeg.bytes.byteLength) {
+              return {
+                jpeg: jpeg.bytes,
+                captureSeconds,
+                ...(isMostlyBlackFrame(sample.bytes, sampleWidth, sampleHeight)
+                  ? { kind: 'dark-fallback' as const }
+                  : {}),
+                captureStrategy: 'accurate-seek',
+                ...(duration !== undefined ? { durationSeconds: duration } : {}),
+              };
+            } else {
+              sawRetryableReadFailure = true;
+            }
+          }
+        }
+      }
       if (sawRetryableReadFailure) {
         throw new VideoFrameExtractorError(
           'Frame extraction could not read the source.',
@@ -233,8 +306,13 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     captureSeconds: number,
     workspace: string,
     signal?: AbortSignal,
+    seekStrategy: 'fast' | 'accurate' = 'fast',
   ): Promise<FrameAttempt> {
     const output = join(workspace, `sample-${captureSeconds}.rgb`);
+    const seekArguments =
+      seekStrategy === 'accurate'
+        ? ['-i', input, '-ss', String(captureSeconds)]
+        : ['-ss', String(captureSeconds), '-i', input];
     const result = await runProcessExit(
       this.ffmpegPath,
       [
@@ -242,10 +320,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
         '-loglevel',
         'error',
         '-y',
-        '-ss',
-        String(captureSeconds),
-        '-i',
-        input,
+        ...seekArguments,
         '-frames:v',
         '1',
         '-vf',
@@ -276,8 +351,13 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
     captureSeconds: number,
     workspace: string,
     signal?: AbortSignal,
+    seekStrategy: 'fast' | 'accurate' = 'fast',
   ): Promise<FrameAttempt> {
     const output = join(workspace, `poster-${captureSeconds}.jpg`);
+    const seekArguments =
+      seekStrategy === 'accurate'
+        ? ['-i', input, '-ss', String(captureSeconds)]
+        : ['-ss', String(captureSeconds), '-i', input];
     const result = await runProcessExit(
       this.ffmpegPath,
       [
@@ -285,10 +365,7 @@ export class FfmpegVideoFrameExtractor implements VideoFrameExtractor {
         '-loglevel',
         'error',
         '-y',
-        '-ss',
-        String(captureSeconds),
-        '-i',
-        input,
+        ...seekArguments,
         '-frames:v',
         '1',
         '-vf',
