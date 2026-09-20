@@ -10,6 +10,7 @@ export type VideoSpacePosterState = 'ready' | 'processing' | 'unavailable' | 're
 
 export interface VideoSpacePosterProps {
   title: string;
+  createdAt?: string;
   posterUrl?: string;
   fallbackPosterUrl?: string;
   state?: VideoSpacePosterState;
@@ -55,6 +56,7 @@ function formatDuration(seconds: number): string {
 
 export function VideoSpacePoster({
   title,
+  createdAt,
   posterUrl,
   fallbackPosterUrl,
   state = 'processing',
@@ -125,6 +127,13 @@ export function VideoSpacePoster({
         const response = await fetchPreviewWithTimeout(posterUrl, { signal: request.signal });
         if (cancelled) return;
         const type = response.headers.get('content-type') ?? '';
+        // The eVault endpoint's SVG is a generic unavailable marker, not a
+        // captured frame. Render the card's own metadata in that case.
+        if (response.ok && type.startsWith('image/svg+xml') && posterUrl.startsWith('/api/evault/videos/')) {
+          setFailed(true);
+          setRecoveringPreview(false);
+          return;
+        }
         if (response.ok && type.startsWith('image/')) {
           setSource(posterUrl);
           setFailed(false);
@@ -227,6 +236,7 @@ export function VideoSpacePoster({
       ) : (
         <VideoSpaceUnavailablePoster
           title={title}
+          {...(createdAt ? { createdAt } : {})}
           {...(durationSeconds !== undefined ? { durationSeconds } : {})}
           {...(visibilityLabel ? { visibilityLabel } : {})}
           locked={locked}
@@ -273,23 +283,32 @@ export function VideoSpaceProcessingPoster({
 
 export function VideoSpaceUnavailablePoster({
   title,
+  createdAt,
   durationSeconds,
   visibilityLabel,
   locked = false,
 }: {
   title: string;
+  createdAt?: string;
   durationSeconds?: number;
   visibilityLabel?: string;
   locked?: boolean;
 }) {
+  const hue = Array.from(title).reduce((hash, character) => (hash * 31 + character.charCodeAt(0)) % 360, 0);
+  const date = createdAt ? new Date(createdAt) : undefined;
+  const dateLabel = date && Number.isFinite(date.getTime())
+    ? new Intl.DateTimeFormat('en', { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' }).format(date)
+    : undefined;
   return (
     <div
-      className="relative flex aspect-video w-full flex-col items-center justify-center gap-2 border border-border/60 bg-muted/70 px-4 text-center"
+      className="relative flex aspect-video w-full flex-col justify-center gap-3 overflow-hidden px-6 py-12 text-white"
+      style={{ background: `linear-gradient(135deg, hsl(${hue} 45% 19%), hsl(${(hue + 45) % 360} 50% 32%))` }}
       role="img"
-      aria-label={`${title} Preview unavailable`}
+      aria-label={`${title} — title card${dateLabel ? `, ${dateLabel}` : ''}`}
     >
-      <VideoIcon />
-      <p className="font-sans text-[11px] text-muted-foreground">Preview unavailable</p>
+      <p className="text-xs font-medium uppercase tracking-widest text-white/75">Video · Title card</p>
+      <p className="line-clamp-3 break-words text-xl font-semibold leading-tight">{title}</p>
+      {dateLabel ? <p className="text-sm text-white/80">{dateLabel}</p> : null}
       <VideoSpacePosterBadges
         {...(durationSeconds !== undefined ? { durationSeconds } : {})}
         {...(visibilityLabel ? { visibilityLabel } : {})}

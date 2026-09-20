@@ -192,7 +192,6 @@ export class VideoPreviewService {
     const record = await this.store.getBySource('evault-file', fileUri);
     // A failed record receives a neutral poster. This keeps a valid video card
     // usable even when its source has no decodable frame.
-    if (record?.status === 'failed') return 'ready';
     return statusToState(record?.status);
   }
 
@@ -214,7 +213,6 @@ export class VideoPreviewService {
     // current-access check before it returns image bytes.
     const { fileUri } = await this.boundPreviewStream(this.requireEVaultSource(), user, streamId);
     const record = await this.store.getBySource('evault-file', fileUri);
-    if (record?.status === 'failed') return 'ready';
     return statusToState(record?.status);
   }
 

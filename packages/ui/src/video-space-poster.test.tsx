@@ -80,7 +80,8 @@ describe('VideoSpacePoster', () => {
         locked
       />,
     );
-    expect(markup).toContain('Preview unavailable');
+    expect(markup).toContain('Title card');
+    expect(markup).toContain('friends with hats');
     expect(markup).toContain('0:12');
     expect(markup).not.toContain('<img');
     expect(markup).not.toContain('<video');

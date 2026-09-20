@@ -261,6 +261,7 @@ export function LibraryVideoCard({ video }: { video: VideoSpaceLibraryItem }) {
   const poster = (
     <VideoSpacePoster
       title={video.title}
+      {...(video.createdAt ? { createdAt: video.createdAt } : {})}
       {...(video.previewUrl ? { posterUrl: video.previewUrl } : {})}
       state={
         canPlay
