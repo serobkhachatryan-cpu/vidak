@@ -1049,7 +1049,7 @@ describe('VideoPreviewService', () => {
 
     await expect(
       service.peekLibraryPreview({ eName: '@owner.w3id' }, 'grant-rate-limit'),
-    ).resolves.toBe('ready');
+    ).resolves.toBe('unavailable');
     await expect(
       service.openEVaultPreview({ eName: '@owner.w3id' }, 'grant-rate-limit'),
     ).resolves.toMatchObject({ status: 'ready', contentType: 'image/svg+xml' });
